@@ -6,6 +6,12 @@ This changelog records owner decisions and material plan changes for Phase 1.
 
 ## Entries
 
+- 2026-10-28 — Planning review — Expanded P1-M6 with P1-M4/P1-M5 entry gates,
+  an explicit dependency and build-tool approval step, the P1-M7 manual-flow
+  route boundary, separate workflow and entry-buffer preconditions, isolated
+  lifecycle and loopback security tests, bounded jobs and SSE recovery, and an
+  acceptance-evidence table. P1-M6 remains planned; no server implementation,
+  dependency, provider, or live-data access was added.
 - 2026-10-28 — Completion review — Rechecked P1-M3 code, tests, configuration,
   and its P1-M4/P1-M5 follow-on plans. Corrected the Ayumi config example to
   use one iCloud directory name, removed a contradictory blanket dependency

@@ -449,19 +449,21 @@ reconcile.
 The server inherits macOS privacy grants (iCloud Drive and Documents access)
 from the terminal that launched it, so that terminal needs them. An
 unauthenticated `GET /v1/health` returns only the instance ID, contract version,
-and build ID. The client compares them with the runtime file before sending the
-token. A client that finds no server, a stale runtime file, or an incompatible
-contract version reports a connection state with the command to start or restart
-the server and retries on a short interval.
+and build ID. Before sending the token, the client compares the instance ID
+with the runtime file and checks that it supports the contract version; the
+build ID is diagnostic. A client that finds no server, a stale runtime file, or
+an incompatible contract version reports a connection state with the command to
+start or restart the server and retries on a short interval.
 
 ### REST resources
 
 The API uses JSON under `/v1`, stable opaque IDs, explicit schema versions,
 and `Cache-Control: no-store` for private representations. `GET` is read-only;
 commands use `POST`, full client-owned replacements use `PUT`, and cancellation
-and discard use `DELETE`. Mutations of existing workflows include `If-Match` with the
-current workflow ETag;
-stale revisions return `412`, known conflicts return `409`, and validation
+and discard use `DELETE`. Workflow mutations include `If-Match` with the
+current workflow ETag; entry-buffer autosave instead uses its independent buffer
+ETag. Entry confirmation checks both versions. Stale revisions return `412`,
+known conflicts return `409`, and validation
 errors return typed `4xx` responses with safe messages. This follows
 [HTTP method and conditional-request semantics](https://www.rfc-editor.org/rfc/rfc9110.html).
 Commands that start background work return `202 Accepted` with a job

@@ -16,7 +16,8 @@ Control API without creating a second workflow authority in the client.
 ## Approach and sequence
 
 1. Establish terminal ownership and restoration, then attach through the
-   runtime file and negotiate contract/build versions before sending a token.
+   runtime file, match its instance ID with unauthenticated health, and verify
+   the contract version before sending a token. Use the build ID for diagnostics.
 2. Implement the Standard Layout shell, connection states, Status Line, focus
    model, terminal-size fallback, and non-blocking API/event workers.
 3. Add Start and source-selection ViewModels over authoritative workflow DTOs,
