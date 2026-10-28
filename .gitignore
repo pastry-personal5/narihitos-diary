@@ -1,0 +1,12 @@
+# Rust
+target/
+**/*.rs.bk
+*.pdb
+# Cargo.lock is intentionally tracked for this application.
+
+# macOS
+.DS_Store
+
+config/global_config.yaml
+
+tmp/
