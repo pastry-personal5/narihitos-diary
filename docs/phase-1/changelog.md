@@ -6,6 +6,15 @@ This changelog records owner decisions and material plan changes for Phase 1.
 
 ## Entries
 
+- 2026-10-28 — Planning — Expanded Phase 1 from the P1-M3 scaffold through
+  eight additional implementation milestones, P1-M4 through P1-M11. The order
+  follows the architecture's dependency direction: core/persistence, sources
+  and Apple bridge, control server, TUI/manual workflow, draft assistants,
+  local publication, Notion publication, then amendments and release
+  qualification. P1-M8 retains the hosted-provider decision gate, P1-M10
+  requires an owner-authorized read-only root compatibility check and disposable
+  live-write fixture, and every milestone has a verifiable checklist and the
+  standard Rust/Swift gate. No production code or dependency was added.
 - 2026-10-28 — Research — Compared how Codex and Claude Code attach to the
   server for context and token cost. Claude Code defers MCP tool schemas by
   default and caps results at 25,000 tokens; Codex compacts each tool schema to

@@ -81,5 +81,91 @@ Status: Planned
 Goal: Establish the Rust project scaffold and development tools.
 
 Plan: [overview](milestone-03-scaffolding-overview.md),
-[architecture plan](milestone-03-scaffolding-architecture.md) (placeholders).
+[architecture plan](milestone-03-scaffolding-architecture.md).
+
+### P1-M4: Core workflow and persistence
+
+Status: Planned
+
+Goal: Implement the diary state machine and recoverable private state behind
+inward-facing ports.
+
+Plan: [overview](milestone-04-core-workflow-persistence-overview.md),
+[architecture plan](milestone-04-core-workflow-persistence-architecture.md).
+
+### P1-M5: Source ingestion and Apple bridge
+
+Status: Planned
+
+Goal: Discover and read confirmed Ayumi source snapshots, including selected-only
+iCloud acquisition through the Swift helper.
+
+Plan: [overview](milestone-05-source-ingestion-apple-bridge-overview.md),
+[architecture plan](milestone-05-source-ingestion-apple-bridge-architecture.md).
+
+### P1-M6: Control API Server
+
+Status: Planned
+
+Goal: Expose the core through the secure, loopback-only `nd serve` REST, event,
+job, and lifecycle contract.
+
+Plan: [overview](milestone-06-control-api-server-overview.md),
+[architecture plan](milestone-06-control-api-server-architecture.md).
+
+### P1-M7: TUI and manual workflow
+
+Status: Planned
+
+Goal: Let a person reach a confirmed, recoverable entry through the `nd` TUI
+and the always-available manual path.
+
+Plan: [overview](milestone-07-tui-manual-workflow-overview.md),
+[architecture plan](milestone-07-tui-manual-workflow-architecture.md).
+
+### P1-M8: Draft assistants
+
+Status: Planned
+
+Goal: Add hosted-default and Apple on-device two-pass drafting without bypassing
+human review or the data-egress boundary.
+
+Plan: [overview](milestone-08-draft-assistants-overview.md),
+[architecture plan](milestone-08-draft-assistants-architecture.md).
+
+Notes: Implementation waits for owner decisions on the hosted provider,
+credential storage, and HTTP dependency.
+
+### P1-M9: Local publication and recovery
+
+Status: Planned
+
+Goal: Preview, approve, write, verify, and recover the local Markdown output
+without clobbering different content.
+
+Plan: [overview](milestone-09-local-publication-recovery-overview.md),
+[architecture plan](milestone-09-local-publication-recovery-architecture.md).
+
+### P1-M10: Notion publication
+
+Status: Planned
+
+Goal: Publish local-first to a runtime-validated Notion hierarchy with safe
+conflict and retry behavior.
+
+Plan: [overview](milestone-10-notion-publication-overview.md),
+[architecture plan](milestone-10-notion-publication-architecture.md).
+
+Notes: Work against the configured root requires an owner-authorized read-only
+compatibility check; live writes use an authorized disposable hierarchy.
+
+### P1-M11: Amendments and release qualification
+
+Status: Planned
+
+Goal: Add safe amendment replacement and prove the complete macOS TUI MVP
+against every Phase 1 exit criterion.
+
+Plan: [overview](milestone-11-amendments-release-qualification-overview.md),
+[architecture plan](milestone-11-amendments-release-qualification-architecture.md).
 
