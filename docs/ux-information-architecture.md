@@ -37,3 +37,26 @@ presentation state and unsent edits; the Control API Server owns confirmed
 selections, drafts, plans, and receipts. A reconnect fetches the latest server
 state before allowing another mutation. The [UX terms](ux-terms.md) name the
 components used above.
+
+## Chrome layout
+
+The Standard Layout above is content, not pixels. The proposed screen chrome
+maps it onto four zones, named in [UX terms](ux-terms.md#proposed-chrome-terms):
+a left Sidebar, a right Main Pane, a bottom Command Line, and a bottom-most
+Status Line.
+
+- **Main Pane** renders the active screen's content: source detail, memory
+  review, draft editor, entry review, output preview, or publication status.
+- **Sidebar** supplements the Main Pane in one of two modes: Navigator mode
+  lists the Standard Layout's screens for jump-to-step navigation; Source List
+  mode lists the active day's source-note candidates (inclusion, date
+  evidence, availability, warnings) for inclusion and detail selection.
+- **Command Line** accepts typed commands (for example: jump to a diary day,
+  confirm, publish, switch Sidebar mode).
+- **Status Line** is the single realization of both the "App status" and
+  "Action/status area" content named in the Standard Layout tree above:
+  diary day, workflow state, connection, IME indicator, available actions,
+  progress, and errors all appear there rather than in separate bars.
+
+Sidebar-mode and Command Line keybindings remain open implementation
+details.

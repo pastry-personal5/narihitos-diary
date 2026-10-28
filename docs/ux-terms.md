@@ -28,3 +28,23 @@ for the person's selection or text decision and “publish” for the Notion sid
 effect. A cloud-only note is never described as empty merely because it has
 not downloaded. The [UX information architecture](ux-information-architecture.md)
 places these terms in the screen flow.
+
+## Proposed chrome terms
+
+The terminal client's screen chrome is four zones: a left Sidebar, a right
+Main Pane, a bottom Command Line, and a bottom-most Status Line.
+
+| UI term | Code-facing name | Meaning |
+|---|---|---|
+| Sidebar | `sidebar` | Left chrome pane; always in exactly one of its two modes. |
+| Navigator mode | `sidebar_mode_navigator` | Sidebar mode listing Standard Layout screens for jump-to-step navigation. |
+| Source List mode | `sidebar_mode_source_list` | Sidebar mode listing source-note candidates for the active diary day. |
+| Main Pane | `main_pane` | Right chrome pane; renders the active screen's content. |
+| Command Line | `command_line` | Bottom single-line input for typed commands; not a text filter. |
+| Status Line | `status_line` | Bottom-most ambient bar: diary day, workflow state, connection, IME indicator, available actions, progress, errors. |
+
+Status Line is the single realization of both the "App status" and
+"Action/status area" content named in the
+[UX information architecture](ux-information-architecture.md#chrome-layout).
+Keybindings for switching Sidebar mode and the Command Line's command set
+remain open implementation details.

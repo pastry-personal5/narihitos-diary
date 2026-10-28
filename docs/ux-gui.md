@@ -57,7 +57,10 @@ success, and a conflict that needs user resolution. Connection loss should
 disable publication until the client reloads the server's current workflow.
 
 Ratatui views render the ViewModel; the client sends actions to the Control
-API Server and receives state changes through REST and events. Layout and
-keybindings remain open implementation details. See the
-[information architecture](ux-information-architecture.md) for screen order.
+API Server and receives state changes through REST and events. The screen
+chrome is proposed in the information architecture's
+[chrome layout](ux-information-architecture.md#chrome-layout) section
+(Sidebar, Main Pane, Command Line, Status Line); keybindings remain an open
+implementation detail. See the [information architecture](ux-information-architecture.md)
+for screen order.
 
