@@ -383,7 +383,7 @@ records the API facts.
 | Database | SQLite under `~/Library/Application Support/narihitos-diary/` | Workflows, drafts, preferences, operation log, receipts. No token. Versioned schema with forward migrations. |
 | Runtime directory | Owner-only, under the same Application Support directory | Lock file and runtime file (port, control token, instance ID). |
 | Entries | Configurable; default `~/Documents/narihitos-diary/entries/YYYY/MM/YYYY-MM-DD.md` | Written only by the local output adapter. |
-| Logs | Standard error of the foreground server | Content-free: no tokens, coordinates, paths, or diary text. |
+| Logs | Repo-local, Git-ignored `.local/logs/control-api/`, plus limited foreground standard error | Owner-only, content-free typed records. Rotate at UTC-day or 8 MiB boundaries, retain for at most 72 hours, and cap the directory at 24 MiB. Codex and Claude Code may read this directory directly; no log API exists and agents remain barred from the separate runtime-token directory. |
 | Swift helper | `ND_APPLE_BRIDGE_PATH`, then installed `../libexec/apple-bridge` relative to `nd`, then `helpers/apple-bridge/.build/debug/apple-bridge` in a development checkout | If absent, the Apple model is unavailable and cloud-only notes cannot be downloaded or read; hosted drafting and the manual editor continue. One process handles one capped newline-delimited JSON request and response. |
 
 ## Control API Server module
@@ -440,11 +440,12 @@ file. Reconciliation of unresolved operation intents then runs in the
 background (see "Publication and recovery"); a destination that is unreachable
 leaves its intent unresolved and visible instead of blocking startup. The runtime file is trusted
 only while the lock is held, so a leftover file from a crashed server is
-overwritten, never followed. The server runs in the foreground and logs
-content-free diagnostics to standard error. On interrupt or termination it stops
-accepting commands, lets an in-flight external write finish up to a timeout,
-cancels other jobs, and leaves any unfinished intent for the next start to
-reconcile.
+overwritten, never followed. The server runs in the foreground, writes
+content-free typed diagnostics to the owner-only rotating log, and mirrors only
+limited sanitized warnings and errors to standard error. On interrupt or
+termination it stops accepting commands, lets an in-flight external write
+finish up to a timeout, cancels other jobs, and leaves any unfinished intent
+for the next start to reconcile.
 
 The server inherits macOS privacy grants (iCloud Drive and Documents access)
 from the terminal that launched it, so that terminal needs them. An

@@ -95,6 +95,8 @@ See [README.md](README.md) for the overview. Setup and contribution rules are in
   language from a note body nor blocks on it.
 - **Default diary day:** a new workflow defaults to today in the Mac's local
   time zone, and the Start screen lists unfinished drafts first.
+- **TUI date display:** display dates as `YYYY-MM-DD`, adding the abbreviated
+  weekday as `YYYY-MM-DD (Mon)` where the available space and context permit.
 - **Draft retention:** keep receipts and digests. Purge draft and source text 7
   days after every output verifies, and purge abandoned drafts after 30 days.
   The user can discard a draft at any time.
@@ -108,6 +110,14 @@ See [README.md](README.md) for the overview. Setup and contribution rules are in
   Notion token out of the database; store it in plaintext in the repo-local,
   git-ignored `config/global_config.yaml`, which must be owner-only. This
   supersedes the earlier per-user global config location.
+- **Control-server diagnostics:** in P1-M6, keep content-free structured
+  Control API Server logs under the repo-local, Git-ignored
+  `.local/logs/control-api/` directory by default. Rotate by UTC day and bounded
+  segment size, retain no log segment beyond a rolling 72 hours, and keep the
+  directory owner-only. Codex and Claude Code may read this log directory
+  directly for diagnosis, but logs are never exposed through HTTP or MCP and
+  never contain diary text, source metadata, paths, credentials, tokens, raw
+  request data, or arbitrary error strings.
 - **Output conflicts and blocked Notion:** when the local file differs, the whole
   plan stops; when Notion holds conflicting same-day content, only Notion
   stops. The app shows both versions and offers only reread, discard the entry, or save under a
@@ -141,9 +151,11 @@ See [README.md](README.md) for the overview. Setup and contribution rules are in
   Ctrl-Space (macOS's default input-source switch). The Command Line opens with
   a chord. Its commands are ASCII tokens, and the TUI maps Hangul typed on the
   2-Set Korean layout back to the key that produced it, so commands work under
-  either IME. Every command is also reachable by focus and Enter. Chords are
-  chosen during TUI implementation and must pass a real-terminal check with the
-  Korean IME active.
+  either IME. Every command is also reachable by focus and Enter. P1-M7 uses
+  Ctrl-G (F2) for Command Line, Ctrl-Enter (F3) to save/flush the editor,
+  Ctrl-D (F10) to quit, and Ctrl-Left/Ctrl-Right (F6/F7) for previous/next
+  workflow step. These chords must pass a real-terminal check with the Korean
+  IME active.
 - **Empty days:** a diary day with no source notes, or none included, may still
   produce an entry through an explicit "continue without notes" confirmation.
   Extraction and model drafting are disabled; the manual editor works. A blank

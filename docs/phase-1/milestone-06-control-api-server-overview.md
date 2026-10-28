@@ -33,6 +33,9 @@ contract through which the Phase 1 TUI uses diary workflows.
 - Foreground startup and bounded shutdown, single-instance lock, owner-only
   configuration and runtime files, production database path, migrations, purge,
   and background intent reconciliation.
+- An owner-only internal rotating diagnostic log with a rolling 72-hour
+  retention limit, bounded disk use, content-free records, and a stable
+  repo-local location readable by Codex and Claude Code without a control token.
 - Loopback-only binding with bounded port fallback, ephemeral control token,
   capability checks, `Host`/`Origin` validation, bounded requests and work,
   safe problem details, and content-free diagnostics.
@@ -46,6 +49,9 @@ contract through which the Phase 1 TUI uses diary workflows.
 
 - `/mcp`, remote access, browser clients, agent tokens, and a claim that a
   same-user process holding the control token is a human.
+- A log-download API, log streaming over HTTP/SSE/MCP, arbitrary application
+  messages, request or response bodies, and granting coding agents access to
+  the runtime-token directory.
 - Terminal screens and model extraction/drafting (P1-M7/P1-M8); real local or
   Notion output routes and connectors (P1-M9/P1-M10); amendments (P1-M11).
   Routes for those features remain unavailable until their owning milestones.
@@ -90,6 +96,31 @@ contract through which the Phase 1 TUI uses diary workflows.
   match the implementation, including runtime-file and health negotiation,
   disabled later routes, and `/mcp` being outside Phase 1.
 
+### Diagnostics and coding-agent access
+
+- [ ] `nd serve` creates `.local/logs/control-api/` relative to its working
+  directory with owner-only directory and file modes, rejects symlinks and
+  unsafe pre-existing entries, and writes only the versioned content-free
+  line format defined by the architecture plan. Logs are not served by any
+  Control API, SSE, or MCP route.
+- [ ] Fake-clock tests prove rotation at each UTC-day boundary and before a
+  segment exceeds 8 MiB, deterministic unique segment names, startup and
+  periodic cleanup, a strict rolling 72-hour cutoff, and a 24 MiB directory
+  cap that may evict the oldest still-retained segments. Boundary, restart,
+  clock-rollback, deletion-failure, and disk-write-failure behavior is covered.
+- [ ] Privacy tests attempt to pass diary text, source references, private
+  paths, request/header/body values, tokens, credentials, and arbitrary error
+  strings through every logging entry point and prove the API accepts only
+  the event schema's bounded typed fields and ASCII event codes. Every encoded
+  record is at most 1 KiB, and log lines cannot be forged with newline or
+  delimiter injection.
+- [ ] P1-M6 completion updates `AGENTS.md` (which `CLAUDE.md` imports) and the
+  contribution guide with the stable directory, format version, safe `tail`
+  and `rg` examples, and the rule that Codex and Claude Code may read only the
+  log directory—not the separate Application Support runtime-token directory.
+  A repository-root agent smoke test reads recent synthetic records without
+  changing permissions or using the Control API token.
+
 ### Evidence and gate
 
 - [ ] Acceptance evidence below records focused tests and a dated full gate:
@@ -108,5 +139,6 @@ their results are observed; record concise synthetic evidence, not raw logs.
 | Process lifecycle, filesystem permissions, and isolated restart tests | Pending |
 | Loopback, authentication, origin, bounds, and redaction tests | Pending |
 | DTO, multi-client revision, job, and SSE tests | Pending |
+| Rotation, 72-hour retention, bounded disk use, privacy, and coding-agent read tests | Pending |
 | Documentation and contract inspection | Pending |
 | Full Rust and Swift gate, with date and tool versions | Pending |

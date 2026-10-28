@@ -42,16 +42,17 @@ places these terms in the screen flow.
 
 ## Proposed chrome terms
 
-The terminal client's screen chrome is four zones: a left Sidebar, a right
-Main Pane, a bottom Command Line, and a bottom-most Status Line.
+The terminal client's screen chrome is five zones: a left Workflow Sidebar, a
+central Main Pane, a right Resources Sidebar, a bottom Command Line, and a
+bottom-most Status Line.
 
 | UI term | Code-facing name | Meaning |
 |---|---|---|
-| Sidebar | `sidebar` | Left chrome pane; always in exactly one of its two modes. |
-| Navigator mode | `sidebar_mode_navigator` | Sidebar mode listing Standard Layout screens, each with a step state, for jump-to-step navigation. |
-| Source List mode | `sidebar_mode_source_list` | Sidebar mode listing the active day's source notes in compact rows. |
-| Step state | `step_state` | A Navigator marker: done, current, available, locked, or stale. Always a text label or symbol, never color alone. |
-| Main Pane | `main_pane` | Right chrome pane; renders the active screen's content. |
+| Workflow Sidebar | `workflow_sidebar` | Left chrome pane listing Standard Layout stages and their step state for jump-to-step navigation. |
+| Resources Sidebar | `resources_sidebar` | Right chrome pane listing context-relevant sources, inputs, or outputs with explicit resource state; it may render an indented tree. |
+| Step state | `step_state` | A Workflow Sidebar marker: done, current, available, locked, or stale. Always a text label or symbol, never color alone. |
+| Resource state | `resource_state` | A Resources Sidebar marker: ready, selected, preparing, unavailable, warning, blocked, conflict, or stale. Always a text label or symbol, never color alone. |
+| Main Pane | `main_pane` | Central chrome pane; renders the active screen's content. |
 | Banner | `banner` | Top region of the Main Pane for a condition that needs a decision, such as a conflict or a stale source, with its explanation. |
 | Command Line | `command_line` | Bottom single-line input for typed commands; not a text filter. Opens with a chord, takes ASCII tokens, and maps Hangul typed on the 2-Set Korean layout back to them. |
 | Status Line | `status_line` | Bottom-most ambient bar: diary day, workflow state, connection, IME indicator, progress, a short error summary, and action hints truncated by priority. |

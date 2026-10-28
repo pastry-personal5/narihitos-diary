@@ -18,8 +18,8 @@ owns the decided server lifecycle and REST resource intent.
 | Boundary | P1-M6 responsibility |
 |---|---|
 | `diary-control-contract` | Versioned JSON DTOs, opaque IDs, wire revisions, safe problems, event/job shapes, and contract fixtures. It remains independent of core and adapters. |
-| `diary-control` | Route table, authentication and capability checks, request limits, DTO validation/mapping, bounded jobs, SSE fan-out, and content-free error translation. It calls core use cases. |
-| `apps/nd` | `nd serve` composition root, configuration and state paths, lock/runtime files, adapter registration, listener selection, signals, and shutdown. |
+| `diary-control` | Route table, authentication and capability checks, request limits, DTO validation/mapping, bounded jobs, SSE fan-out, content-free error translation, and the typed rotating diagnostic sink. It calls core use cases. |
+| `apps/nd` | `nd serve` composition root, configuration, state and log paths, lock/runtime files, diagnostic initialization, adapter registration, listener selection, signals, and shutdown. |
 | `diary-core` | Existing workflow and publication policy only; no HTTP, Tokio, JSON, or transport types. Narrow port changes require focused core tests. |
 | `diary-connectors` | Existing SQLite and source adapters; no route or token handling. |
 
@@ -125,6 +125,69 @@ external write finish up to a bound, request cancellation of other jobs,
 and leave unresolved intents for the next start. Background reconciliation
 may leave an unreachable destination pending while other days remain usable.
 
+## Internal diagnostics and coding-agent access
+
+The server owns one internal file sink in addition to concise foreground
+standard error. Its production default is
+`.local/logs/control-api/` relative to the server working directory. This path
+is already beneath the repository's Git-ignored `.local/` tree and is separate
+from the Application Support runtime directory that contains the control
+token. Tests inject an isolated log path; production does not accept a request,
+header, or API parameter that redirects logging. Create the directory as mode
+`0700` and segments as mode `0600`; reject symlinks, non-regular files, wrong
+owners, hard-linked segments, and group/world-accessible pre-existing paths.
+Logging initialization and retention cleanup happen after the single-instance
+lock and before the database or listener opens, so an unsafe or unprunable log
+directory fails startup without publishing runtime state.
+
+Use a versioned UTF-8, one-record-per-line format designed for `tail`, `rg`,
+Codex, and Claude Code. The v1 grammar is
+`ndlog-v1 ts_unix_ms=<u64> level=<LEVEL> component=<token> event=<token>`
+followed by event-specific `key=<token-or-u64>` fields in sorted-key order.
+Levels are `TRACE`, `DEBUG`, `INFO`, `WARN`, or `ERROR`; tokens are nonempty,
+at most 64 ASCII bytes, and contain only letters, digits, `.`, `_`, `:`, or
+`-`. A complete encoded record, including its one terminating LF, is at most
+1 KiB. The event schema may add an optional random correlation reference and
+numeric duration, status, and capacity values, but the logging API does not
+accept free-form messages, unknown keys, or `Display`/`Debug` objects. In
+particular, never log diary/source text, front matter, dates or source
+references, private paths, filenames, request targets or query strings,
+headers, bodies, tokens, credentials, runtime-file contents, model/provider
+payloads, platform error descriptions, or arbitrary error chains. Route
+diagnostics use a predefined route-template code and stable outcome code rather
+than the raw URL or error. Reject every value that cannot satisfy the grammar;
+never escape private input into a line. The same sanitization applies to the
+limited warning/error records mirrored to standard error.
+
+Keep an active `control-api.log`; atomically close and rename it at a UTC-day
+boundary or before it would exceed 8 MiB. Rotated names contain only the
+rotation Unix timestamp plus a collision sequence and are created with
+`create_new`, so restart or clock rollback cannot overwrite a segment. Run
+maintenance at startup, after every rotation, and at least hourly while the
+server is running. The hourly task closes an idle active segment when its UTC
+day has ended, so an old final record cannot remain indefinitely merely because
+no newer event arrives. Delete closed segments whose rotation/last-record time
+is at or before `now - 72 hours`; then, if the directory still exceeds 24 MiB,
+delete the oldest closed segments until it is within the cap. Never delete the
+current-day active segment or an unrecognized entry. A fake clock and injected
+filesystem boundary make the exact cutoff, idle rotation, restart, rollback,
+collision, and failure cases deterministic. If initialization or pruning
+cannot uphold permissions or the retention contract, refuse startup. A later
+write, rotation, or prune failure emits one content-free standard-error code,
+stops file logging, and requests a controlled server shutdown rather than
+silently abandoning the retention promise.
+
+The log directory is readable directly by same-account coding agents and is
+not exposed by REST, SSE, or MCP. P1-M6 completion adds short read-only
+instructions to `AGENTS.md`—automatically shared with Claude Code through the
+repository's `CLAUDE.md` import—and the contribution guide. Those instructions
+show bounded commands such as `tail -n 200 .local/logs/control-api/control-api.log`
+and `rg 'level=(warn|error)' .local/logs/control-api/`, prohibit permission
+changes, and reiterate that agents must not read the separate Application
+Support runtime directory or its token. Agent-read acceptance uses synthetic
+records from the repository root and does not grant either agent an API
+capability.
+
 ## Jobs, events, and recovery
 
 Long discovery, selected-source acquisition, freshness, and other blocking
@@ -151,9 +214,10 @@ revisions for one workflow and safe refetch when notifications are missed.
 1. Check the P1-M4/P1-M5 completion evidence, implemented contracts, and
    owner-approved dependency packet. Define the manual-route table, wire
    revisions, safe problem codes, and synthetic contract fixtures first.
-2. Build isolated lifecycle primitives and the `nd serve` composition root.
-   Prove lock, config, migration/purge, bind, runtime publication, stale-file
-   recovery, token rotation, shutdown, and restart with temporary state.
+2. Build isolated lifecycle primitives, the typed rotating diagnostic sink,
+   and the `nd serve` composition root. Prove lock, config, log permissions and
+   retention, migration/purge, bind, runtime publication, stale-file recovery,
+   token rotation, shutdown, and restart with temporary state.
 3. Add loopback HTTP, health negotiation, bearer/capability checks, header
    validation, and bounds. Test these through a real socket and in-process
    route client before exposing workflow mutations.

@@ -22,7 +22,7 @@ This index lists the design and process docs, one line each. Read only the doc y
 | [phase-1/milestone-06-control-api-server-overview.md](phase-1/milestone-06-control-api-server-overview.md) | P1-M6 entry gates, manual-flow server scope, security and recovery checklist, and acceptance evidence. |
 | [phase-1/milestone-06-control-api-server-architecture.md](phase-1/milestone-06-control-api-server-architecture.md) | P1-M6 route and DTO boundary, conditional writes, loopback lifecycle, bounded jobs, and SSE sequence. |
 | [phase-1/milestone-07-tui-manual-workflow-overview.md](phase-1/milestone-07-tui-manual-workflow-overview.md) | P1-M7 terminal client, source selection, manual editor, and IME checklist. |
-| [phase-1/milestone-07-tui-manual-workflow-architecture.md](phase-1/milestone-07-tui-manual-workflow-architecture.md) | P1-M7 MVVM, API client, editor, Command Line, and IME sequence. |
+| [phase-1/milestone-07-tui-manual-workflow-architecture.md](phase-1/milestone-07-tui-manual-workflow-architecture.md) | P1-M7 API boundary, client recovery rules, MVVM, editor, Command Line, and IME sequence. |
 | [phase-1/milestone-08-draft-assistants-overview.md](phase-1/milestone-08-draft-assistants-overview.md) | P1-M8 decision gate and hosted/Apple reviewed-drafting checklist. |
 | [phase-1/milestone-08-draft-assistants-architecture.md](phase-1/milestone-08-draft-assistants-architecture.md) | P1-M8 data-bounded assistant adapters and integration sequence. |
 | [phase-1/milestone-09-local-publication-recovery-overview.md](phase-1/milestone-09-local-publication-recovery-overview.md) | P1-M9 local preview, approval, no-clobber output, conflict, and recovery checklist. |

@@ -38,6 +38,10 @@ editor text remains visible but unconfirmed. An amendment skips source review:
 it enters at the Draft editor with the saved text, and the Navigator marks the
 source steps done from the receipt's digests.
 
+Dates use `YYYY-MM-DD`. Where space and context permit, add the abbreviated
+weekday as `YYYY-MM-DD (Mon)`; the ISO date remains present so date evidence
+and diary-day identity are never ambiguous.
+
 Screens represent one server-owned workflow revision. ViewModels hold only
 presentation state and unsent edits; the Control API Server owns confirmed
 selections, drafts, plans, and receipts. A reconnect fetches the latest server
@@ -93,22 +97,33 @@ These conditions are distinct and are never collapsed into “no entries”.
 ## Chrome layout
 
 The Standard Layout above is content, not pixels. The proposed screen chrome
-maps it onto four zones, named in [UX terms](ux-terms.md#proposed-chrome-terms):
-a left Sidebar, a right Main Pane, a bottom Command Line, and a bottom-most
-Status Line.
+maps it onto five zones, named in [UX terms](ux-terms.md#proposed-chrome-terms):
+a left Workflow Sidebar, a central Main Pane, a right Resources Sidebar, a
+bottom Command Line, and a bottom-most Status Line.
 
 - **Main Pane** renders the active screen's content: the candidate table and
   source detail, memory review, draft editor, entry review, output preview, or
   publication status. A Banner at its top holds any condition that needs a
   decision, with the explanation.
-- **Sidebar** supplements the Main Pane in one of two modes. Navigator mode
-  lists the Standard Layout's screens with their step states for jump-to-step
-  navigation. Source List mode lists the active day's source notes in compact
-  rows (inclusion mark, time, short identity, warning marker) so they stay
-  visible while writing. The full candidate table needs the Main Pane's width
-  to show both dates, availability, and warnings in a stable row.
-- **Command Line** accepts typed commands (for example: jump to a diary day,
-  confirm, switch Sidebar mode). Approval and publication are on-screen actions
+- **Workflow Sidebar** is always the Navigator. It lists the Standard Layout's
+  stages with their `done`, `current`, `available`, `locked`, or `stale` state
+  and supports jump-to-step navigation where the state permits it. It does not
+  change mode, so a person can always see where the active screen sits in the
+  workflow.
+- **Resources Sidebar** presents compact, stateful items relevant to the active
+  screen. It is a source list during selection and editing (inclusion mark,
+  short identity, date-evidence disagreement, availability, and warning or
+  download state); a source detail can expose the selected item's metadata.
+  Later screens use the same region for reviewed memories, the entry buffer and
+  review state, and output resources such as the local file and Notion section.
+  A resource can be `ready`, `selected`, `preparing`, `unavailable`, `warning`,
+  `blocked`, `conflict`, or `stale`; words or symbols convey state without
+  relying on color. A hierarchy such as local output `year / month / entry` or
+  the Notion `root / year / month / section` is rendered as an indented tree.
+  The full candidate table remains in the Main Pane so both dates, availability,
+  and warnings have stable columns.
+- **Command Line** accepts typed commands (for example: jump to a diary day or
+  confirm). Approval and publication are on-screen actions
   at the output preview; a typed command cannot bypass that screen.
 - **Status Line** is the single realization of both the "App status" and
   "Action/status area" content named in the Standard Layout tree above: diary
@@ -119,9 +134,13 @@ Status Line.
 
 ### Terminal size and text width
 
-The layout needs at least 80 columns by 24 rows. Below about 100 columns the
-Sidebar collapses and opens over the Main Pane on request. Below the minimum,
-the client shows only a “terminal too small” notice with the required size.
+The layout needs at least 80 columns by 24 rows. At 120 columns or wider, both
+sidebars are visible. From 100 through 119 columns, the Resources Sidebar
+collapses and opens over the Main Pane on request while the Workflow Sidebar
+remains visible. Below 100 columns, either sidebar opens over the Main Pane on
+request; focus controls expose both sidebars' state and actions. Below the
+minimum, the client shows only a “terminal too small” notice with the required
+size.
 Korean text is double-width: measure display width rather than character
 count, wrap at grapheme boundaries, and keep the editor cursor aligned.
 

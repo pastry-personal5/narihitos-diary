@@ -6,12 +6,76 @@ This changelog records owner decisions and material plan changes for Phase 1.
 
 ## Entries
 
+- 2026-10-29 — P1-M6 logging requirement — Planned an internal owner-only
+  Control API Server log under `.local/logs/control-api/`, with UTC-day and
+  8 MiB rotation, a strict rolling 72-hour retention limit, a 24 MiB directory
+  cap, and content-free typed records. Codex and Claude Code may read that
+  Git-ignored directory directly for diagnosis without a control token; logs
+  remain absent from REST, SSE, and MCP, and agents remain barred from the
+  separate runtime-token directory. P1-M6 remains `Planned`; no implementation
+  or dependency change was made.
+- 2026-10-29 — P1-M5 post-completion review — Bounded discovery and selected
+  reads at the opened-file boundary; rejected lone-CR, nested/duplicate date,
+  and additional ambiguous audio-link forms; isolated helper handoffs per
+  concurrent request; capped download waits to the Swift protocol limit;
+  tightened response JSON, source-date, containment, and file-identity checks;
+  and made helper access failure invalidate stale workflow state before its
+  typed error returns. The complete gate passed with 46 Rust tests, all
+  doctests, and 10 Swift tests. Added synthetic regressions only; no private
+  source tree or live service was accessed.
+- 2026-10-29 — Completion — Marked P1-M5 `Done`. Added connector-neutral
+  source ports and SQLite v3 availability persistence; bounded Ayumi discovery,
+  Markdown/audio privacy filtering, selected snapshots, and freshness checks;
+  a dependency-free Rust helper client with deterministic lookup, process
+  bounds, cancellation, typed failures, and private handoff cleanup; and Swift
+  iCloud availability, download, and coordinated-read commands behind fakes.
+  The full gate passed with 42 Rust tests, all doctests, and 10 Swift tests. No
+  private iCloud tree, live model, Notion service, HTTP listener, or TUI was
+  opened.
+- 2026-10-29 — M4/M5 implementation review — Hardened M4 publication retries
+  so reused approval is durably destination-scoped, verified destinations
+  cannot regress, blocked destinations cannot change outside an approved retry,
+  and restored approval scopes must name a remote target. Extended retention
+  evidence through discard, both concurrency-version increments, restart, and
+  repurge. Hardened the implemented M5 Ayumi reader against date-directory
+  symlink escapes, malformed timestamp acceptance, unsafe attachment paths,
+  fabricated file identities, metadata races, disappearance, and forged nested
+  source references. The full Rust and Swift gate passed. M5 remains `Active`:
+  the Swift iCloud commands, byte handoff, Rust helper client, and checkpoint
+  integration are still pending.
+- 2026-10-28 — Owner decision — P1-M7 uses Ctrl-G (F2) for Command Line,
+  Ctrl-Enter (F3) to save/flush, Ctrl-D (F10) to quit, and
+  Ctrl-Left/Ctrl-Right (F6/F7) for previous/next workflow step. The existing
+  real-terminal Korean-IME acceptance check remains required.
+- 2026-10-28 — Owner decision — TUI dates use `YYYY-MM-DD`, adding an
+  abbreviated weekday as `YYYY-MM-DD (Mon)` where space and context permit.
+  The ISO date remains visible in every form.
+- 2026-10-28 — Planning review — Strengthened the P1-M7 manual-TUI plan with
+  P1-M6 and dependency entry gates, validated runtime-file/health attachment,
+  explicit server-authority and conditional-save recovery rules, selected-only
+  source snapshot review, real-terminal IME evidence, and an acceptance-evidence
+  table. No implementation, dependency, or product decision was added; P1-M7
+  remains planned behind P1-M6.
 - 2026-10-28 — Planning review — Expanded P1-M6 with P1-M4/P1-M5 entry gates,
   an explicit dependency and build-tool approval step, the P1-M7 manual-flow
   route boundary, separate workflow and entry-buffer preconditions, isolated
   lifecycle and loopback security tests, bounded jobs and SSE recovery, and an
   acceptance-evidence table. P1-M6 remains planned; no server implementation,
   dependency, provider, or live-data access was added.
+- 2026-10-28 — Completion — Marked P1-M4 `Done`. Added the dependency-free
+  `diary-core` workflow, revision, approval, publication, and retention
+  contracts; a `rusqlite` system-SQLite adapter with forward v1/v2 migrations,
+  transactional compare-and-swap, durable intents, and versioned receipts;
+  and test-only `nd` assembly. Twenty-four Rust tests and eight Swift tests
+  passed with formatting, warnings-denied Clippy, both builds, privacy/schema
+  inspection, and a P1-M4-scoped `git diff --check`. No production database, live source,
+  model, file destination, Notion call, HTTP listener, or TUI was added.
+- 2026-10-28 — Owner approval and start — Marked P1-M4 `Active` after P1-M3
+  completion. The owner approved `rusqlite` 0.40.2 for `diary-connectors`
+  with system-SQLite linkage and no optional Cargo features. The packet adds
+  no build tool, bundled C compilation, hosted provider, credential decision,
+  HTTP dependency, or Swift package. Direct unsafe SQLite FFI was rejected in
+  favor of maintained MIT-licensed bindings compatible with Apache-2.0.
 - 2026-10-28 — Completion review — Rechecked P1-M3 code, tests, configuration,
   and its P1-M4/P1-M5 follow-on plans. Corrected the Ayumi config example to
   use one iCloud directory name, removed a contradictory blanket dependency

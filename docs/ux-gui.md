@@ -70,10 +70,12 @@ as Enter, and `Ctrl-[` as Esc; macOS reserves `Ctrl-Space` for input-source
 switching by default; and Terminal.app sends Option as a character modifier
 unless it is set to act as Meta. Avoid those collisions. On non-editor screens
 Tab and the arrow keys move focus and Enter activates. The Command Line opens
-with a chord, accepts ASCII command tokens, and maps Hangul typed on the 2-Set
-Korean layout back to the key that produced it, so commands work under either
-IME; every command is also reachable by focus and Enter. Real-terminal
-acceptance checks this with the Korean IME active.
+with Ctrl-G (F2); Ctrl-Enter (F3) saves or flushes the editor; Ctrl-D (F10)
+quits; and Ctrl-Left/Ctrl-Right (F6/F7) move to the previous/next workflow
+step. The Command Line accepts ASCII command tokens and maps Hangul typed on
+the 2-Set Korean layout back to the key that produced it, so commands work
+under either IME; every command is also reachable by focus and Enter.
+Real-terminal acceptance checks this with the Korean IME active.
 
 ## Proposed presentation details
 
