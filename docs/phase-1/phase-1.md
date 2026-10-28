@@ -8,7 +8,9 @@ publishes its body to a Notion daily section.
 
 ## Scope
 
-- Run as a TUI application on macOS.
+- Run as a TUI application (`nd`) on macOS, a client of a local Control API
+  Server that a human starts with `nd serve`, plus a Swift helper for iCloud and
+  the optional on-device model.
 - Read Markdown (`.md`) files from a mounted iCloud directory.
 - Use the Ayumi directory date and offset-aware Markdown-header `created_at`
   date to propose source notes for a diary day, visibly flag date disagreements,
@@ -16,14 +18,22 @@ publishes its body to a Notion daily section.
   metadata dates.
 - Ignore Ayumi audio attachments; they are not played, copied, uploaded,
   decoded, transcribed, or supplied to diary composition.
+- Compose the entry in a multiline editor, with optional reviewed two-pass
+  drafting: hosted by default (provider undecided) or Apple on-device.
 - Produce one final diary entry as a Markdown file on the local filesystem.
+- Amend a completed entry, replacing only content the app itself wrote.
 - Use the configured Notion root page with `YYYY` year and `YYYY-MM` month
   subpages; append the confirmed Markdown body as a daily section at the
   bottom of its month page.
 
 ## Exit criteria
 
-- A user can run the application on macOS and interact with it through a TUI.
+- A user can start the server with `nd serve` and interact with it through the
+  `nd` TUI on macOS.
+- A user can draft with a model adapter or write manually; model output is never
+  accepted without review, and a blank entry cannot be confirmed.
+- A completed entry can be amended without overwriting content the app did not
+  write.
 - The application can read Markdown source files from a mounted iCloud
   directory.
 - Before composition, the TUI shows the source-note selection and any directory

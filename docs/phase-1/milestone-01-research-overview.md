@@ -1,6 +1,6 @@
 # P1-M1: MVP research and decisions overview
 
-Status: Archived
+Status: Active
 
 This milestone consolidates the research already completed for the macOS TUI
 MVP and closes only the questions needed to make later Phase 1 planning
@@ -122,11 +122,13 @@ runtime-only read-only root preflight on 2026-10-28.
 
 - Decide the minimum macOS version and Rust version for Phase 1.
 - Execute the [macOS IME language status research plan](../research/macos-ime-language-status.md):
-  verify that a disposable Rust probe can show English/Japanese input-language
+  verify that a disposable Rust probe can show English/Japanese (later narrowed
+  to English/Korean) input-language
   changes in Apple Terminal, then recommend one integration and one fallback
   for later architecture planning.
 - Decide between Tokio tasks and dedicated worker threads for filesystem,
-  composition, and Notion work while keeping the TUI responsive.
+  composition, and Notion work while keeping the TUI responsive. (Later
+  decision: the server is async on Tokio; the TUI keeps bounded worker threads.)
 - Decide credential storage. The owner chose a plaintext per-user global
   config file with owner-only permissions; the disposable Keychain probe
   remains research evidence rather than an implementation requirement.

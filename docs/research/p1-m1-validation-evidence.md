@@ -1,6 +1,6 @@
 # P1-M1 validation evidence
 
-Status: Archived
+Status: Active
 
 Research date: 2026-10-28
 
@@ -76,7 +76,8 @@ fresh, bounded extraction sessions and forbids silent truncation.
 
 The evidence supports optional, on-device two-pass drafting with structured
 extraction and a full manual editor. It does not support one-pass generation or
-automatic acceptance. Phase 1 sends no composition text to a hosted model.
+automatic acceptance. These probes ran on-device only; the owner later made a
+hosted adapter the default, so hosted quality is not evidenced here.
 
 ## Output and Notion fixture scenarios
 

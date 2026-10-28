@@ -1,6 +1,6 @@
 # Markdown input format research
 
-Status: Archived
+Status: Active
 
 Research date: 2026-10-28
 

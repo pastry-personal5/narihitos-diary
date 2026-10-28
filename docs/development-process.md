@@ -17,7 +17,7 @@ Work is organized into numbered phases and milestones. General documentation rul
 A milestone is done when:
 
 1. Its completion checklist is checked with acceptance evidence.
-2. The gate passes: `cargo fmt --all -- --check`, `cargo clippy --all-targets --all-features -- -D warnings`, and `cargo test --all-features`, unless the milestone overview records an explicit owner-approved exemption and its alternative completion evidence.
+2. The gate passes: `cargo fmt --all -- --check`, `cargo clippy --all-targets --all-features -- -D warnings`, and `cargo test --all-features`, plus `swift build` and `swift test` for the Apple helper once `helpers/apple-bridge` exists, unless the milestone overview records an explicit owner-approved exemption and its alternative completion evidence.
 3. Affected docs and its phase-doc status are updated in the same change.
 
 A phase is done when every milestone is `Done` or `Dropped` and its exit criteria hold.

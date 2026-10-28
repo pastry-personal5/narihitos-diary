@@ -4,8 +4,8 @@ Make remembering a day feel effortless.
 
 The active Phase 1 MVP is a macOS TUI that reads Markdown files from a mounted
 iCloud directory, lets the user choose which dated source notes belong in an
-entry even when their directory and header dates disagree, and supports local
-on-device drafting or manual writing. It saves the confirmed entry as local
+entry even when their directory and header dates disagree, and supports hosted
+drafting, optional on-device drafting, or manual writing. It saves the confirmed entry as local
 Markdown and publishes its body to a Notion daily section under root, year,
 and month pages. See the
 [product roadmap](docs/roadmap.md).

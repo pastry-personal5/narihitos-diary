@@ -1,6 +1,6 @@
 # Agent-assisted diary composition research
 
-Status: Archived
+Status: Active
 
 Research date: 2026-10-28
 
@@ -9,6 +9,20 @@ on-device models for turning multiple Markdown notes into one grounded,
 readable diary entry on macOS and iPhone. It recommends an auditable
 composition boundary and quality criteria; it is not a phase or milestone
 plan.
+
+Scope update, 2026-10-28: the owner decided that Ayumi source notes are en-US
+only and entries are written in en-US or ko-KR; Japanese is out of scope. The
+Japanese fixture results below remain evidence about one-pass versus guided
+two-pass drafting, not a supported input language.
+
+Scope update, 2026-10-28 (later): the owner reversed the on-device-only rule.
+Hosted drafting is now the default composition path behind the `DraftAssistant`
+port, with Apple on-device drafting as an optional adapter and no extra consent
+step. Readable note bodies, memories, drafts, and the edited entry may leave the
+Mac; front matter, attachment paths, audio, and credentials may not. The
+provider is undecided. Statements below that Phase 1 sends no composition text
+to a hosted model are superseded; the two-pass design, validation, and manual
+fallback still apply. See [Hosted drafting and data egress](../planned-mvp-architecture.md#hosted-drafting-and-data-egress).
 
 ## Recommendation
 
@@ -219,7 +233,56 @@ application must not assume that it may consume a personal ChatGPT plan. It
 needs an approved sign-in integration or an explicitly configured API billing
 path.
 
-## Phase 1 owner decision
+### Codex app server as the drafting backend
+
+If the hosted adapter drove Codex, the server would spawn `codex app-server` and
+speak newline-delimited JSON-RPC over standard input and output, starting with an
+`initialize` request. The protocol (checked against the `openai/codex`
+sources, 2026-10-28) offers `thread/start`, `thread/resume`, `thread/fork`,
+`thread/compact`, `turn/start`, `turn/steer`, and `turn/interrupt`; server
+requests for command, file-change, and permission approval; and a
+`thread/tokenUsage/updated` notification carrying per-turn and cumulative usage
+plus the model's context window. Parts of the protocol are marked experimental.
+
+Context and token findings for this workload (bounded input, two passes, one
+entry a day):
+
+- **Built-in context management mostly goes unused.** Threads keep history and
+  compact it automatically near `model_auto_compact_token_limit` or the window's
+  hard cap, which suits long coding sessions. A two-pass diary draft is short,
+  and Pass B must not inherit Pass A's raw notes, so each pass uses its own
+  ephemeral thread and the compaction machinery never runs.
+- **Per-turn baseline (not measured).** Codex is a coding agent, so its default
+  instructions and built-in tool definitions presumably travel with every turn
+  and could dominate a diary-sized prompt. `thread/start` accepts
+  `base_instructions` and `developer_instructions`; how much of the default
+  prompt they remove, and whether every built-in tool can be disabled, are
+  unverified. Prompt-cache savings are unlikely for a once-a-day workflow.
+- **Measurable spend.** Per-turn token usage events let the server enforce a
+  budget and interrupt a turn, which a direct API call gets from its response
+  usage field with less machinery.
+- **Hardening is mandatory.** An agent with file or shell tools could read the
+  note files themselves, bypassing the data classes. Use a read-only sandbox, an
+  empty working directory (this also keeps the repository's `AGENTS.md` out of
+  the prompt), approvals denied, and an ephemeral thread, as in the `codex exec`
+  prototype above.
+- **Operational cost.** A second supervised child process, a pinned and
+  installed `codex` version, a protocol with experimental parts, and one active
+  turn per thread (input during a turn steers it rather than queuing).
+- **Credential benefit is unconfirmed.** Codex keeps its own login, so the app
+  might hold no provider key, but whether a distributed app may use a personal
+  ChatGPT plan this way is unverified (see the paragraph above).
+
+Net: for this workload a direct API adapter has the smallest context footprint
+and permission surface; the app server mainly buys credential reuse and a
+ready-made streaming and cancellation protocol. Keep the choice behind the
+`DraftAssistant` port.
+
+## Phase 1 owner decision (superseded)
+
+Superseded 2026-10-28 by the hosted-default decision in the scope update above.
+It is kept as the record of the on-device design, which remains the optional
+adapter. The original text follows.
 
 Phase 1 uses Apple Foundation Models for optional on-device assistance and a
 full multiline manual editor as the always-available path. It does not use

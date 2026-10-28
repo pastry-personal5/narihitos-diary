@@ -1,10 +1,17 @@
 # P1-M1 research and owner decision summary
 
-Status: Archived
+Status: Active
 
 P1-M1 research produced the evidence below. The owner interview confirmed or
 replaced its product recommendations. Later owner corrections set a Notion
 root/year/month page hierarchy and bottom-of-month placement for daily entries.
+
+Later decisions superseded some rows; the [changelog](changelog.md) and
+[AGENTS.md](../../AGENTS.md) win. Superseded: composition is hosted by default
+with Apple on-device optional; credentials live in the repo-local
+`config/global_config.yaml`; the IME label covers English and Korean only; and
+background work runs on the server's Tokio layer, with bounded worker threads in
+the TUI.
 
 ## Decision map
 
@@ -15,16 +22,16 @@ root/year/month page hierarchy and bottom-of-month placement for daily entries.
 | Selection stability | Make metadata/digest checks at workflow checkpoints; a detected change invalidates drafts and previews. An unverifiable check stops output until successful reread and reconfirmation. | [Operational constraints](../research/mvp-operational-constraints.md) |
 | Audio | Drop supported audio-link nodes and targets; attachment count never changes eligibility. | [Input format](../research/markdown-input-format.md) |
 | iCloud | Request download of selected cloud-only notes and coordinate their reads with a Foundation adapter. | [Input format](../research/markdown-input-format.md), [Apple evidence](../research/p1-m1-validation-evidence.md) |
-| Composition | Use reviewed, guided two-pass Apple on-device drafting when available and a full multiline manual editor always, including after model failure. No composition content goes to a hosted provider. Recover unfinished drafts locally. | [Composition research](../research/agent-assisted-diary-composition.md), [prototype comparison](../research/p1-m1-validation-evidence.md) |
+| Composition | Use reviewed, guided two-pass drafting and a full multiline manual editor always, including after model failure. Recover unfinished drafts locally. (Originally Apple on-device only with no hosted provider; superseded: hosted is now the default and Apple on-device is optional.) | [Composition research](../research/agent-assisted-diary-composition.md), [prototype comparison](../research/p1-m1-validation-evidence.md) |
 | Writing choices | Choose US English or South Korean Korean per entry, remembering the last choice. Offer concise, standard, or reflective style, defaulting to concise. Allow inferred reflections by default but mark them for review; confirm the complete edited text. | [Composition research](../research/agent-assisted-diary-composition.md) |
 | Local output | Default to configurable `~/Documents/narihitos-diary/entries/YYYY/MM/YYYY-MM-DD.md` with YAML day/language front matter; atomically create, resume identical content, and never overwrite different content automatically. | [Operational constraints](../research/mvp-operational-constraints.md) |
 | Persistent state | Store draft recovery and versioned publication receipts in a per-user SQLite database under Application Support. Keep credentials out of it. | [Operational constraints](../research/mvp-operational-constraints.md) |
 | Notion hierarchy and payload | Use the configured root page, a `YYYY` child page, and a `YYYY-MM` child page, creating missing year/month pages when publishing. Append the confirmed Markdown body without YAML front matter under `heading_2: YYYY-MM-DD` at the bottom of the month page. | [Notion research](../research/notion-diary-section.md), [hierarchy fixture](../research/p1-m1-validation-evidence.md) |
 | Notion duplicate/retry | Require a receipt plus read-back match in the target month page; stop on conflicting same-day content or ambiguous year/month paths; inspect relevant pages before retrying an ambiguous create or append, and honor `Retry-After`. | [Notion research](../research/notion-diary-section.md), [fixture matrix](../research/p1-m1-validation-evidence.md) |
 | Environment | Apple Silicon, macOS 26.0+, Rust 1.89+. | [Rust TUI stack](../research/rust-tui-stack.md), [toolchain probe](../research/p1-m1-validation-evidence.md) |
-| Background work | Dedicated bounded worker threads for filesystem, model, and blocking Notion work; typed completion events return to the sole TUI owner. | [Rust TUI stack](../research/rust-tui-stack.md) |
+| Background work | Dedicated bounded worker threads for filesystem, model, and blocking Notion work; typed completion events return to the sole TUI owner. (The server later moved to Tokio; the TUI keeps this model.) | [Rust TUI stack](../research/rust-tui-stack.md) |
 | TUI/editor | Ratatui/Crossterm-compatible multiline plain-Markdown editing; one Crossterm version; in-memory tests for paste, key filtering, and rendering. | [Rust TUI stack](../research/rust-tui-stack.md), [toolchain probe](../research/p1-m1-validation-evidence.md) |
-| Credentials | Store the Notion token in plaintext in a per-user global config file requiring owner-only permissions; the researched Keychain probe remains evidence, not the chosen storage. | [Rust TUI stack](../research/rust-tui-stack.md), [Keychain probe](../research/p1-m1-validation-evidence.md) |
+| Credentials | Store the Notion token in plaintext in an owner-only config file (now the repo-local, git-ignored `config/global_config.yaml`); the researched Keychain probe remains evidence, not the chosen storage. | [Rust TUI stack](../research/rust-tui-stack.md), [Keychain probe](../research/p1-m1-validation-evidence.md) |
 | IME label | TIS notification plus language property; 500 ms polling fallback; `IME: ?` on unknown; never claim Japanese conversion mode. | [IME research](../research/macos-ime-language-status.md) |
 
 ## Remaining bounded uncertainty
@@ -41,8 +48,8 @@ root/year/month page hierarchy and bottom-of-month placement for daily entries.
 - Japanese sources were installed but not enabled during the live IME probe.
   The Rust probe read `ja` from installed Japanese sources and verified live
   notification delivery in both directions with another enabled non-English
-  source. Implementation acceptance must repeat `en ↔ ja` when Japanese is
-  enabled.
+  source. Japanese is now out of scope; implementation acceptance repeats
+  `en ↔ ko` instead.
 - One guided synthetic generation passed; this does not prove model quality on
   every diary. The manual editor, source-linked review, marked inferred
   reflections, runtime availability check, and manual path after failure are

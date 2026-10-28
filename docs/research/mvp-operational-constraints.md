@@ -1,6 +1,6 @@
 # MVP operational constraints research
 
-Status: Archived
+Status: Active
 
 Research date: 2026-10-28
 
@@ -69,16 +69,16 @@ Required safeguards for later implementation:
 - Redact request bodies, response page content, tokens, coordinates, and diary
   text from errors.
 - Keep the Notion token out of process arguments, logs, and the SQLite database.
-  The owner chose a plaintext per-user global config file with owner-only
-  permissions for this personal MVP.
+  The owner chose a plaintext, owner-only config file for this personal MVP:
+  the repo-local, git-ignored `config/global_config.yaml`, which superseded an
+  earlier per-user global location.
 - Send only user-confirmed text to Notion.
 - Never send source metadata unless that behavior is separately approved and
   visible to the user. Phase 1 never sends Ayumi audio or attachment paths.
 - Use synthetic fixtures in tests.
 
-The real `tmp/Ayumi/` fixture is currently not covered by `.gitignore`. It must
-not be staged or committed. Adding `/tmp/` to `.gitignore` is a separate
-repository hygiene change worth making before development begins.
+The real `tmp/Ayumi/` fixture is covered by the `tmp/` entry in `.gitignore`.
+It must not be staged or committed.
 
 ## Date selection affects both outputs
 
@@ -141,11 +141,14 @@ drafts for recovery and versioned per-day publication receipts with local
 content digest, selected-source IDs and digests, Notion status, confirmed
 Notion payload digest, root/year/month page IDs, returned block IDs, and
 timestamps. It stores no token,
-coordinates, or attachment path. The Notion token lives in a per-user global
-config file with owner-only permissions.
+coordinates, or attachment path. The Notion token lives in the repo-local,
+git-ignored `config/global_config.yaml` with owner-only permissions.
 
-Composition uses optional Apple on-device two-pass drafting and always provides
-a multiline manual editor. No composition text leaves the device in Phase 1.
+Composition uses two-pass drafting through a hosted default adapter (provider
+undecided) or an optional Apple on-device adapter, and always provides a
+multiline manual editor. Readable note bodies, memories, drafts, and the edited
+entry may leave the Mac; front matter, attachment paths, audio, and credentials
+never do (owner decision, superseding the earlier on-device-only rule).
 Notion receives the confirmed Markdown body without YAML front matter under a
 `heading_2` ISO date. The configured root contains `YYYY` year subpages;
 each year contains `YYYY-MM` month subpages. Missing pages are created during

@@ -6,7 +6,7 @@ Instructions for contributors and AI coding agents. This is the single source of
 
 `narihitos-diary`: Make remembering a day feel effortless.
 
-Stack: Rust.
+Stack: Rust, plus one Swift helper process for Apple APIs.
 
 See [README.md](README.md) for the overview. Setup and contribution rules are in [docs/contribution-guide.md](docs/contribution-guide.md); other docs are indexed at [docs/README.md](docs/README.md).
 
@@ -14,17 +14,33 @@ See [README.md](README.md) for the overview. Setup and contribution rules are in
 
 - Work only on a clear task in the active milestone. Read its plans, relevant design docs, and applicable "Undecided" items first.
 - Before implementation, add a verifiable completion checklist to the milestone overview. Check items only when evidence exists.
-- Keep implementation, tests, and affected docs together. A milestone is done only when its checklist is complete and the gate passes: `cargo fmt --all -- --check`, `cargo clippy --all-targets --all-features -- -D warnings`, and `cargo test --all-features`, unless its overview records an explicit owner-approved exemption. If a required command cannot run, leave its item unchecked and report the blocker.
+- Keep implementation, tests, and affected docs together. A milestone is done only when its checklist is complete and the gate passes: `cargo fmt --all -- --check`, `cargo clippy --all-targets --all-features -- -D warnings`, and `cargo test --all-features`, plus `swift build` and `swift test` for the helper once `helpers/apple-bridge` exists, unless its overview records an explicit owner-approved exemption. If a required command cannot run, leave its item unchecked and report the blocker.
 - Ask before building on an undecided item, changing dependencies or build tools, deleting user data, or broadly restructuring the repository. Other work within the approved task and milestone may proceed.
 - Follow the active phase and milestone order in `docs/roadmap.md` unless the phase plan says otherwise. Create the roadmap when planning the first phase.
 
 ## Decided — ask before changing
 
-- **Technical stack:** Rust.
+- **Technical stack:** Rust, plus one Swift helper process for Apple APIs (see
+  Apple bridge). The gate covers both.
 - **Control architecture:** a local Control API Server owns workflows and
   connectors. The TUI is an HTTP client of that server; the design allows
   additional input and output connectors and a later MCP interface. See the
   [architecture proposal](docs/planned-mvp-architecture.md).
+- **Binary name:** the canonical project acronym is `nd`, always lowercase.
+  The application is the single binary `nd`.
+- **Server lifecycle:** a human starts the Control API Server manually in its
+  own terminal with `nd serve`, a subcommand of the one binary; `nd` opens the
+  TUI. The TUI never spawns the server; it shows a "server not
+  running" state with that command until it can attach.
+- **Server runtime:** the Control API Server's HTTP and event layer is async on
+  Tokio. The TUI keeps bounded worker threads and does not need Tokio. This
+  supersedes the earlier "Tokio not required" research note for the server;
+  specific crates are approved during scaffolding.
+- **Apple bridge:** the server reaches iCloud availability, download requests,
+  and coordinated reads, and Apple's Swift-only Foundation Models API for the
+  optional on-device model, through one Swift helper process. Its wire
+  protocol, location, and build are scaffolding details. Its tests use fakes,
+  never the real model or live iCloud.
 - **License:** Apache-2.0 for all project code.
 - **Process:** numbered phases contain numbered milestones; milestone numbering restarts per phase. IDs use `P1-M2`. See [docs/development-process.md](docs/development-process.md).
 - **Diary-day source selection:** for Ayumi's Diary input, use both the
@@ -56,38 +72,99 @@ See [README.md](README.md) for the overview. Setup and contribution rules are in
   freshness cannot be verified, stop and require a successful reread.
 - **Cloud-only sources:** request download only for selected cloud-only iCloud
   notes, then coordinate their reads through a macOS adapter.
-- **Composition:** offer reviewed two-pass Apple on-device drafting and an
-  always-available multiline manual editor, including after model failure.
-  Composition stays on the Mac. Offer US English or South Korean Korean per
-  entry, remembering the last choice, and concise, standard, or reflective
-  style with concise as the default. Mark model-inferred reflections for user
-  review. Confirm the complete edited entry before output. Recover unfinished
-  drafts from local persistent state.
+- **Composition:** offer reviewed two-pass drafting behind one `DraftAssistant`
+  port and an always-available multiline manual editor, including after model
+  failure. The default adapter is a hosted model (provider undecided); Apple
+  on-device drafting through the Swift helper is an optional adapter. Offer US
+  English or South Korean Korean per entry, remembering the last choice, and
+  concise, standard, or reflective style with concise as the default. Mark
+  model-inferred reflections for user review. Confirm the complete edited entry
+  before output. Recover unfinished drafts from local persistent state. This
+  supersedes the earlier on-device-only rule.
+- **Hosted data egress:** with no extra consent step, readable source-note
+  bodies, extracted memories, drafts, and the edited entry may be sent to a
+  hosted provider. Front matter (location, weather, ids), attachment paths,
+  audio, credentials, and the Notion root never leave. The UI labels the active
+  composition path; the label is not a consent. Logs and errors stay
+  content-free. A later `/mcp` agent client (Codex, Claude Code) may read the
+  same data classes and write draft proposals; confirming a selection or entry,
+  approving a plan, and publishing stay human-only in the TUI.
+- **Language scope:** Ayumi source notes are en-US only; composition output is
+  en-US or ko-KR. Japanese is out of scope for sources and for the IME
+  indicator, which covers English and Korean only. The app neither detects
+  language from a note body nor blocks on it.
+- **Default diary day:** a new workflow defaults to today in the Mac's local
+  time zone, and the Start screen lists unfinished drafts first.
+- **Draft retention:** keep receipts and digests. Purge draft and source text 7
+  days after every output verifies, and purge abandoned drafts after 30 days.
+  The user can discard a draft at any time.
 - **Local output:** default to configurable
   `~/Documents/narihitos-diary/entries/YYYY/MM/YYYY-MM-DD.md`, with YAML front
   matter containing diary day and writing language. Never automatically
-  overwrite different content at the same path.
+  overwrite different content at the same path; the one exception is an
+  approved amendment of the app's own receipted output.
 - **Private state and credential:** use a per-user SQLite database in
   Application Support for draft recovery and publication receipts. Keep the
-  Notion token out of the database; store it in plaintext in a per-user global
-  config file requiring owner-only permissions.
+  Notion token out of the database; store it in plaintext in the repo-local,
+  git-ignored `config/global_config.yaml`, which must be owner-only. This
+  supersedes the earlier per-user global config location.
+- **Output conflicts and blocked Notion:** when the local file differs, the whole
+  plan stops; when Notion holds conflicting same-day content, only Notion
+  stops. The app shows both versions and offers only reread, discard the entry, or save under a
+  different diary day; it never overwrites content it did not write. If Notion
+  is unconfigured, unreachable, or fails preflight, the local entry can still
+  be approved and written, and Notion shows blocked and retryable. Retrying a
+  blocked Notion destination needs a new Notion-only preview and approval;
+  retrying a pending one reuses the approval only while the re-checked plan
+  digest is unchanged.
+- **Amendments:** a Completed entry can be amended. Choosing its day offers
+  amend instead of the existing-entry conflict. The amend workflow starts from
+  the local file's text (hand-edited text included, with a "changed since
+  publication" banner), does not re-select sources, and skips source freshness
+  checks; the original selection survives as receipt digests. The local file is
+  replaced atomically only if its digest still equals the one seen when the
+  editor was seeded. A Notion section is replaced by its recorded block IDs
+  only if it still matches the receipt; otherwise it is a Conflict with the
+  usual three resolutions. Receipts are versioned and the 7-day purge restarts.
 - **Notion publication:** treat the configured page as a root. Under it, use a
   `YYYY` year subpage and a `YYYY-MM` month subpage, creating missing subpages
   when publishing. Send the confirmed Markdown body after stripping YAML front
   matter, under a `heading_2: YYYY-MM-DD` section at the bottom of that month
   page. Stop on conflicting same-day content, and inspect the relevant parent
   and month pages before retrying an ambiguous write. Require a fail-closed
-  read-only root-page preflight at runtime.
+  read-only root-page preflight at runtime. An amendment may replace the app's
+  own receipted section.
+- **Keybindings:** focus plus Ctrl chords. Non-editor screens move focus
+  between on-screen controls with Tab and the arrow keys and activate with
+  Enter. The editor and Command Line use Ctrl chords, with function keys as
+  aliases. No bare-letter or `:` hotkeys; avoid Ctrl-I, Ctrl-M, Ctrl-[, and
+  Ctrl-Space (macOS's default input-source switch). The Command Line opens with
+  a chord. Its commands are ASCII tokens, and the TUI maps Hangul typed on the
+  2-Set Korean layout back to the key that produced it, so commands work under
+  either IME. Every command is also reachable by focus and Enter. Chords are
+  chosen during TUI implementation and must pass a real-terminal check with the
+  Korean IME active.
+- **Empty days:** a diary day with no source notes, or none included, may still
+  produce an entry through an explicit "continue without notes" confirmation.
+  Extraction and model drafting are disabled; the manual editor works. A blank
+  entry cannot be confirmed.
 - **Phase 1 platform:** Apple Silicon, macOS 26.0+, Rust 1.89+; bounded
   background workers; Ratatui/Crossterm with multiline editing; TIS input-
-  language notifications with a 500 ms polling fallback and `IME: ?` when
-  unknown.
+  language notifications with a 500 ms polling fallback; `IME: EN`, `IME: KO`,
+  and `IME: ?` when unknown.
 
 ## Undecided — ask before inventing
 
 - **Notion connector:** the configured root page's structure remains
   uninspected. Validate the root and any existing year/month path before
   creating pages or appending a daily section.
+- **Hosted provider:** the provider, its credential storage, and the HTTP
+  dependency for the default hosted adapter are undecided. Settle them before
+  building that adapter; until then the `DraftAssistant` port, the data classes
+  in Hosted data egress, and the manual editor are the contract.
+- **Language metadata:** no known Ayumi front-matter field identifies a note's
+  language, so nothing is blocked by language. Name a field before adding
+  metadata-based rejection.
 
 The interview decisions and remaining page-compatibility check are mapped in the
 [research summary](docs/phase-1/milestone-01-research-summary.md).
@@ -96,15 +173,20 @@ The interview decisions and remaining page-compatibility check are mapped in the
 
 - The stable Rust toolchain with Cargo.
 - The rustfmt and Clippy components.
+- The Swift toolchain (Xcode command-line tools) for the Apple helper; its
+  version is chosen during scaffolding.
 
 ## Commands
 
 ```sh
 cargo build                                               # build the application
 cargo run                                                 # run the TUI application
+cargo run -- serve                                        # run the Control API Server in the foreground
 cargo test --all-features                                 # run the test suite
 cargo fmt --all                                           # format Rust code
 cargo clippy --all-targets --all-features -- -D warnings  # lint with warnings denied
+swift build --package-path helpers/apple-bridge           # build the Apple helper (once it exists)
+swift test --package-path helpers/apple-bridge            # test the Apple helper with fakes (once it exists)
 ```
 
 ## Code conventions
@@ -130,7 +212,7 @@ Approved dependencies must have licenses compatible with Apache-2.0.
 ## Token efficiency
 
 - Skip build/dependency output (`target/`), lockfiles, `LICENSE`, and `docs/archive/` unless needed. Search with `git grep` or `rg`.
-- Start at `docs/README.md` and read only relevant docs or sections.
+- Start at `docs/README.md` and read only relevant docs or sections. For a long doc such as the architecture proposal, list headings with `rg -n '^#' <file>` and read one section.
 - Keep logs short with quiet flags or filtering. Run affected tests while iterating and the full gate once at the end.
 - Consult only the needed dependency source/module for API details.
 - Make targeted edits; inspect `git diff --stat` before a full diff.

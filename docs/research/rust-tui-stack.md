@@ -1,6 +1,6 @@
 # Rust TUI stack research
 
-Status: Archived
+Status: Active
 
 Research date: 2026-10-28
 
@@ -99,15 +99,16 @@ Markdown parsing.
 | iCloud download-state APIs | Foundation bindings or a small platform adapter | Needed only if ordinary file reads cannot distinguish or activate cloud-only items. |
 | Future sandboxed folder access | AppKit/Foundation adapter | A folder picker and security-scoped bookmark are Apple platform concepts, not portable Rust filesystem APIs. |
 
-Keychain was the research recommendation, but the owner chose a plaintext
-per-user global config file requiring owner-only permissions for Phase 1.
+Keychain was the research recommendation, but the owner chose a plaintext,
+owner-only config file for Phase 1: the repo-local, git-ignored
+`config/global_config.yaml`.
 Keychain candidates and the disposable probe remain research evidence only.
 
 ### IME language indicator
 
 Phase 1 requires research into showing the selected macOS input language in the
 TUI while it runs in Apple Terminal. The requested indicator distinguishes
-languages such as English and Japanese, not Japanese conversion sub-modes.
+languages (English and Korean), not conversion sub-modes.
 
 The [macOS IME language status research plan](macos-ime-language-status.md)
 compares process-global Text Input Source Services with AppKit's
@@ -148,14 +149,18 @@ composition becomes difficult in observed use.
 - Provide a full multiline plain-Markdown editor. Render a preview without
   requiring semantic Markdown editing.
 - Keep the TUI loop single-owner and use dedicated bounded worker threads for
-  coordinated filesystem reads, Apple model calls, and blocking Notion HTTP.
-  Workers return typed events; they use cancellation flags and timeouts and
-  never render directly. Tokio is not required for the Phase 1 workload.
-- Use a small Foundation adapter to inspect iCloud status, start download for a
-  selected cloud-only file, and coordinate its read. Never block the render
-  loop on an ordinary read.
-- Store the Notion token in a per-user global config file requiring owner-only
-  permissions, rather than using a Keychain binding in this phase.
+  its HTTP calls to the Control API Server. Workers return typed events; they
+  use cancellation flags and timeouts and never render directly. The TUI does
+  not need Tokio. Filesystem, model, and Notion work runs in the server, whose
+  HTTP and event layer is async on Tokio (an owner decision made after the
+  server architecture) and which runs blocking work on bounded workers.
+- Inspect iCloud status, start download for a selected cloud-only file, and
+  coordinate its read through the same Swift helper process that reaches the
+  Apple model, not a Rust Foundation binding. Never block the render loop on an
+  ordinary read.
+- Store the Notion token in the repo-local, git-ignored
+  `config/global_config.yaml`, which must be owner-only, rather than using a
+  Keychain binding in this phase.
 - Use process-global Text Input Source Services notifications for the
   language-only IME label. Poll at 500 ms only when notification registration
   fails; show `IME: ?` when no language is supplied. AppKit input context is

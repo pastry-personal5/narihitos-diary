@@ -1,11 +1,16 @@
 # macOS IME language status research
 
-Status: Archived
+Status: Active
 
 This research determines how the Rust TUI can display the active macOS input
 language while running in Apple Terminal. It records disposable-probe evidence
 and the technical direction later confirmed by the owner; it does not
 implement the production feature.
+
+Scope update, 2026-10-28: the owner narrowed the supported input languages to
+English and Korean. Japanese is out of scope, so the Japanese observations
+below are evidence about the language property only. The label is `IME: EN` or
+`IME: KO`; any other or unknown language shows `IME: ?`.
 
 ## Goal
 
@@ -14,8 +19,8 @@ currently selected macOS input language and keeps a compact TUI indicator
 current when the user changes input sources.
 
 The intended user-visible result is language-level status such as `IME: EN` or
-`IME: JA` in the TUI. Phase 1 does not need to distinguish Japanese Hiragana,
-Katakana, or alphanumeric conversion modes.
+`IME: KO` in the TUI. Phase 1 does not need to distinguish conversion
+sub-modes.
 
 ## Result and recommendation
 
@@ -23,8 +28,8 @@ Use Text Input Source Services as the primary integration. A small macOS FFI
 boundary reads `TISCopyCurrentKeyboardInputSource`, gets the first
 `kTISPropertyInputSourceLanguages` value, and listens for
 `kTISNotifySelectedKeyboardInputSourceChanged`. It normalizes `en` to `IME: EN`
-and `ja` to `IME: JA`; other values may use their uppercased language code.
-This label intentionally says nothing about Japanese conversion sub-modes.
+and `ko` to `IME: KO`; any other value shows `IME: ?`. This label
+intentionally says nothing about conversion sub-modes.
 
 If notification registration fails, poll the same supported query every 500
 ms while the TUI is active. If the property is absent or the query fails, show
@@ -59,12 +64,12 @@ ran in Apple Terminal.
   AppKit's notification exists, but its missing context makes its selected
   source unsuitable for this non-AppKit TUI.
 
-The lack of a live Japanese switch is a named limitation: Japanese was not an
-enabled user source. The same supported property returned `ja` for installed
-Japanese sources, and live process-global delivery was verified in both
-directions with an enabled non-English source. Recheck a live `en ↔ ja` switch
-during implementation acceptance on a machine where Japanese is enabled; it
-does not block the integration choice.
+Japanese was not an enabled user source, so no live Japanese switch was
+observed; Japanese is now out of scope. The same supported property returned
+`ja` for installed Japanese sources, and live process-global delivery was
+verified in both directions with the enabled Korean source. Implementation
+acceptance rechecks a live `en ↔ ko` switch in the production indicator with the
+Korean IME active; it does not block the integration choice.
 
 ## Scope
 
@@ -72,7 +77,8 @@ does not block the integration choice.
 
 - macOS on Apple Silicon using Apple Terminal.
 - Reading the active keyboard input source and deriving its language.
-- Detecting English/Japanese input-source changes while the TUI is running.
+- Detecting English/Korean input-source changes while the TUI is running
+  (originally English/Japanese).
 - A disposable Rust probe that does not become production code.
 - Framework linkage, threading or run-loop requirements, macOS permissions,
   dependency licensing, and minimum-version implications.

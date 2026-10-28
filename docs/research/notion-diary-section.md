@@ -1,6 +1,6 @@
 # Notion daily diary section research
 
-Status: Archived
+Status: Active
 
 Research date: 2026-10-28
 
@@ -64,9 +64,9 @@ require adding a bot connection to each page.
 For this personal MVP:
 
 - Create a dedicated PAT with the Notion API capability and an expiry.
-- Store the token in a per-user global config file requiring owner-only
-  permissions, as the owner chose for this personal MVP. Never commit that
-  file or copy the token into logs, process arguments, SQLite, or TUI dumps.
+- Store the token in the repo-local, git-ignored `config/global_config.yaml`,
+  which must be owner-only, as the owner chose for this personal MVP. Never
+  commit that file or copy the token into logs, process arguments, SQLite, or TUI dumps.
 - Keep the page ID in ordinary configuration; it is an identifier, not a
   secret.
 - Surface `401` as an expired/revoked token and `403` as insufficient
@@ -124,6 +124,30 @@ The block API is the stronger current candidate:
 2. Read and paginate the month page's blocks for the diary-date heading.
 3. If absent, append the heading and paragraph blocks at the month page's end.
 4. Read back the created blocks before reporting success.
+
+### Amending an owned section
+
+An amendment replaces a section the app published and receipted. The block API
+(checked against the current reference, 2026-10-28) supports it as follows:
+
+- `PATCH /v1/blocks/{block_id}/children` accepts `position` with type `after_block`
+  (and `start` or `end`) to insert after a given block; the older `after`
+  parameter is deprecated, and the two cannot be combined. A request takes at
+  most 100 children, and appended blocks cannot be moved afterward.
+- `DELETE /v1/blocks/{block_id}` sets `in_trash`, which moves the block to the
+  trash where it can be restored through the update-block or update-page
+  endpoints. It does not destroy content.
+- `PATCH /v1/blocks/{block_id}` can edit a text block's content in place, but
+  it cannot change a block's children and does not help when the paragraph count
+  changes.
+
+The chosen method inserts the new paragraphs after the receipted heading block,
+reads them back, and only then trashes the old paragraph blocks, so an
+interruption duplicates content instead of losing it. See
+[Amendments](../planned-mvp-architecture.md#amendments) and the references
+[append block children](https://developers.notion.com/reference/patch-block-children),
+[delete a block](https://developers.notion.com/reference/delete-a-block), and
+[update a block](https://developers.notion.com/reference/update-a-block).
 
 Reasons:
 

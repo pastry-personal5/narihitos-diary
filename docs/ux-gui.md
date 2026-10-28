@@ -1,4 +1,4 @@
-# UX GUI
+# Terminal UX
 
 Status: Proposal
 
@@ -18,49 +18,102 @@ experience; it does not claim an implemented screen or keybinding.
   regardless of either date.
 - Request downloads only for selected cloud-only notes. Keep unavailable and
   unreadable states distinct from an empty note.
+- Start a new workflow on today's date in the Mac's local time zone, and list
+  unfinished drafts first. The person can discard a draft at any time.
 - Offer a multiline manual editor at all times after source confirmation,
-  including when Apple model assistance is unavailable or fails. Optional
+  including when model assistance is unavailable or fails. Optional
   assistance uses a source-linked memory review before drafting.
+- Let a day with no source notes continue through an explicit “continue without
+  notes” confirmation. Only the manual editor is offered, and a blank entry
+  cannot be confirmed.
+- Label the active composition path (hosted by default, or Apple on-device) in
+  the Setup check, the editor, and the Status Line. The label is information,
+  not a consent step.
 - Offer US English and South Korean Korean per entry, remember the last choice,
   and offer concise, standard, and reflective styles with concise as default.
-  Mark model-inferred reflections for human review.
+  The choice names the language of the finished entry; source notes are
+  expected to be en-US. Mark model-inferred reflections for human review.
 - Require confirmation of the complete edited entry and then show the exact
   local and Notion outputs before the first write. Display the root/year/month
   path and any subpages that would be created. Show conflicts and partial
   success plainly.
+- When the local file differs, stop the whole plan; when Notion holds
+  conflicting same-day content, stop Notion only. Show both versions and offer
+  only reread, discard the entry, or save under a different diary day, as
+  described in [Publication and recovery](planned-mvp-architecture.md#publication-and-recovery).
+  Never overwrite.
+- When Notion is unconfigured, unreachable, or fails its preflight, show it as
+  blocked in the preview and still allow the local entry to be approved and
+  written. Notion can be retried later: a blocked destination needs a new
+  Notion-only preview and approval, and a pending one reuses the approval only
+  while its plan is unchanged.
+- Offer to amend a completed day. The editor opens with the saved text and, if
+  the file was hand-edited, a banner saying it changed since publication. The
+  output preview shows current and replacement content per destination, and a
+  destination that no longer matches our receipt is a Conflict.
 - Display the macOS input language through Text Input Source Services
   notifications, use a 500 ms polling fallback when notification registration
-  fails, and show `IME: ?` when the language is unknown.
+  fails, show `IME: EN` or `IME: KO` for English and Korean, and show `IME: ?`
+  for any other or unknown language.
+- Show a “server not running” state, with the command to start it, whenever the
+  client cannot attach. The client never starts the server; the start command is
+  `nd serve`.
+
+## Input constraint
+
+The person types Korean as well as English. While a Korean IME is active, bare
+letters and `:` reach the application as composed text, and `Enter` or `Space`
+may commit a composition instead of acting. The decided model (“Keybindings” in
+[AGENTS.md](../AGENTS.md)) therefore uses focus navigation plus Ctrl chords and
+no bare-letter or `:` hotkeys. Terminals also encode `Ctrl-I` as Tab, `Ctrl-M`
+as Enter, and `Ctrl-[` as Esc; macOS reserves `Ctrl-Space` for input-source
+switching by default; and Terminal.app sends Option as a character modifier
+unless it is set to act as Meta. Avoid those collisions. On non-editor screens
+Tab and the arrow keys move focus and Enter activates. The Command Line opens
+with a chord, accepts ASCII command tokens, and maps Hangul typed on the 2-Set
+Korean layout back to the key that produced it, so commands work under either
+IME; every command is also reachable by focus and Enter. Real-terminal
+acceptance checks this with the Korean IME active.
 
 ## Proposed presentation details
 
-The source list should place inclusion state, note identity, directory date,
-header date, availability, and warning status in a stable row. A detail area
-can show the readable text without audio links. The chosen diary day stays
-visible while inspecting another date. A selected cloud-only row offers a
-download action and progress state; the person confirms the selection only
-after its readable snapshot has been reviewed.
+The candidate table, in the Main Pane, places inclusion state, note identity,
+directory date, header date, availability, and warning status in a stable row.
+Markers are words or symbols, never color alone. A detail area can show the
+readable text without audio links. The chosen diary day stays visible while
+inspecting another date. A selected cloud-only row offers a download action and
+progress state; the person confirms the selection only after its readable
+snapshot has been reviewed.
 
 The editor should keep language and style choices visible and allow paste,
-multiline editing, and review of source-linked memories. An inferred reflection
-needs a visible marker and an explicit accept, edit, or remove choice. The
-entry review should show the entire edited text, not a summary. If freshness
-fails or another client changes the workflow, the screen should explain what
-must be reread and preserve recoverable edits without treating them as
-confirmed.
+multiline editing, and review of source-linked memories. When a `ko-KR` entry is
+drafted from en-US notes, the editor says it is a translation. An inferred
+reflection appears inline between reserved delimiters, so it survives any
+edit; the person accepts it by removing the delimiters, edits the text, or
+removes the span. Entry review refuses confirmation while any reserved delimiter
+character remains and points to the first one. It shows the entire edited text, not a
+summary. Unsent text is flushed to the server after about a second without
+typing, when focus leaves the editor, and before quitting; if the server is
+unreachable the Status Line says so and quitting asks first. If freshness fails
+or another client changes the workflow, a Banner explains what must be reread
+and recovered edits stay visible without being treated as confirmed.
 
 The output preview should show the local file path and rendered Markdown,
-followed by the Notion destination, heading, and exact body. It should separate
-read-only preflight results from actions that create pages or append text. The
-publication screen should distinguish local success, Notion pending, verified
-success, and a conflict that needs user resolution. Connection loss should
-disable publication until the client reloads the server's current workflow.
+followed by the Notion destination, heading, and exact body. It separates
+read-only preflight results from actions that create pages or append text, and
+marks a blocked destination with its reason. Approval is a deliberate action on
+this screen, tied to the displayed plan, and no typed command bypasses it. The
+publication screen should distinguish local success, Notion pending, Notion
+blocked, verified success, and a conflict. The Conflict view lays the existing
+content beside the planned payload and offers the three resolutions above.
+Connection loss disables publication until the client reloads the server's
+current workflow.
+
+Colors may reinforce but never carry meaning alone; the client honors
+`NO_COLOR` and stays legible on a 16-color terminal. Messages about notes name a
+relative path and the problem, never note content.
 
 Ratatui views render the ViewModel; the client sends actions to the Control
 API Server and receives state changes through REST and events. The screen
-chrome is proposed in the information architecture's
-[chrome layout](ux-information-architecture.md#chrome-layout) section
-(Sidebar, Main Pane, Command Line, Status Line); keybindings remain an open
-implementation detail. See the [information architecture](ux-information-architecture.md)
-for screen order.
-
+chrome, step states, terminal-size rules, and connection and error states are
+in the [information architecture](ux-information-architecture.md).

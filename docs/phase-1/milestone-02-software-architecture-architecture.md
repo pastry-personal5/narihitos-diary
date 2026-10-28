@@ -24,3 +24,5 @@ technology-neutral product design is the [planned MVP architecture](../planned-m
    pipeline and connector-specific failure behavior.
 5. Review the design against synthetic source, output, and concurrent-client
    scenarios and keep the unresolved Notion page check at runtime.
+6. Reconcile the terminal UX documents with the architecture, then interview
+   the owner on each remaining unresolved choice and record the answers.

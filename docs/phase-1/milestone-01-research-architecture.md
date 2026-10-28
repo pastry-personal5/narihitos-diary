@@ -1,6 +1,6 @@
 # P1-M1: MVP research and decisions approach
 
-Status: Archived
+Status: Active
 
 This document defines how P1-M1 research is gathered, reviewed, and converted
 into decisions. It is a research approach, not an implementation architecture

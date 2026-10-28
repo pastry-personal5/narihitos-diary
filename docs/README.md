@@ -15,11 +15,11 @@ This index lists the design and process docs, one line each. Read only the doc y
 | [phase-1/milestone-02-software-architecture-architecture.md](phase-1/milestone-02-software-architecture-architecture.md) | P1-M2 affected boundaries and architecture planning sequence. |
 | [phase-1/milestone-03-scaffolding-overview.md](phase-1/milestone-03-scaffolding-overview.md) | P1-M3 placeholder: goal, scope, and completion checklist not yet written. |
 | [phase-1/milestone-03-scaffolding-architecture.md](phase-1/milestone-03-scaffolding-architecture.md) | P1-M3 placeholder: architecture plan not yet written. |
-| [planned-mvp-architecture.md](planned-mvp-architecture.md) | Local control server, TUI client, clean-architecture boundaries, connector contracts, workflow, REST, streaming, and future MCP design. |
+| [planned-mvp-architecture.md](planned-mvp-architecture.md) | Local control server, TUI client, clean-architecture boundaries, connector contracts, workflow states, amendments, hosted drafting and data egress, process lifecycle, files, REST, streaming, and future MCP design including agent-client context cost. |
 | [product-behavior.md](product-behavior.md) | Intended user journey, confirmed diary behavior, and product boundaries. |
 | [ux-terms.md](ux-terms.md) | Proposed vocabulary for visible terminal components and code-facing names. |
-| [ux-information-architecture.md](ux-information-architecture.md) | Proposed terminal screen containment and workflow navigation. |
-| [ux-gui.md](ux-gui.md) | Approved terminal behavior and proposed presentation details, kept separate. |
+| [ux-information-architecture.md](ux-information-architecture.md) | Proposed terminal screen containment, step states, connection and error states, and chrome layout. |
+| [ux-gui.md](ux-gui.md) | Terminal UX: approved behavior, the Korean-IME input constraint, and proposed presentation details, kept separate. |
 | [phase-1/changelog.md](phase-1/changelog.md) | Phase 1 owner decisions and material plan changes. |
 | [research/markdown-input-format.md](research/markdown-input-format.md) | P1-M1 iCloud directory layout, Markdown/YAML format, attachment format, time semantics, and privacy constraints. |
 | [research/notion-diary-section.md](research/notion-diary-section.md) | P1-M1 Notion authentication, block APIs, limits, and owner publication contract. |

@@ -11,11 +11,14 @@ files, cloud services, and user interfaces.
 
 | Concern | Decision |
 |---|---|
-| Client and server | A single per-user server process owns workflow state, the private database, credentials, connectors, and side effects. The TUI communicates with it over loopback HTTP like any other client. |
+| Client and server | A single per-user server process owns workflow state, the private database, credentials, connectors, and side effects. A human starts it manually with `nd serve`; the TUI never spawns it and communicates with it over loopback HTTP like any other client. |
 | Clean architecture | Domain policy and use cases depend on inward-facing types and ports. HTTP, Ratatui, macOS frameworks, SQLite, and Notion live in adapters that depend on the core. |
 | MVVM | The TUI ViewModel turns API representations and event notifications into screen state; the View renders it and sends user intent back through the API client. The server remains the source of truth. |
 | Pipeline | One explicit, resumable workflow state machine orders discovery, selection, composition, confirmation, and publication. Each step has typed inputs, outputs, and invalidation rules. |
 | Connectors | Registered input and output connectors implement capability-focused ports. Their identifiers and opaque source or destination keys cross the API; vendor objects and filesystem paths do not become core types. |
+| Platform bridge | iCloud downloads and coordinated reads are Foundation APIs, and Apple's Foundation Models API for the optional on-device model is Swift-only. The server reaches both through one Swift helper process that speaks a versioned protocol over standard input and output. The core sees only the `DraftAssistant` and `SourceReader` ports. |
+| Composition and egress | `DraftAssistant` has a hosted default adapter and an optional Apple on-device adapter. Only readable note bodies, memories, drafts, and the edited entry can reach a hosted provider; front matter, attachment paths, audio, credentials, and the Notion root cannot be expressed in the port's types. See [Hosted drafting and data egress](#hosted-drafting-and-data-egress). |
+| Concurrency | The server's HTTP and event layer is async on Tokio. Blocking work (SQLite, file hashing, helper pipes) runs on bounded workers with timeouts and cancellation. The TUI keeps a synchronous event loop with bounded worker threads. |
 | HTTP surfaces | `/v1` is a versioned JSON REST API with a separate Server-Sent Events (SSE) change stream. The same listener can later mount `/mcp` as an MCP Streamable HTTP endpoint; that protocol is distinct from the REST API. |
 
 This adapts the inward dependency rule from [Clean Architecture](https://blog.cleancoder.com/uncle-bob/2012/08/13/the-clean-architecture.html)
@@ -34,7 +37,7 @@ flowchart LR
     UC --> D[Diary domain\ninvariants + value objects]
     Inputs[Ayumi / future input adapters] -. implement ports .-> UC
     Outputs[Local Markdown / Notion / future output adapters] -. implement ports .-> UC
-    Platform[Apple model, iCloud, SQLite, config] -. implement ports .-> UC
+    Platform[Hosted or Apple model, iCloud, SQLite, config] -. implement ports .-> UC
 ```
 
 Request flow goes from clients toward the server and then through use cases.
@@ -42,53 +45,103 @@ Source-code imports point toward the domain and application boundary: domain
 imports nothing outward; use cases import domain; adapters and transports import
 the core. HTTP handlers translate wire DTOs and errors but do not decide source
 eligibility, approve text, or infer whether a publication succeeded. The TUI
-never reads the SQLite database or calls Notion or Apple model APIs directly.
+never reads the SQLite database or calls Notion or model APIs directly.
 
 Proposed Rust workspace boundaries are:
 
 ```text
 crates/diary-core/              domain, use cases, ports, state transitions
-crates/diary-connectors/        Ayumi, local Markdown, Notion, Apple, SQLite, macOS
+crates/diary-connectors/        Ayumi, local Markdown, Notion, hosted draft, Apple, SQLite, macOS
 crates/diary-control-contract/  versioned wire DTOs and API schema
 crates/diary-control/           Control API Server, REST, SSE, future MCP adapter
-crates/diary-tui/               typed HTTP client, ViewModels, views, terminal
-apps/diary/                    startup, connector registry, configuration
+crates/diary-tui/               typed HTTP client, ViewModels, views, terminal, IME indicator
+helpers/apple-bridge/           Swift helper executable for iCloud and the optional Foundation Models
+apps/nd/                        startup, connector registry, configuration (the `nd` binary)
 ```
 
 The first scaffold may combine outer crates if that makes maintenance simpler,
 provided `diary-core` is independently testable without a terminal, HTTP
 server, Notion, Apple frameworks, or SQLite. Keep wire DTOs in the contract
 module, separate from core types; server and TUI may share only that contract.
-Only the process startup code selects concrete adapters. This preserves the
-option to use the core from another platform with different adapters.
+Only the process startup code selects concrete adapters. Apple-framework code
+sits behind a macOS-only gate or its own crate, so portable adapters (Notion,
+local Markdown, SQLite, hosted draft) never link it. This preserves the option to use the
+core from another platform with different adapters. The input-language
+indicator is presentation state: its adapter lives in `diary-tui`, not in the
+server's connectors.
 
 ## Domain and application contracts
 
 The core owns `DiaryDay`, `WritingLanguage` (`en-US` or `ko-KR`), `WritingStyle`
 (`concise`, `standard`, `reflective`), `SourceRef`, `SourceSnapshot`,
-`SelectionRevision`, `MemoryCandidate`, `EntryRevision`, `ConfirmedEntry`,
-`OutputPlan`, and `PublicationReceipt`. A `SourceRef` pairs a connector ID with
-an opaque key. An output target likewise has a connector ID and opaque target
+`SelectionRevision`, `MemoryCandidate`, `DraftProposal`, `EntryRevision`,
+`ConfirmedEntry`, `OutputPlan`, and `PublicationReceipt`. A `DraftProposal` is
+memories or entry text from an agent client that waits for the person to accept
+it. A `SourceRef` pairs a connector ID with an opaque key. An output target likewise has a connector ID and opaque target
 key. IDs are stable within their connector; API clients cannot use them to
 request arbitrary files or pages.
+
+`WritingLanguage` is the language of the finished entry. Source notes are
+expected to be en-US; the core neither detects nor blocks on source language,
+so a `ko-KR` entry drafted from en-US notes is a translation, and the
+interface says so.
 
 The application boundary defines small ports by purpose:
 
 | Port | Required conversation | First adapter |
 |---|---|---|
 | `SourceCatalog` | Discover candidates for a bounded day query and an explicitly requested extra day. Return source references, available date evidence, warnings, and availability. | Ayumi Markdown catalog |
-| `SourceReader` | Prepare only selected sources, coordinate reads, return readable text and a file identity/metadata/content-digest stamp; recheck freshness at workflow checkpoints. | Ayumi plus macOS iCloud adapter |
-| `DraftAssistant` | Report runtime availability and language support; extract source-linked memories and draft from confirmed memories with bounded inputs. | Apple on-device model |
-| `DraftStore` | Save and recover unfinished edits, workflow revisions, preferences, operation state, and receipts. | Per-user SQLite |
-| `OutputConnector` | Inspect a destination without writing, plan its exact payload, commit, read back or reconcile an uncertain commit, and return a receipt or explicit pending/conflict result. | Local Markdown and Notion |
+| `SourceReader` | Prepare only selected sources, coordinate reads, return readable text and a file identity/metadata/content-digest stamp; recheck freshness at workflow checkpoints. | Ayumi plus iCloud reads through the Swift helper |
+| `DraftAssistant` | Report runtime availability and language support; extract source-linked memories and draft from confirmed memories, with bounded inputs built only from the allowed data classes. | Hosted model (default; provider undecided); Apple on-device model through the Swift helper (optional) |
+| `WorkflowStore` | Save and recover workflow revisions, unfinished edits, and preferences; purge expired draft and source text. | Per-user SQLite |
+| `OperationLog` | Record an intent before each external write, then the terminal receipt for each destination; list unresolved intents for reconciliation. | Per-user SQLite |
+| `OutputConnector` | Inspect a destination without writing, plan its exact payload, commit, read back or reconcile an uncertain commit, replace the app's own receipted output in an approved amendment, and return a receipt or explicit pending/conflict result. | Local Markdown and Notion |
 
-Ports return typed outcomes such as `NeedsDownload`, `PermissionDenied`,
+Time and configuration enter the core through `Clock` and `Settings` ports so
+tests can fix them. Ports return typed outcomes such as `NeedsDownload`, `PermissionDenied`,
 `Unreadable`, `Changed`, `Unverifiable`, `Conflict`, and `AmbiguousWrite`.
 Unexpected errors retain context inside the adapter but expose a safe category
 and a redacted reference to clients. The core never receives Notion HTTP
 responses, SQLite rows, `NSURL` values, TUI widget state, or raw front matter.
 The Notion adapter obtains its credential from outer configuration; the
 application ports never return or store credentials.
+
+The Apple adapters talk to one Swift helper over a versioned protocol on
+standard input and output. Whether the helper is spawned per request or kept
+as a supervised child is a scaffolding choice. It serves two command groups.
+For the optional on-device model, it receives only user-confirmed source text or
+memories plus the
+target language and style and returns schema-validated structured output. For
+iCloud, it reports a selected file's availability, requests its download, and
+returns coordinated-read bytes with file metadata; the server computes digests
+and parses text, and the helper reads only the notes it is asked for. It needs
+no network access of its own. Each request is bounded by size and a timeout,
+and cancellation kills it. A crash, timeout, missing helper, unsupported
+locale, or invalid output becomes a typed unavailable or invalid outcome: the
+manual editor stays usable, and a selected note whose read fails is
+`Unreadable` or `Unverifiable`, never empty. The helper's standard error is
+redacted like any other log.
+
+### Hosted drafting and data egress
+
+The default `DraftAssistant` adapter calls a hosted model. The provider, its
+credential storage, and the HTTP client are undecided (see "Undecided" in
+[AGENTS.md](../AGENTS.md)); the port and its data classes are the contract until
+then. The adapter receives only values built from the allowed data classes:
+readable note bodies with audio and attachment links stripped, reviewed
+memories, drafts, and the edited entry. Raw front matter, location, weather,
+identifiers, attachment paths, audio, credentials, and the Notion root are not
+types the port can carry, so the adapter cannot send them. Each call is bounded
+by size and a timeout and can be cancelled. A hosted failure, timeout, or
+invalid response becomes the same typed unavailable or invalid outcome as a
+helper failure, and the manual editor stays usable.
+
+No consent step precedes a call. The Setup check, the editor, and the Status
+Line label the active composition path (hosted or on-device) so the person
+always knows where text goes. Logs, errors, and problem details never contain
+composition text. The provider's retention and training terms are outside the
+app's control, and the owner accepted that in choosing a hosted default. The
+same data classes bound what an agent client may read over `/mcp`.
 
 ### Adding connectors
 
@@ -122,7 +175,9 @@ readable header yet, show its directory date and unavailable header evidence;
 update the proposal after selected-only acquisition and before confirmation.
 The source policy uses both the
 Ayumi directory date and a valid offset-aware `created_at` date as proposal
-evidence. It displays disagreement and leaves inclusion to the user. See the
+evidence. The header date is the calendar date of `created_at` in its own
+offset, not converted to the Mac's time zone. It displays disagreement and
+leaves inclusion to the user. See the
 [input format research](research/markdown-input-format.md).
 
 The Ayumi reader accepts UTF-8 with an optional BOM and LF or CRLF, tolerates
@@ -151,11 +206,21 @@ The manual editor is available from the confirmed source snapshot and after
 any model failure. Two model passes remain separate: extract source-linked
 memories for human review, then draft from confirmed memories. Model output is
 validated and opened in the same editor as manual text. Inferred reflections
-are marked for review. The server checks Apple model availability and locale
-support at runtime, as [Apple requires](https://developer.apple.com/documentation/foundationmodels/systemlanguagemodel),
-and never makes model output an automatic final entry. The last language choice
-is persisted; concise is the initial style. No composition text goes to a
-hosted model. See [composition research](research/agent-assisted-diary-composition.md).
+stay in the editor as plain-text spans between reserved delimiters, so they
+survive any edit without span metadata; entry confirmation is refused while any
+reserved delimiter character remains. The server checks composition
+availability at runtime; for the on-device model that includes locale support,
+as [Apple requires](https://developer.apple.com/documentation/foundationmodels/systemlanguagemodel).
+It never makes model output an automatic final entry. The last language choice
+is persisted; concise is the initial style. The composition path, hosted by
+default or Apple on-device, is also a persisted preference. See
+[Hosted drafting and data egress](#hosted-drafting-and-data-egress) and the
+[composition research](research/agent-assisted-diary-composition.md).
+
+A day with no included notes continues through an explicit "continue without
+notes" confirmation. `SourcesConfirmed` then holds an empty selection,
+extraction and model drafting are unavailable, and entry confirmation is
+refused while the text is blank.
 
 Every mutating transition has a workflow revision. The server checks the
 expected revision before accepting a command, so simultaneous clients cannot
@@ -168,15 +233,44 @@ and output previews. An unverifiable check blocks output until reread and
 reconfirmation. Preserve unfinished user edits for recovery, but mark them
 unconfirmed after invalidation. No continuous filesystem watcher is required.
 
+Editor autosave is not a workflow transition. The entry buffer has its own
+version, and `PUT /v1/workflows/{id}/entry` carries `If-Match` with that
+version. Autosave therefore neither bumps the workflow revision nor causes a
+`412` for another client's selection or approval command. Only a buffer change
+that differs from the confirmed entry voids `EntryConfirmed`, and that does
+bump the workflow revision.
+
 The complete edited entry is confirmed before either output. An output plan
 includes destination identity, rendered payload digest, and all intended
 side effects. Approval binds the plan to the entry revision and selected
 source digests; a changed entry, source, target, or payload requires another
-preview and approval. Long-running work has a job ID, progress state, bounded
+preview and approval. The plan digest covers the intended final state of each
+destination (for Notion, the heading and paragraphs as they should read after
+the write), so a partial write found during reconciliation changes it and needs
+a fresh approval. Long-running work has a job ID, progress state, bounded
 worker execution, timeout, and cancellation request. Cancelling a job cannot
 undo an external write; the server reconciles its result before further
 publication. The TUI event/render loop never performs filesystem, model, or
 network work.
+
+### Workflow states and invalidation
+
+A workflow is keyed by diary day; choosing a day with an unfinished workflow
+resumes it, and choosing a `Completed` day offers an amendment. Voiding a state voids every later state. Text the person typed is
+retained for recovery but marked unconfirmed. Navigating backward changes
+nothing; only a mutation voids states.
+
+| State | Entered when | Voided by |
+|---|---|---|
+| `Started` | A diary day is chosen. | A different day starts a new workflow. |
+| `Discovered` | Candidate sources, date evidence, and warnings are returned. | A new discovery for the same day replaces it. |
+| `SourcesConfirmed` | The person confirms the selection and every selected source has a fresh snapshot. An empty selection is valid after "continue without notes". | Any selection change; a changed or unverifiable freshness check. |
+| `Composing` | A manual or model-assisted draft exists. Optional extraction, memory review, and drafting repeat inside this state. | A language or style change marks model memories and drafts stale; manual text is never discarded. |
+| `EntryConfirmed` | The person confirms the complete edited entry with no unresolved inferred-reflection marker. | Any edit to the entry; `SourcesConfirmed` being voided. |
+| `OutputPlanned` | The read-only preflight has run and exact per-destination previews and digests exist. | A changed entry, source digest, target, destination state, or output setting. |
+| `Approved` | An approve-capable client approves the plan digest at the current workflow revision. | Anything that voids `OutputPlanned`; a new plan. |
+| `Publishing` | The first write intent is recorded. | Nothing. Cancellation reconciles instead of undoing. |
+| `Completed` or `Partial` | Every destination is verified, or at least one is pending, blocked, or conflicting. | A retry re-enters `Publishing` for unfinished destinations only. An amendment of a `Completed` day re-enters `Composing` with its buffer seeded from the local file; source freshness checks are waived. |
 
 ### Publication and recovery
 
@@ -185,7 +279,8 @@ The local adapter targets configurable
 front matter with diary day and language plus the confirmed Markdown body. It
 creates a temporary file in the destination directory, flushes it, and uses a
 no-clobber finalization strategy. Same-path identical content resumes; different
-content is a conflict and is never overwritten automatically. The local file
+content is a conflict and is never overwritten automatically; only an
+approved amendment replaces the app's own receipted file. The local file
 is the durable source of truth for retrying later destinations.
 
 The Notion adapter sends only the confirmed body, without YAML front matter.
@@ -205,19 +300,91 @@ The configured Notion root has not been inspected. A fail-closed, read-only
 runtime preflight must inspect the root and each existing year/month path,
 including pagination and permissions, before any creation or append. It shows
 the path and planned changes to the user; ambiguous or incompatible structure
-disables publication. Do not infer its actual layout from synthetic fixtures.
+disables Notion publication and leaves the local entry available. Do not infer
+its actual layout from synthetic fixtures.
 Connector acceptance also requires a disposable hierarchy for testing live
-page creation. The server keeps the Notion token in an owner-only per-user
-global config file, never in SQLite.
+page creation. The server keeps the Notion token in the repo-local, git-ignored
+`config/global_config.yaml` (plaintext, owner-only), never in SQLite, and
+refuses to start when group or others can read that file.
 
 The private SQLite database under Application Support stores recoverable
 drafts and versioned per-destination receipts: entry and payload digests,
 selected source IDs and digests, status, relevant destination IDs, returned
 block IDs where applicable, and timestamps. It stores no Notion token,
-coordinates, or attachment path. Local success followed by remote failure is
-reported as `local_written, remote_pending`; a later retry uses the same
-confirmed entry and first reconciles the destination. No multi-destination
-transaction is claimed. See [operational constraints](research/mvp-operational-constraints.md).
+coordinates, or attachment path. Draft and source text is purged 7 days after
+every output verifies, restarting after an amendment, and a draft with no
+workflow change for 30 days is abandoned and purged; receipts and digests stay,
+and the person can discard a draft at any time.
+
+Before each external write the server records an intent (plan ID, destination,
+payload digest) in the operation log and replaces it with the receipt
+afterward. After startup, an intent without a terminal receipt is reconciled
+in the background by reading the destination; commands for that diary day get a
+typed `Reconciling` outcome until it finishes, and other days are unaffected.
+Local success followed by remote failure is reported as `local_written,
+remote_pending`. A Notion destination that is unconfigured, unreachable, or
+fails preflight is `remote_blocked`; the preview shows it before approval, and
+the local entry can still be approved and written. A later retry reads the
+entry from the local file and requires its digest to match the receipt. A
+mismatch means the file was edited, so the entry needs reconfirmation. The
+retry then reconciles the destination before writing. A blocked Notion
+destination was never previewed, so its retry needs a new Notion-only preview
+and approval; a pending one reuses the original approval only while the
+re-checked plan digest is unchanged. No multi-destination transaction is
+claimed. See [operational constraints](research/mvp-operational-constraints.md).
+
+A local conflict stops the whole plan, because Notion is attempted only after
+the local write succeeds; a Notion conflict stops only Notion. The server
+returns the existing content and the planned payload for display and accepts
+three resolutions: reread the destination, discard the entry, or save under a
+different diary day. The last starts or resumes the workflow for the new day,
+carries the confirmed selection and entry text over as unconfirmed (notes from
+other days are legal through the explicit extra-date rule), and runs the
+existing-entry check for that day. It never replaces existing content: if the
+target day already has an unfinished workflow, nothing is carried over and the
+person opens that workflow instead. These rules cover content the app did not
+write. An unmodified destination that matches the app's own receipt is an
+amendment, not a conflict.
+
+### Amendments
+
+Choosing a diary day whose workflow is `Completed` offers an amendment instead
+of the existing-entry check. An amendment is a new workflow revision seeded
+from the local file's body. It does not rerun source selection, the original
+source digests stay in the receipt, and source freshness checks are waived
+because no source text is read. If the file's digest no longer matches the
+receipt, the person hand-edited it: the editor opens with that text and a
+banner saying it changed since publication. The person edits, confirms the
+entry, and previews a replacement plan that shows, per destination, the current
+and replacement content. Approval binds the plan as usual.
+
+The local replacement is atomic: write a temporary file in the destination
+directory, flush it, and rename it over the target, but only when the current
+file digest equals the digest recorded when the editor was seeded, rechecked
+immediately before the rename. For Notion, the adapter reads the month page,
+finds the section by the receipt's heading block ID, and requires the heading
+and paragraph blocks to match the receipt's digests; otherwise the section is a
+Conflict with the usual resolutions. It then inserts the new paragraphs after
+the heading block using the append-children `position` of type `after_block`
+(at most 100 blocks per request), reads them back, and only then trashes the
+old paragraph blocks. Notion's delete moves blocks to the trash rather than
+destroying them, and blocks cannot be moved, so an interruption leaves
+duplicate content instead of lost content. The intent records the old block
+IDs, and the next reconciliation trashes whichever set is stale. A completed
+amendment writes a new receipt version and restarts the 7-day purge. The
+[Notion research](research/notion-diary-section.md#amending-an-owned-section)
+records the API facts.
+
+## Files and configuration
+
+| Item | Location | Notes |
+|---|---|---|
+| Configuration | `config/global_config.yaml`, repo-local and git-ignored | Plaintext Notion token, Notion root page, entry root, Ayumi directory. Owner-only. Where a hosted-provider credential lives is undecided. Resolved relative to the server's working directory, so launch the server from the repository root; an override path is a scaffolding detail. |
+| Database | SQLite under `~/Library/Application Support/narihitos-diary/` | Workflows, drafts, preferences, operation log, receipts. No token. Versioned schema with forward migrations. |
+| Runtime directory | Owner-only, under the same Application Support directory | Lock file and runtime file (port, control token, instance ID). |
+| Entries | Configurable; default `~/Documents/narihitos-diary/entries/YYYY/MM/YYYY-MM-DD.md` | Written only by the local output adapter. |
+| Logs | Standard error of the foreground server | Content-free: no tokens, coordinates, paths, or diary text. |
+| Swift helper | Found by the server at startup; the lookup is a scaffolding detail | If absent, the Apple model is unavailable and cloud-only notes cannot be downloaded or read; hosted drafting and the manual editor continue. |
 
 ## Control API Server module
 
@@ -230,12 +397,15 @@ use cases; they never open source paths or construct Notion requests themselves.
 
 The server binds only to `127.0.0.1`. It tries port `8771`, then `8772`, and
 subsequent ports in a configurable bounded range; if all are occupied it fails
-with a clear error. A single-instance lock prevents two writers, and an
+with a clear error. When `/mcp` is enabled it binds only the configured fixed
+port (default `8771`) with no fallback, because agent client configurations
+hold a static URL. A single-instance lock prevents two writers, and an
 owner-only runtime file records the chosen port and an ephemeral control token
-for trusted local clients. The runtime directory is owner-only. The TUI can
-start the server or attach to the registered instance, then uses the same HTTP
-contract as any other client. No caller receives the Notion token through this
-API. The listener does not silently widen to a network interface.
+for trusted local clients. The runtime directory is owner-only. A human starts
+the server manually with `nd serve` in its own terminal; the TUI never spawns
+it. The TUI attaches through the runtime file and uses the same HTTP contract
+as any other client. No caller receives the Notion token through this API. The
+listener does not silently widen to a network interface.
 
 Require a bearer control token, validate `Host` and any `Origin` against the
 loopback listener, reject cross-origin browser access, and disable permissive
@@ -248,27 +418,72 @@ designed authentication and transport policy. The MCP specification itself
 calls for origin validation, loopback binding, and authentication for local
 Streamable HTTP servers ([MCP transport](https://modelcontextprotocol.io/specification/2026-07-28/basic/transports/streamable-http)).
 
+The trust boundary is the macOS user account. Any process that can read the
+owner-only runtime file holds the control token and is fully trusted, so the
+token alone cannot prove that a human approved anything. The first release
+issues one full-capability token to the TUI; an agent client gets a separate,
+narrower token (see "Agent clients and context cost"). The server accepts an approval only
+from a client holding the approve capability, and binds it to the plan digest
+and workflow revision. Later read-only, edit, or automation clients receive
+separately scoped tokens that a person grants from the TUI; none gains approve
+or publish rights by connecting. These defences address other users, browsers
+(cross-origin and DNS-rebinding requests), and accidental side effects, not
+malicious software running as the same user.
+
+### Process lifecycle
+
+Startup runs in this order: take the single-instance lock, an advisory file
+lock the OS releases when the process dies, so a crash leaves no stale lock;
+check that the configuration file exists and is owner-only; open and migrate the
+database; purge expired draft text; bind the listener; and write the runtime
+file. Reconciliation of unresolved operation intents then runs in the
+background (see "Publication and recovery"); a destination that is unreachable
+leaves its intent unresolved and visible instead of blocking startup. The runtime file is trusted
+only while the lock is held, so a leftover file from a crashed server is
+overwritten, never followed. The server runs in the foreground and logs
+content-free diagnostics to standard error. On interrupt or termination it stops
+accepting commands, lets an in-flight external write finish up to a timeout,
+cancels other jobs, and leaves any unfinished intent for the next start to
+reconcile.
+
+The server inherits macOS privacy grants (iCloud Drive and Documents access)
+from the terminal that launched it, so that terminal needs them. An
+unauthenticated `GET /v1/health` returns only the instance ID, contract version,
+and build ID. The client compares them with the runtime file before sending the
+token. A client that finds no server, a stale runtime file, or an incompatible
+contract version reports a connection state with the command to start or restart
+the server and retries on a short interval.
+
 ### REST resources
 
 The API uses JSON under `/v1`, stable opaque IDs, explicit schema versions,
 and `Cache-Control: no-store` for private representations. `GET` is read-only;
 commands use `POST`, full client-owned replacements use `PUT`, and cancellation
-uses `DELETE`. Mutations of existing workflows include `If-Match` with the
+and discard use `DELETE`. Mutations of existing workflows include `If-Match` with the
 current workflow ETag;
 stale revisions return `412`, known conflicts return `409`, and validation
 errors return typed `4xx` responses with safe messages. This follows
 [HTTP method and conditional-request semantics](https://www.rfc-editor.org/rfc/rfc9110.html).
+Commands that start background work return `202 Accepted` with a job
+reference. Errors use [RFC 9457](https://www.rfc-editor.org/rfc/rfc9457.html)
+problem details with a safe type, title, and redacted reference. The singular
+`output-plan` resource names the current plan; creating a new plan voids the
+previous plan and its approval.
 
 | Resource | Intent |
 |---|---|
-| `GET /v1/health`, `GET /v1/capabilities` | Check the server instance and list authorized connectors, writing choices, and available operations. Health reveals no diary content. |
+| `GET /v1/health`, `GET /v1/capabilities` | `health` is unauthenticated and returns only the instance ID, contract version, and build ID. `capabilities` lists authorized connectors, writing choices, composition paths, and available operations. Neither reveals diary content. |
+| `GET /v1/setup-check`, `GET /v1/preferences`, `PUT /v1/preferences` | Read-only readiness list (configuration, Ayumi directory, entries root, composition path, Notion), and the remembered writing language and composition path. |
 | `POST /v1/workflows`, `GET /v1/workflows/{id}` | Start or resume a diary workflow and fetch its revisioned state. |
+| `GET /v1/workflows`, `DELETE /v1/workflows/{id}` | List unfinished workflows first, then completed ones, and discard one. |
+| `POST /v1/workflows/{id}/amendments` | Start an amendment of a `Completed` day, seeded from the local file. |
 | `POST /v1/workflows/{id}/discoveries`, `GET /v1/workflows/{id}/sources` | Discover the bounded default window or a user-requested extra date; inspect candidates and warnings. |
 | `POST /v1/workflows/{id}/sources/prepare`, `PUT /v1/workflows/{id}/selection` | Request acquisition only for selected cloud-only notes, then confirm source IDs and snapshots. |
 | `POST /v1/workflows/{id}/extractions`, `PUT /v1/workflows/{id}/memories` | Run optional memory extraction and confirm or edit selected memories. |
-| `POST /v1/workflows/{id}/drafts`, `PUT /v1/workflows/{id}/entry`, `POST /v1/workflows/{id}/entry-confirmations` | Run optional drafting, save manual edits, and confirm the complete entry. |
+| `POST /v1/workflows/{id}/drafts`, `PUT /v1/workflows/{id}/entry`, `POST /v1/workflows/{id}/entry-confirmations` | Run optional drafting, save manual edits (carrying the entry buffer version), and confirm the complete entry. |
 | `POST /v1/workflows/{id}/output-plans`, `GET /v1/workflows/{id}/output-plan`, `POST /v1/workflows/{id}/approvals` | Build exact per-destination previews and record an interactive approval bound to their digests. |
 | `POST /v1/workflows/{id}/publications`, `GET /v1/workflows/{id}/publications` | Execute the approved plan and inspect each destination's receipt or pending state. |
+| `POST /v1/workflows/{id}/conflict-resolutions` | Apply reread, discard the entry, or save under a different diary day. |
 | `GET /v1/jobs/{id}`, `DELETE /v1/jobs/{id}` | Observe or request cancellation of background work. |
 | `GET /v1/events?workflow_id={id}` | Receive server changes over SSE; reconnect by fetching the latest workflow representation. |
 
@@ -300,8 +515,57 @@ Design this route against a pinned MCP protocol revision. In the current
 request-scoped SSE stream. That revision removed the earlier GET stream and
 protocol-level sessions, so the REST `/v1/events` stream must not be described
 as MCP transport or reused as its message channel. The adapter validates
-required protocol metadata and origin; support for older MCP revisions needs
-an explicit compatibility decision when implemented.
+required protocol metadata and origin, answering an invalid `Origin` with `403`.
+Long-lived change notifications arrive on the response stream of a
+`subscriptions/listen` request, a path separate from `/v1/events`. Support for
+older MCP revisions needs an explicit compatibility decision when implemented.
+
+#### Agent clients and context cost
+
+Codex and Claude Code connect to `/mcp` as remote MCP clients. Both send tool
+definitions and results to a hosted model, so each one costs context. Keep the
+surface small:
+
+- **Few coarse tools.** About six, not a mirror of the REST table: a status tool
+  that also returns the next allowed actions, so the agent need not learn the
+  state machine from descriptions; source and note-body reads; memory and
+  entry-draft proposals; and job control. Use flat schemas, one-sentence
+  descriptions, and short server instructions. Claude Code defers tool schemas
+  by default and loads only names and server instructions at start ([tool
+  search](https://code.claude.com/docs/en/mcp#scale-with-mcp-tool-search));
+  Codex loads them, compacts each to 5,000 bytes by default, and has
+  `enabled_tools` and `disabled_tools` allowlists ([configuration
+  source](https://github.com/openai/codex/blob/main/codex-rs/config/src/mcp_types.rs)).
+- **Small, ranged results.** Lists default to a small `limit` with a cursor and
+  a `fields` selector. Note and entry text come in ranged chunks with a byte cap
+  well below the smallest client result limit; Claude Code defaults to 25,000
+  tokens (`MAX_MCP_OUTPUT_TOKENS`).
+- **Jobs return references.** Long work returns a job reference, and any bounded
+  wait stays below the client's tool timeout (Codex `tool_timeout_sec`).
+- **Allowed data only.** Tools return the data classes named in "Hosted drafting
+  and data egress", never front matter, attachment paths, or credentials.
+- **No confirmation tools.** Confirming a selection or entry, approving a plan,
+  and publishing are not exposed. An agent writes a `DraftProposal` (memories
+  or entry text) tagged with the client's name. The TUI shows a Banner, and
+  accepting the proposal replaces the editor text, keeping the previous text in
+  recovery. Proposals pass the same validation as model output. Source notes are
+  untrusted text that can carry injected instructions; because an agent cannot
+  confirm, approve, or publish, the worst it can produce is a proposal that a
+  person must review.
+
+Client configuration needs a stable address and a fresh credential. With
+`/mcp` enabled the listener uses a fixed port, so a static URL works, and the
+agent token is an owner-only file separate from the TUI's full-capability token.
+Each client fetches it through its dynamic-header hook: `headersHelper` in
+Claude Code's `.mcp.json`, or `http_headers_helper` in Codex's `config.toml`.
+The agent token grants reading allowed data, writing proposals, and job control
+only.
+
+An agent with a shell runs as the same macOS user and can read any owner-only
+file, including the TUI's token. The project therefore asks agents to deny reads
+of the runtime directory in each client's permission or sandbox settings,
+verified per client during scaffolding. The residual risk is the one stated for
+the trust boundary above.
 
 ## TUI as an MVVM client
 
@@ -313,16 +577,28 @@ handles HTTP, authentication, ETags, and SSE reconnection on bounded workers.
 Server responses update ViewModels, and rendering never blocks on network,
 filesystem, or model work. Persisted drafts live on the server; the TUI may
 buffer unsubmitted keystrokes but does not become a second durable authority.
+The editor ViewModel flushes unsubmitted text to the server after about a
+second without typing, when focus leaves the editor, and before quitting. While
+the server is unreachable it keeps the text in memory, says so in the Status
+Line, and asks before quitting.
 
 The selection ViewModel displays both directory and header dates, warnings,
 and explicit include/exclude state. The composition ViewModel displays source
 links, inferred reflections, language and style, and the full multiline
 editor. The publication ViewModel displays exact destination paths and text,
 pending page creation, conflicts, and per-output results. An IME indicator
-uses macOS Text Input Source Services notifications, falls back to 500 ms
-polling when registration fails, and shows `IME: ?` when unknown. This is
-presentation-only state; it does not affect diary policy. The [TUI and IME research](research/rust-tui-stack.md)
+in the TUI process, not the server, uses macOS Text Input Source Services
+notifications delivered on its own run-loop thread, falls back to 500 ms
+polling when registration fails, shows `IME: EN` or `IME: KO` for the two
+supported input languages, and shows `IME: ?` for any other or unknown language.
+This is presentation-only state; it does not affect diary policy. The [TUI and IME research](research/rust-tui-stack.md)
 records the compatibility and terminal constraints.
+Keys follow the keybinding decision in [AGENTS.md](../AGENTS.md): focus controls
+plus Ctrl chords. The Command Line ViewModel decomposes Hangul typed on the
+2-Set Korean layout into jamo and maps each back to the key that produced it
+before parsing, so ASCII command tokens work under either IME. Input it cannot
+map is rejected with a message that points to the focus path. This mapping is
+presentation logic in `diary-tui`.
 The [UX information architecture](ux-information-architecture.md) and
 [terminal UX proposal](ux-gui.md) describe the screens and their behavior.
 
@@ -330,12 +606,20 @@ The [UX information architecture](ux-information-architecture.md) and
 
 Use invented, synthetic content in tests. Core tests exercise date proposals,
 user selection, freshness invalidation, model-response validation, state
-transitions, revision conflicts, approval binding, and per-destination retry
-plans with fake ports. Connector contract tests exercise Ayumi UTF-8/BOM/CRLF
+transitions, revision conflicts, approval binding, per-destination retry plans,
+every voiding rule in the workflow-state table, a crash between an external
+write and its receipt, amendments (digest guards, a hand-edited file, an
+interrupted Notion replacement), per-day reconciliation gating, autosave not
+bumping the workflow revision, and a hosted adapter whose port cannot carry
+front matter, all with fake ports. Connector contract tests exercise Ayumi UTF-8/BOM/CRLF
 and malformed metadata, iCloud selected-only acquisition, local no-clobber
-output, and Notion pagination and ambiguous-write reconciliation. HTTP tests
+output, Notion pagination and ambiguous-write reconciliation, and the Swift
+helper protocol with a fake helper that crashes or times out. HTTP tests
 exercise unauthorized calls, origin checks, ETags, duplicate publication
-commands, SSE reconnect, and multiple clients. TUI tests use an in-memory
-terminal backend and a fake Control API client; a real terminal run checks
+commands, SSE reconnect, multiple clients, stale lock and runtime-file recovery,
+a contract version mismatch, an agent-scoped token refused for confirm,
+approve, and publish, and refusal to start with a group-readable
+configuration file. TUI tests use an in-memory
+terminal backend and a fake Control API client, including the Hangul-to-command mapping; a real terminal run checks
 restoration and IME behavior. No test uses private diary prose or the live
 Notion root.

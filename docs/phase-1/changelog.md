@@ -6,6 +6,90 @@ This changelog records owner decisions and material plan changes for Phase 1.
 
 ## Entries
 
+- 2026-10-28 — Research — Compared how Codex and Claude Code attach to the
+  server for context and token cost. Claude Code defers MCP tool schemas by
+  default and caps results at 25,000 tokens; Codex compacts each tool schema to
+  5,000 bytes and offers tool allowlists. The architecture gained a small,
+  ranged agent surface, a fixed port and a separate agent token when `/mcp` is
+  enabled, and a note that a shell-capable agent can read owner-only files.
+  Codex's app server was assessed as a drafting backend: its thread, compaction,
+  and token-usage features mostly go unused for a short two-pass draft, while
+  its agent baseline, hardening needs, and experimental protocol add cost. See
+  the [composition research](../research/agent-assisted-diary-composition.md#codex-app-server-as-the-drafting-backend).
+- 2026-10-28 — Review — Fixed design gaps found in the second review: startup
+  reconciliation no longer blocks the listener and gates per diary day; editor
+  autosave has its own entry-buffer version instead of bumping the workflow
+  revision; REST gained workflow list and discard, setup check, preferences,
+  amendments, and conflict resolutions; "abandoned" now means no workflow change
+  for 30 days; a save-under-a-different-day target with an unfinished workflow
+  receives no carried text; the header date is the calendar date in the
+  timestamp's own offset; and the Phase 1 plan now names the server, the Swift
+  helper, drafting, and amendment. The P1-M1 documents moved from Archived to
+  Active and their stale rows were corrected.
+- 2026-10-28 — Owner interview — Reversed the on-device-only rule. Hosted
+  drafting is now the default behind the `DraftAssistant` port, with Apple
+  on-device optional and a hosted adapter in Phase 1. No extra consent step;
+  readable note bodies, memories, drafts, and the edited entry may leave the
+  Mac, while front matter, attachment paths, audio, and credentials never do.
+  The UI labels the active path. A later agent client may read those classes
+  and write draft proposals; confirming, approving, and publishing stay
+  human-only. The provider, credential storage, and HTTP dependency stay
+  Undecided. This supersedes "composition stays on the Mac" and the research
+  statements that Phase 1 sends no composition text to a hosted model.
+- 2026-10-28 — Owner interview — Decided: keybindings are focus navigation plus
+  Ctrl chords (no bare-letter or `:` hotkeys), and the Command Line maps Hangul
+  typed on the 2-Set Korean layout back to ASCII command tokens. A day with no
+  notes may produce a manual entry through "continue without notes". A
+  Completed entry can be amended (replace the app's own receipted output) with
+  the editor seeded from the saved, possibly hand-edited, local file; Notion is
+  replaced by recorded block IDs and a mismatch is a Conflict. A blocked Notion
+  retry needs a new Notion-only approval; a pending one reuses its approval
+  while the plan digest is unchanged. The Swift helper joins the gate with
+  `swift build` and `swift test`, and the stack line reads Rust plus one Swift
+  helper. This narrows the earlier "never overwrite" rule to content the app
+  did not write.
+- 2026-10-28 — Owner interview — Decided: the canonical project acronym is `nd`,
+  always lowercase, and the application is the single binary `nd` (`nd` opens
+  the TUI; `nd serve` runs the server by hand in its own terminal). The Control
+  API Server's HTTP and event layer is async on Tokio, superseding the research
+  note that Tokio is not required; the TUI still does not need it. The same
+  Swift helper that reaches the Apple model also performs iCloud availability,
+  download, and coordinated reads. The research notes under `docs/research/` are
+  marked Active, and their stale statements were corrected: config location,
+  Tokio, IME languages, and the ignored `tmp/` fixture. Specific crates still
+  need approval during scaffolding.
+- 2026-10-28 — Owner — Noted an MCP server (not an MCP CLI) as a Phase 2
+  feature in the [roadmap](../roadmap.md). Phase 2 stays unplanned.
+- 2026-10-28 — Review — Revised the [architecture](../planned-mvp-architecture.md)
+  and the UX documents ([terms](../ux-terms.md),
+  [information architecture](../ux-information-architecture.md),
+  [behavior](../ux-gui.md)). The architecture gained workflow states with
+  voiding rules, a process lifecycle and startup order, an authorization trust
+  boundary, write-ahead operation intents, a Swift helper contract, a files
+  table, and a split of the catch-all `DraftStore` port into `WorkflowStore`
+  and `OperationLog`. The UX documents gained step states, connection and error
+  states, a Banner, terminal-size rules, inline inferred-reflection delimiters,
+  and a confirm/approve/publish vocabulary.
+- 2026-10-28 — Owner interview — Decided: Ayumi sources are en-US only and
+  output is en-US or ko-KR; Japanese is out of scope for sources and for the
+  IME indicator, which shows English and Korean only. The app does not detect
+  language from a note body or block on it, and no known metadata field
+  identifies language (recorded as Undecided). This replaces the research
+  summary's pending `en ↔ ja` check; a live `en ↔ ko` switch was already
+  observed in the probe. A human starts the server manually; the TUI never
+  spawns it. A Swift helper process bridges Apple Foundation Models. The
+  keybinding model stays open, with the Korean-IME constraint recorded. A new
+  workflow defaults to today in the Mac's local time zone, unfinished drafts
+  first. The Notion token moves to the repo-local, git-ignored
+  `config/global_config.yaml` (owner-only), superseding the per-user global
+  config file. Draft and source text is purged 7 days after verified output and
+  30 days after abandonment. A conflict shows both versions and offers reread,
+  discard, or a different diary day, never an overwrite. A blocked or failed
+  Notion preflight still lets the local entry be approved and written.
+- 2026-10-28 — Owner — Exempted P1-M2 from the standard milestone gate because
+  it is documentation-only and the Cargo manifest arrives in P1-M3. See the
+  [P1-M2 overview](./milestone-02-software-architecture-overview.md). The
+  exemption does not extend to any later milestone.
 - 2026-10-28 — Owner direction and architecture proposal — Planned P1-M2
   around a local Control API Server with the TUI as an HTTP client, extensible
   source and output connectors, REST and streaming interfaces, MVVM presentation,
