@@ -10,3 +10,5 @@ target/
 config/global_config.yaml
 
 tmp/
+
+default.profraw
