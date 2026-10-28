@@ -21,6 +21,10 @@ See [README.md](README.md) for the overview. Setup and contribution rules are in
 ## Decided — ask before changing
 
 - **Technical stack:** Rust.
+- **Control architecture:** a local Control API Server owns workflows and
+  connectors. The TUI is an HTTP client of that server; the design allows
+  additional input and output connectors and a later MCP interface. See the
+  [architecture proposal](docs/planned-mvp-architecture.md).
 - **License:** Apache-2.0 for all project code.
 - **Process:** numbered phases contain numbered milestones; milestone numbering restarts per phase. IDs use `P1-M2`. See [docs/development-process.md](docs/development-process.md).
 - **Diary-day source selection:** for Ayumi's Diary input, use both the

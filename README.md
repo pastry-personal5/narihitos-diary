@@ -1,4 +1,4 @@
-# narihitos-diary
+# Narihito's Diary
 
 Make remembering a day feel effortless.
 

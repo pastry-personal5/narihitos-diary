@@ -56,11 +56,13 @@ research-only milestone used its documented exit-gate exemption.
 
 ### P1-M2: Software architecture
 
-Status: Planned
+Status: Active
 
 Goal: Define the Phase 1 software architecture.
 
-Plan: Not yet created.
+Plan: [overview](milestone-02-software-architecture-overview.md),
+[architecture plan](milestone-02-software-architecture-architecture.md),
+[product architecture](../planned-mvp-architecture.md).
 
 ### P1-M3: Scaffolding and tools
 

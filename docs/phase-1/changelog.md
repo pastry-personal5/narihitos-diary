@@ -6,6 +6,12 @@ This changelog records owner decisions and material plan changes for Phase 1.
 
 ## Entries
 
+- 2026-10-28 — Owner direction and architecture proposal — Planned P1-M2
+  around a local Control API Server with the TUI as an HTTP client, extensible
+  source and output connectors, REST and streaming interfaces, MVVM presentation,
+  an explicit workflow pipeline, and a future MCP route. The
+  [architecture proposal](../planned-mvp-architecture.md) preserves the
+  read-only runtime Notion preflight and introduces no production dependency.
 - 2026-10-28 — Owner — Restored the completed P1-M1 milestone documents and
   their supporting research notes to `docs/` for P1-M2/P1-M3 preparation.
   Added only milestone titles and goals; no milestone plans or code were created.
