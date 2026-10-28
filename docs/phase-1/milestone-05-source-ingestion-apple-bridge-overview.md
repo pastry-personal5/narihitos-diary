@@ -1,6 +1,6 @@
 # P1-M5: Source ingestion and Apple bridge overview
 
-Status: Planned
+Status: Done
 
 This milestone connects the P1-M4 source ports to Ayumi Markdown and the
 single Swift helper. It ends when the core can confirm a fresh, sanitized
@@ -51,25 +51,47 @@ and detect source changes before composition or output.
 
 ## Completion checklist
 
+This checklist is the implementation completion contract. Items stay unchecked
+until the corresponding synthetic test or full-gate evidence is recorded below.
+
+### Implementation-review hardening
+
+- [x] Discovery never follows a date-directory or source symlink, never reads a
+  body outside the validated root, bounds the opened file even when it changes
+  after metadata inspection, reports non-UTF-8 and unsupported entries without
+  exposing private names, and returns stable deterministic candidates.
+- [x] The shared Markdown parser validates the complete offset-aware
+  `created_at` value without accepting a nested or duplicate field, preserves a
+  safely separated body when front matter is malformed, accepts BOM/LF/CRLF
+  envelopes while rejecting lone CR separators, and distinguishes an unsafe
+  unclosed header from an empty readable body.
+- [x] Audio filtering removes only standalone local audio links, preserves
+  remote and ordinary links, and withholds multi-link, image, reference-style,
+  or otherwise ambiguous attachment syntax without returning the attachment
+  path in diagnostics.
+- [x] Freshness stamps use a real filesystem identity and original-byte digest;
+  selected reads detect metadata races and classify disappearance or failed
+  revalidation as unverifiable rather than as an unknown selection.
+
 ### Discovery and source evidence
 
-- [ ] Synthetic-tree tests prove root-name validation, no symlink or root
+- [x] Synthetic-tree tests prove root-name validation, no symlink or root
   escape, regular `.md` filtering, per-file diagnostics, stable references,
   deterministic de-duplication, the `D-1`/`D`/`D+1` bound, and a single
   explicit extra-date query with no wider scan.
-- [ ] Candidate tests show directory and offset-local `created_at` dates as
+- [x] Candidate tests show directory and offset-local `created_at` dates as
   separate evidence, flag disagreements, and leave inclusion independent of
   either date. A cloud-only candidate remains discoverable with directory
   evidence when its header is unavailable, without triggering download.
 
 ### Parsing and privacy
 
-- [ ] Parser tests cover UTF-8 with and without BOM, LF and CRLF, empty and
+- [x] Parser tests cover UTF-8 with and without BOM, LF and CRLF, empty and
   non-empty bodies, missing and closed-but-malformed front matter, an unclosed
   header, unknown or missing fields, invalid dates and offsets, and invalid
   UTF-8. A safely separated body stays selectable; unsafe or undecodable bytes
   never become empty readable text.
-- [ ] Synthetic Markdown tests prove standalone audio-link removal, preservation
+- [x] Synthetic Markdown tests prove standalone audio-link removal, preservation
   of ordinary prose and non-audio links, attachment-independent eligibility,
   and safe failure for ambiguous attachment syntax. Raw front matter, audio
   bytes, and attachment paths are absent from core-readable text, persisted
@@ -77,26 +99,27 @@ and detect source changes before composition or output.
 
 ### iCloud, snapshots, and recovery
 
-- [ ] Fake-helper and Swift fake tests cover availability, selected-only
+- [x] Fake-helper and Swift fake tests cover availability, selected-only
   download, coordinated read, revalidation of the requested source, bounded
   source-byte handoff beyond the 64 KiB JSON-frame limit, and cleanup of
-  temporary handoff data on success, failure, and next start.
-- [ ] Tests distinguish cloud-only, permission denied, unreadable, missing
+  isolated per-request handoff data on success, failure, cancellation, timeout,
+  concurrent reads, and next start.
+- [x] Tests distinguish cloud-only, permission denied, unreadable, missing
   helper, malformed protocol, crash, timeout, cancellation, and oversized
   source outcomes without leaking private paths or content. No failure is
   interpreted as an empty note.
-- [ ] Original-byte digest tests cover same-size and same-mtime edits, changed
+- [x] Original-byte digest tests cover same-size and same-mtime edits, changed
   identity, removal, and unverifiable rereads. Integration tests exercise the
   post-read, pre-drafting-pass, pre-entry-confirmation, pre-preview, and
   pre-first-write checkpoints through P1-M4, proving the exact selected set,
-  draft/preview/approval invalidation, and successful reread plus
-  reconfirmation.
+  draft/preview/approval invalidation (including helper access failure), and
+  successful reread plus reconfirmation.
 
 ### Evidence and gate
 
-- [ ] Affected source-format and architecture docs match the implemented
+- [x] Affected source-format and architecture docs match the implemented
   contracts, including any source-size limit and handoff cleanup behavior.
-- [ ] The acceptance evidence below records focused tests and a dated full
+- [x] The acceptance evidence below records focused tests and a dated full
   gate: `cargo fmt --all -- --check`, `cargo clippy --all-targets
   --all-features -- -D warnings`, `cargo test --all-features`, `swift build
   --package-path helpers/apple-bridge`, and `swift test --package-path
@@ -104,14 +127,14 @@ and detect source changes before composition or output.
 
 ## Acceptance evidence
 
-Fill this in during implementation. Leave checklist items unchecked until
-their results are observed; record concise synthetic evidence, not raw logs.
+All fixtures are invented and all helper services or executables are fake. No
+test reads the private Ayumi tree or calls a live iCloud service.
 
 | Evidence | Result |
 |---|---|
-| Entry criteria and approved contract inspection | Pending |
-| Discovery, date evidence, and root containment tests | Pending |
-| Parser, audio filtering, and data-boundary tests | Pending |
-| Swift fake and Rust fake-helper failure/cleanup tests | Pending |
-| Freshness and P1-M4 invalidation integration tests | Pending |
-| Full Rust and Swift gate, with date and tool versions | Pending |
+| Entry criteria and approved contract inspection | On 2026-10-29, implementation preserved the dependency-free Rust/Swift-helper contract, v1 envelope, 64 KiB frame, and one-process-per-request lifetime. It added no dependency, feature, build tool, provider decision, or private-data access. |
+| Discovery, date evidence, and root containment tests | Seven synthetic Ayumi tests pass for directory-name validation, three-day and explicit-day bounds, year crossing, deterministic order, unsupported-entry diagnostics, exact reference grammar, directory/source symlink rejection, root containment, separate directory/header evidence, disagreement, and cloud-only discovery without a body read. |
+| Parser, audio filtering, and data-boundary tests | Synthetic tests pass for UTF-8/BOM/LF/CRLF envelopes, lone-CR rejection, empty and non-empty bodies, absent, malformed, nested, duplicate, invalid, and unclosed front matter, offset semantics, invalid bytes, local standalone audio removal, remote and ordinary link preservation, multi-link/image/reference attachment withholding, selected sanitized snapshots, bounded opened-file reads, and content-free diagnostics. |
+| Swift fake and Rust fake-helper failure/cleanup tests | Ten Swift tests cover the three iCloud commands, bounded payloads, ASCII calendar source IDs, fake service errors, correlation, frame limits, and content-free responses. Eight Rust client tests cover deterministic lookup, concurrency, missing/crashed/timed-out/cancelled/malformed helpers, strict response JSON, protocol-capped download waits, typed permission and oversize failures, a 70,000-byte private handoff, owner/mode/identity/size checks, isolated concurrent handoffs, and cleanup on success, failure, and next start. |
+| Freshness and P1-M4 invalidation integration tests | Original-byte digests detect forced same-size/same-mtime edits; device/inode identity detects replacement; removal is unverifiable. Helper-backed tests confirm exactly one selected snapshot, all five checkpoints, source and helper-access invalidation with retained user edits, and successful reread plus human reconfirmation. SQLite v3 round-trips availability and upgrades v1 and v2. |
+| Full Rust and Swift gate, with date and tool versions | Revalidated after implementation review on 2026-10-29: formatting, warnings-denied workspace Clippy, `cargo test --all-features` (23 connector, 17 core, 4 command-shell, 1 M4 assembly, and 1 M5 assembly test, plus doctests), Swift build, Swift test (10 cases), and `git diff --check`. Versions: rustc/Cargo 1.98.0, Swift 6.4 (swift-driver 1.168.6); the existing completion run recorded rustfmt 1.9.0, Clippy 0.1.98, and Xcode 27.1 (27A9275). Swift commands required the expected sandbox escalation for the user-level Clang module cache. |

@@ -1,5 +1,11 @@
-//! Outbound adapter boundary for Narihito's Diary.
-//!
-//! P1-M3 intentionally defines no connector behavior here.
+//! Outbound adapters for Narihito's Diary.
 
 #![forbid(unsafe_code)]
+
+mod apple_bridge;
+mod ayumi;
+mod sqlite;
+
+pub use apple_bridge::{AppleBridgeClient, BridgeAvailability, BridgeRead};
+pub use ayumi::{AyumiCatalog, AyumiSource, Discovery, ReadOutcome, SourceReadError};
+pub use sqlite::SqliteStore;

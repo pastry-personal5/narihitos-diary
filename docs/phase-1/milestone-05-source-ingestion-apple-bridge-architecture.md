@@ -1,10 +1,33 @@
 # P1-M5: Source ingestion and Apple bridge architecture plan
 
-Status: Planned
+Status: Done
 
 This plan implements `SourceCatalog` and `SourceReader` against Ayumi files and
 the P1-M3 Swift-helper envelope. P1-M4 keeps selection, confirmation, and
 invalidation policy; the adapters provide evidence and fresh, sanitized bytes.
+
+## Implemented shape
+
+- `diary-core` exposes connector-neutral `SourceCatalog` and `SourceReader`
+  ports, typed availability/read/access outcomes, and a checkpoint runner that
+  revalidates the exact confirmed snapshots through the existing invalidation
+  policy. SQLite schema v3 persists candidate availability and upgrades both
+  prior M4 schema versions forward.
+- `AyumiCatalog` validates one configured directory component, discovers only
+  the requested date set, parses the shared Markdown envelope, and never reads
+  a cloud-only candidate body. `AyumiSource` combines it with the helper client
+  for selected download, coordinated reads, new date evidence, and freshness.
+- `AppleBridgeClient` keeps the v1 64 KiB frame, one-process-per-request model,
+  request correlation, deterministic lookup, finite timeout/cancellation, and
+  a configurable concurrency cap. It accepts only an owned mode-0600 regular
+  file in an isolated mode-0700 request directory beneath the app's mode-0700
+  handoff root and cleans successful, failed, cancelled, timed-out, and orphaned
+  handoffs without racing concurrent reads.
+- The Swift helper implements availability, bounded download wait, and
+  `NSFileCoordinator` reads against iCloud Drive. It revalidates containment
+  and regular-file identity, writes an opaque private handoff, and returns only
+  content-free typed errors and source metadata. Protocol tests inject a fake
+  service; Rust tests use fake executables and synthetic trees.
 
 ## Boundaries and deliverables
 
@@ -72,12 +95,13 @@ silently reinterpret a candidate.
 Filter the readable Markdown body before it reaches a core snapshot. Remove
 supported standalone links to local audio attachments without opening their
 targets. Preserve surrounding prose and unrelated Markdown links. If syntax
-could contain an attachment path but cannot be classified safely, warn and
-withhold that selected body rather than sending a path to composition. Test the
-filtered body as the only text in source snapshots, persistence, and future
-assistant-shaped input; the original-byte digest remains a separate stamp.
-Do not log front-matter values, note content, audio paths, or private absolute
-paths. Tests use invented prose and metadata only.
+could contain an attachment path but cannot be classified safely—including a
+multi-link line, image, or reference definition—warn and withhold that selected
+body rather than sending a path to composition. Test the filtered body as the
+only text in source snapshots, persistence, and future assistant-shaped input;
+the original-byte digest remains a separate stamp. Do not log front-matter
+values, note content, audio paths, or private absolute paths. Tests use invented
+prose and metadata only.
 
 ## Swift iCloud command group and byte handoff
 
@@ -92,17 +116,23 @@ observable resident outcome before the read, or report that the note still
 needs download.
 
 A note can exceed one JSON frame. For coordinated reads, use a private
-temporary byte handoff in a mode-0700 app-controlled directory: the helper
-writes one bounded mode-0600 snapshot and returns an opaque basename plus file
-identity, size, and modification time in its JSON response. The Rust client
-accepts only a file in that directory, opens it without following symlinks,
-checks ownership, mode, and size, reads the bytes, computes the digest, and removes it
-afterward. The helper removes partial files on failure; the client removes
-orphaned handoffs on its next start. Choose and document a finite source-byte
-limit before implementation; exceeding it is an explicit unreadable outcome.
-The handoff is an implementation detail and never becomes a core source ref or
+temporary byte handoff in an isolated mode-0700 request directory beneath a
+mode-0700 app-controlled root: the helper writes one bounded mode-0600 snapshot
+and returns an opaque basename plus file identity, size, and modification time
+in its JSON response. The Rust client accepts only a file in that request
+directory, checks ownership, mode, link count, size, and opened-file identity,
+reads bounded bytes, computes the digest, and removes the request directory
+afterward. Isolation lets concurrent reads clean their own success, failure,
+cancellation, or timeout without deleting another request's handoff. The helper
+removes partial files on failure; the client removes recognized orphaned
+handoffs on its next start. Choose and document a finite source-byte limit
+before implementation; exceeding it is an explicit unreadable outcome. The
+handoff is an implementation detail and never becomes a core source ref or
 persisted path. This preserves the approved JSON envelope while allowing notes
 larger than its frame cap.
+
+The selected source-byte limit is 8 MiB. The direct synthetic-tree reader, the
+Swift coordinated reader, and the Rust handoff client all enforce it.
 
 Bound command input and output, read size, wait time, and concurrent helper
 processes. Kill a timed-out or cancelled helper and clean its handoff. Map
@@ -129,11 +159,12 @@ pre-first-write checkpoints, revalidate the root-relative reference and obtain
 a fresh coordinated read to compare all stamp fields. Same-size or same-mtime
 edits still change the digest. Removal, permission loss, helper failure, or an
 incomplete check yields `Unverifiable` unless a definite identity or content
-change yields `Changed`. The P1-M4 state machine then voids the confirmed
-selection and downstream draft, preview, and approval, retaining user edits as
-unconfirmed. Only a successful reread followed by human reconfirmation
-restores a usable source snapshot. An amendment uses P1-M11's separate path
-and does not perform these source checks.
+change yields `Changed`; an adapter access error is applied as unverifiable
+before its typed error is returned. The P1-M4 state machine then voids the
+confirmed selection and downstream draft, preview, and approval, retaining user
+edits as unconfirmed. Only a successful reread followed by human reconfirmation
+restores a usable source snapshot. An amendment uses P1-M11's separate path and
+does not perform these source checks.
 
 ## Implementation and verification sequence
 

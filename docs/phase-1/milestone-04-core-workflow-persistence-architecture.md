@@ -1,10 +1,34 @@
 # P1-M4: Core workflow and persistence architecture plan
 
-Status: Planned
+Status: Done
 
 This plan turns the [product architecture](../planned-mvp-architecture.md) into
 an executable core and a durable SQLite adapter. Implementation starts after
 P1-M2 and P1-M3 are done and the needed dependencies are approved.
+
+## Implemented shape
+
+- `diary-core` is standard-library only. Its `types`, `workflow`, `ports`,
+  `publication`, and `digest` modules own validated values, the single
+  transition/invalidation policy, SHA-256 bindings, inward ports, and
+  intent-before-effect orchestration. It has no SQL, path, HTTP, Swift,
+  terminal, or vendor type.
+- `diary-connectors::SqliteStore` implements both `WorkflowStore` and
+  `OperationLog`. Each call opens the test-selected database, enables foreign
+  keys, and uses immediate transactions for migrations, compare-and-swap,
+  child-record replacement, and intent-to-receipt completion.
+- Schema version 1 owns workflows, independent entry-buffer versions, safe
+  candidates/snapshots, reviewed memories, and preferences. Version 2 adds
+  immutable plans, typed local/remote targets, per-target progress, unresolved
+  intents, and versioned receipts. `PRAGMA user_version` is forward-only;
+  unknown newer, corrupt, and invalid records fail without reset.
+- `apps/nd/tests/p1_m4_assembly.rs` is the only composition-root assembly in
+  this milestone. It uses a temporary database and starts no listener, real
+  Application Support database, helper, source connector, or destination.
+
+The production database path, process lock, worker scheduling, and transport
+remain P1-M6 work. Real source, drafting, local-file, and Notion behavior
+remain with P1-M5 and P1-M8 through P1-M11.
 
 ## Boundaries and deliverables
 

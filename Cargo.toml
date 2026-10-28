@@ -21,3 +21,4 @@ diary-control = { version = "0.1.0", path = "crates/diary-control", default-feat
 diary-control-contract = { version = "0.1.0", path = "crates/diary-control-contract", default-features = false }
 diary-core = { version = "0.1.0", path = "crates/diary-core", default-features = false }
 diary-tui = { version = "0.1.0", path = "crates/diary-tui", default-features = false }
+rusqlite = { version = "0.40.2", default-features = false }

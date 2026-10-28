@@ -11,8 +11,10 @@ Prerequisites:
 - Rust 1.89 or newer with Cargo, rustfmt, and Clippy. The workspace uses Rust
   edition 2024.
 - Xcode command-line tools with Swift 6.2 or newer on macOS 26.0 or newer.
-- No third-party system package, Rust crate, or Swift package is required by
-  the P1-M3 scaffold.
+- The P1-M4 SQLite adapter uses `rusqlite` 0.40.2 with its default system
+  linkage. Cargo downloads the Rust crates; macOS supplies SQLite, so no
+  separately installed database service or bundled C build is required.
+- The Swift helper still has no third-party package dependency.
 
 The real configuration is repository-local, ignored by Git, and must have no
 group or world permissions. Mode `600` is the recommended setup:
@@ -35,8 +37,10 @@ swift build --package-path helpers/apple-bridge
 ```
 
 Inspect and smoke-test the command shells. The two mode commands currently
-exit with status 1 and an explicit not-implemented diagnostic; this is the
-expected P1-M3 behavior.
+exit with status 1 and an explicit not-implemented diagnostic. P1-M4 adds the
+inward workflow and test-only SQLite assembly; P1-M5 adds bounded Ayumi source
+adapters and the iCloud helper commands. The production server and TUI remain
+unassembled until P1-M6 and P1-M7.
 
 ```sh
 cargo run -p nd -- --help
@@ -46,10 +50,12 @@ cargo test -p nd --test command_shells
 printf '%s\n' '{"protocol_version":1,"request_id":"smoke-1","command":"ping","payload":{}}' | swift run --package-path helpers/apple-bridge apple-bridge
 ```
 
-The helper must emit exactly one JSON response line on standard output. It
-uses `ND_APPLE_BRIDGE_PATH` when set; later server lookup otherwise checks the
+The helper must emit exactly one JSON response line on standard output. The
+Rust helper client uses `ND_APPLE_BRIDGE_PATH` when set; otherwise it checks the
 installed `../libexec/apple-bridge` path relative to `nd`, then
 `helpers/apple-bridge/.build/debug/apple-bridge` in a development checkout.
+Source tests use synthetic trees and fake helper services or executables; they
+must not read a contributor's live iCloud tree.
 
 ## Required validation
 

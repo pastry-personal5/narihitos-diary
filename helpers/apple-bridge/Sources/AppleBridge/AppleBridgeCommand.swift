@@ -6,7 +6,7 @@ import Foundation
 struct AppleBridgeCommand {
     static func main() {
         let input = readBoundedFrame()
-        let outcome = BridgeProtocol.handle(input)
+        let outcome = BridgeProtocol.handle(input, sourceService: LiveICloudSourceService())
         FileHandle.standardOutput.write(outcome.response)
 
         if let diagnosticCode = outcome.diagnosticCode {

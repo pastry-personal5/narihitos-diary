@@ -97,7 +97,7 @@ gate passed on 2026-10-28.
 
 ### P1-M4: Core workflow and persistence
 
-Status: Planned
+Status: Done
 
 Goal: Implement the diary state machine and recoverable private state behind
 inward-facing ports.
@@ -105,15 +105,26 @@ inward-facing ports.
 Plan: [overview](milestone-04-core-workflow-persistence-overview.md),
 [architecture plan](milestone-04-core-workflow-persistence-architecture.md).
 
+Notes: The standard-library-only core state machine, independent editor
+versions, exact publication bindings, fake recovery orchestration, and
+forward-migrated SQLite workflow/operation stores are implemented. Synthetic
+tests cover concurrency, reopen, reconciliation, and retention; the full Rust
+and Swift gate passed on 2026-10-28.
+
 ### P1-M5: Source ingestion and Apple bridge
 
-Status: Planned
+Status: Done
 
 Goal: Discover and read confirmed Ayumi source snapshots, including selected-only
 iCloud acquisition through the Swift helper.
 
 Plan: [overview](milestone-05-source-ingestion-apple-bridge-overview.md),
 [architecture plan](milestone-05-source-ingestion-apple-bridge-architecture.md).
+
+Notes: The core source ports, candidate availability persistence, bounded Ayumi
+catalog and parser, selected-only helper client, Swift iCloud commands, private
+byte handoff, and freshness checkpoint integration are implemented with
+synthetic fakes. The full Rust and Swift gate passed on 2026-10-29.
 
 ### P1-M6: Control API Server
 

@@ -105,6 +105,72 @@ final class BridgeProtocolTests: XCTestCase {
         expectExactlyOneProtocolLine(outcome.response)
     }
 
+    func testICloudCommandsUseSelectedSourceServiceAndReturnBoundedMetadata() throws {
+        let service = FakeSourceService()
+        let availability = BridgeProtocol.handle(
+            frame(
+                #"{"protocol_version":1,"request_id":"a","command":"icloud-availability","payload":{"directory_name":"Ayumi","source_id":"2026/10/29/n.md"}}"#
+            ),
+            sourceService: service
+        )
+        let availabilityValue = try XCTUnwrap(
+            decodedResponse(availability)["value"] as? [String: Any]
+        )
+        XCTAssertEqual(availabilityValue["status"] as? String, "cloud-only")
+
+        let download = BridgeProtocol.handle(
+            frame(
+                #"{"protocol_version":1,"request_id":"d","command":"icloud-request-download","payload":{"directory_name":"Ayumi","source_id":"2026/10/29/n.md","timeout_milliseconds":5000}}"#
+            ),
+            sourceService: service
+        )
+        let downloadValue = try XCTUnwrap(decodedResponse(download)["value"] as? [String: Any])
+        XCTAssertEqual(downloadValue["status"] as? String, "resident")
+
+        let read = BridgeProtocol.handle(
+            frame(
+                #"{"protocol_version":1,"request_id":"r","command":"icloud-coordinated-read","payload":{"directory_name":"Ayumi","source_id":"2026/10/29/n.md","handoff_directory":"/synthetic/private","maximum_bytes":8388608}}"#
+            ),
+            sourceService: service
+        )
+        let readValue = try XCTUnwrap(decodedResponse(read)["value"] as? [String: Any])
+        XCTAssertEqual(readValue["handoff_name"] as? String, "nd-source-fake.bin")
+        XCTAssertEqual(readValue["file_identity"] as? String, "1:2")
+        XCTAssertEqual(readValue["size"] as? Int, 70_000)
+        XCTAssertEqual(service.calls, ["availability", "download", "read"])
+    }
+
+    func testICloudCommandsRejectUnsafeInputsAndReturnStableServiceErrors() throws {
+        let service = FakeSourceService()
+        let unsafe = BridgeProtocol.handle(
+            frame(
+                #"{"protocol_version":1,"request_id":"u","command":"icloud-availability","payload":{"directory_name":"../Ayumi","source_id":"2026/10/29/n.md"}}"#
+            ),
+            sourceService: service
+        )
+        try expectFailure(unsafe, code: "malformed_input", requestID: "u")
+
+        for sourceID in ["2026/13/29/n.md", "2026/02/30/n.md", "２０２６/10/29/n.md"] {
+            let invalidDate = BridgeProtocol.handle(
+                frame(
+                    #"{"protocol_version":1,"request_id":"u","command":"icloud-availability","payload":{"directory_name":"Ayumi","source_id":"\#(sourceID)"}}"#
+                ),
+                sourceService: service
+            )
+            try expectFailure(invalidDate, code: "malformed_input", requestID: "u")
+        }
+
+        service.error = .permissionDenied
+        let denied = BridgeProtocol.handle(
+            frame(
+                #"{"protocol_version":1,"request_id":"p","command":"icloud-availability","payload":{"directory_name":"Ayumi","source_id":"2026/10/29/n.md"}}"#
+            ),
+            sourceService: service
+        )
+        try expectFailure(denied, code: "permission_denied", requestID: "p")
+        XCTAssertFalse(String(decoding: denied.response, as: UTF8.self).contains("Ayumi"))
+    }
+
     private func frame(_ json: String) -> Data {
         Data(json.utf8) + Data([0x0A])
     }
@@ -139,5 +205,42 @@ final class BridgeProtocolTests: XCTestCase {
         XCTAssertLessThanOrEqual(response.count, BridgeProtocol.maximumFrameBytes)
         XCTAssertEqual(response.last, 0x0A)
         XCTAssertFalse(response.dropLast().contains(0x0A))
+    }
+}
+
+private final class FakeSourceService: SourceService {
+    var calls: [String] = []
+    var error: SourceServiceError?
+
+    func availability(directoryName: String, sourceID: String) throws -> SourceAvailability {
+        calls.append("availability")
+        if let error { throw error }
+        return .cloudOnly
+    }
+
+    func requestDownload(
+        directoryName: String,
+        sourceID: String,
+        timeoutMilliseconds: Int
+    ) throws -> SourceAvailability {
+        calls.append("download")
+        if let error { throw error }
+        return .resident
+    }
+
+    func coordinatedRead(
+        directoryName: String,
+        sourceID: String,
+        handoffDirectory: String,
+        maximumBytes: Int
+    ) throws -> CoordinatedReadResult {
+        calls.append("read")
+        if let error { throw error }
+        return CoordinatedReadResult(
+            handoffName: "nd-source-fake.bin",
+            fileIdentity: "1:2",
+            size: 70_000,
+            modifiedAt: 1_700_000_000
+        )
     }
 }
