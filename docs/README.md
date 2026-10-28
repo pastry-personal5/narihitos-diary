@@ -13,6 +13,8 @@ This index lists the design and process docs, one line each. Read only the doc y
 | [phase-1/milestone-01-research-summary.md](phase-1/milestone-01-research-summary.md) | P1-M1 owner decision-to-evidence map and remaining runtime checks. |
 | [phase-1/milestone-02-software-architecture-overview.md](phase-1/milestone-02-software-architecture-overview.md) | P1-M2 goal, scope, completion checklist, and acceptance evidence. |
 | [phase-1/milestone-02-software-architecture-architecture.md](phase-1/milestone-02-software-architecture-architecture.md) | P1-M2 affected boundaries and architecture planning sequence. |
+| [phase-1/milestone-03-scaffolding-overview.md](phase-1/milestone-03-scaffolding-overview.md) | P1-M3 placeholder: goal, scope, and completion checklist not yet written. |
+| [phase-1/milestone-03-scaffolding-architecture.md](phase-1/milestone-03-scaffolding-architecture.md) | P1-M3 placeholder: architecture plan not yet written. |
 | [planned-mvp-architecture.md](planned-mvp-architecture.md) | Local control server, TUI client, clean-architecture boundaries, connector contracts, workflow, REST, streaming, and future MCP design. |
 | [product-behavior.md](product-behavior.md) | Intended user journey, confirmed diary behavior, and product boundaries. |
 | [ux-terms.md](ux-terms.md) | Proposed vocabulary for visible terminal components and code-facing names. |

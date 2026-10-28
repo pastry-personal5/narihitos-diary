@@ -70,5 +70,6 @@ Status: Planned
 
 Goal: Establish the Rust project scaffold and development tools.
 
-Plan: Not yet created.
+Plan: [overview](milestone-03-scaffolding-overview.md),
+[architecture plan](milestone-03-scaffolding-architecture.md) (placeholders).
 
