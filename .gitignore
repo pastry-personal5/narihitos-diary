@@ -4,11 +4,18 @@ target/
 *.pdb
 # Cargo.lock is intentionally tracked for this application.
 
+# Swift Package Manager
+helpers/apple-bridge/.build/
+
 # macOS
 .DS_Store
 
+# Private configuration and local runtime state
 config/global_config.yaml
+/.local/
 
-tmp/
-
-default.profraw
+# Test scratch data and coverage output
+/tmp/
+/coverage/
+*.profraw
+*.profdata

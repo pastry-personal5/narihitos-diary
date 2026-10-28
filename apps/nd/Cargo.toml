@@ -1,0 +1,17 @@
+[package]
+name = "nd"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "nd"
+path = "src/main.rs"
+
+[dependencies]
+diary-connectors.workspace = true
+diary-control.workspace = true
+diary-control-contract.workspace = true
+diary-core.workspace = true
+diary-tui.workspace = true

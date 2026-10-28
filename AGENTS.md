@@ -179,14 +179,14 @@ The interview decisions and remaining page-compatibility check are mapped in the
 ## Commands
 
 ```sh
-cargo build                                               # build the application
-cargo run                                                 # run the TUI application
-cargo run -- serve                                        # run the Control API Server in the foreground
+cargo build --workspace                                   # build the Rust workspace
+cargo run -p nd                                           # run the TUI shell (not implemented in P1-M3)
+cargo run -p nd -- serve                                  # run the server shell (not implemented in P1-M3)
 cargo test --all-features                                 # run the test suite
 cargo fmt --all                                           # format Rust code
 cargo clippy --all-targets --all-features -- -D warnings  # lint with warnings denied
-swift build --package-path helpers/apple-bridge           # build the Apple helper (once it exists)
-swift test --package-path helpers/apple-bridge            # test the Apple helper with fakes (once it exists)
+swift build --package-path helpers/apple-bridge           # build the Apple helper
+swift test --package-path helpers/apple-bridge            # test the Apple helper with fakes
 ```
 
 ## Code conventions

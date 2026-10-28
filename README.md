@@ -10,6 +10,10 @@ Markdown and publishes its body to a Notion daily section under root, year,
 and month pages. See the
 [product roadmap](docs/roadmap.md).
 
+The repository currently contains the P1-M3 project scaffold. The `nd` and
+`nd serve` commands deliberately report that their modes are not implemented;
+product workflow work begins in later milestones.
+
 ## License
 
 Licensed under the Apache-2.0 license. See [LICENSE](LICENSE).

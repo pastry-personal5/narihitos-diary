@@ -6,6 +6,64 @@ This changelog records owner decisions and material plan changes for Phase 1.
 
 ## Entries
 
+- 2026-10-28 — Completion review — Rechecked P1-M3 code, tests, configuration,
+  and its P1-M4/P1-M5 follow-on plans. Corrected the Ayumi config example to
+  use one iCloud directory name, removed a contradictory blanket dependency
+  approval claim and an undecided initial-language default, and aligned the M4
+  autosave and pending/blocked retry rules with the product architecture. The
+  command-shell tests now cover unsupported arguments and reliably clean
+  scratch state. The helper bounds request IDs, distinguishes JSON booleans
+  from integer protocol versions, and tests exact and oversized frames so
+  responses remain capped. All four Rust command-shell tests, eight Swift
+  protocol tests, the complete Rust and Swift gate, and `git diff --check`
+  passed.
+- 2026-10-28 — Completion — Marked P1-M3 `Done`. Added the six-package Rust
+  workspace with one `nd` binary, explicit non-functional default and `serve`
+  shells, a Swift 6.2/macOS 26 helper package with a bounded versioned fake
+  protocol, safe configuration example and ignore rules, and reproducible
+  contributor commands. Workspace, target, command, helper-stream, and ignore
+  inspections passed. The complete Rust and Swift gate passed with Rust/Cargo
+  1.98.0 and Apple Swift 6.4 from Xcode 27.1; no third-party dependency or
+  later-milestone product behavior was added.
+- 2026-10-28 — Planning review — Expanded the P1-M5 plan with milestone entry
+  gates, bounded source identity and date evidence, malformed-header and audio
+  privacy behavior, a private byte handoff that fits the approved 64 KiB helper
+  envelope, explicit failure mapping, checkpoint freshness tests, and an
+  acceptance-evidence table. P1-M5 remains planned behind P1-M3 and P1-M4;
+  no source implementation or dependency was added.
+- 2026-10-28 — Owner approval — Approved the P1-M3 dependency and toolchain
+  packet before manifest changes. The approval covers this scaffold only;
+  later dependency, feature, and build-tool changes still require approval
+  under `AGENTS.md`. P1-M3 remains third-party-dependency free: six separate
+  Rust packages use only standard-library or local path
+  dependencies, and the Swift package uses SwiftPM, XCTest, and Foundation.
+  Selected Rust 1.89 with edition 2024 and Swift tools 6.2 with macOS 26.0.
+  The helper runs once per request and exchanges one newline-delimited UTF-8
+  JSON frame in each direction, capped at 64 KiB; standard output is protocol
+  only. Lookup prefers `ND_APPLE_BRIDGE_PATH`, then the installed `libexec`
+  path, then the development build. Configuration prefers `ND_CONFIG_PATH`
+  over repo-local `config/global_config.yaml` and later server loading must
+  reject an absent or non-owner-only file. Keeping all outer crates preserves
+  the architecture visibly without premature combination.
+- 2026-10-28 — Planning review — Expanded the P1-M4 plan with milestone entry
+  gates, an explicit boundary between core policy and later adapters,
+  conditional workflow and buffer revisions, SQLite migration and privacy
+  checks, fake crash reconciliation, retention boundaries, and an acceptance
+  evidence table. No implementation, dependency, or product decision was added;
+  P1-M4 remains planned behind P1-M3.
+- 2026-10-28 — Completion — Marked P1-M2 `Done` after its architecture,
+  UX reconciliation, owner-decision records, and completion checklist were
+  complete and the milestone's documented alternative gate passed. P1-M3
+  remains `Planned` until its dependency, Cargo-feature, build-tool, and Swift
+  toolchain approval packet is owner-reviewed; no manifest, dependency, or
+  production code was added by this transition.
+- 2026-10-28 — Review — Strengthened the P1-M3 scaffold plan with an explicit
+  P1-M2 entry gate, a dependency and toolchain approval record, a concrete
+  workspace and dependency map, observable non-functional `nd` command shells,
+  Swift helper protocol failure cases, safe configuration requirements, and a
+  structured acceptance-evidence baseline. The review selected no dependency,
+  build tool, hosted provider, credential location, or HTTP client; those
+  approval and decision points remain open before implementation.
 - 2026-10-28 — Planning — Expanded Phase 1 from the P1-M3 scaffold through
   eight additional implementation milestones, P1-M4 through P1-M11. The order
   follows the architecture's dependency direction: core/persistence, sources

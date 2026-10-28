@@ -80,6 +80,12 @@ blocks, which are not links. The Notion block API facts (`after_block` position,
 trash-on-delete) and the Claude Code and Codex MCP behavior were checked against
 current documentation on 2026-10-28.
 
+At milestone completion on 2026-10-28, the alternative gate was rerun against
+the expanded Phase 1 documentation set: relative links and heading anchors
+resolved, the architecture proposal remained free of phase and milestone
+references, and `git diff --check` passed. The phase plan and changelog record
+the completion transition; no production manifest or Apple helper exists yet.
+
 Carried forward: the hosted provider, its credential storage, and the HTTP
 dependency stay Undecided in [AGENTS.md](../../AGENTS.md) and must be settled
 before the hosted adapter is built. The 33 KB architecture proposal and the

@@ -1,0 +1,12 @@
+# Copy this file to config/global_config.yaml, replace every placeholder, and
+# restrict the real file to its owner with: chmod 600 config/global_config.yaml
+
+sources:
+  ayumi_directory_name: "REPLACE_WITH_ICLOUD_DIRECTORY_NAME"
+
+paths:
+  entries_root: "~/Documents/narihitos-diary/entries"
+
+notion:
+  token: "REPLACE_WITH_NOTION_TOKEN"
+  root_page_id: "REPLACE_WITH_NOTION_ROOT_PAGE_ID"

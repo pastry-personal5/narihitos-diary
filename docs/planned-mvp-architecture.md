@@ -379,12 +379,12 @@ records the API facts.
 
 | Item | Location | Notes |
 |---|---|---|
-| Configuration | `config/global_config.yaml`, repo-local and git-ignored | Plaintext Notion token, Notion root page, entry root, Ayumi directory. Owner-only. Where a hosted-provider credential lives is undecided. Resolved relative to the server's working directory, so launch the server from the repository root; an override path is a scaffolding detail. |
+| Configuration | `config/global_config.yaml`, repo-local and git-ignored | Plaintext Notion token, Notion root page, entry root, and one Ayumi iCloud directory name. Owner-only. Where a hosted-provider credential lives is undecided. Resolved relative to the server's working directory; `ND_CONFIG_PATH` takes precedence when set. A missing file or group/world permission fails server startup once loading is implemented. |
 | Database | SQLite under `~/Library/Application Support/narihitos-diary/` | Workflows, drafts, preferences, operation log, receipts. No token. Versioned schema with forward migrations. |
 | Runtime directory | Owner-only, under the same Application Support directory | Lock file and runtime file (port, control token, instance ID). |
 | Entries | Configurable; default `~/Documents/narihitos-diary/entries/YYYY/MM/YYYY-MM-DD.md` | Written only by the local output adapter. |
 | Logs | Standard error of the foreground server | Content-free: no tokens, coordinates, paths, or diary text. |
-| Swift helper | Found by the server at startup; the lookup is a scaffolding detail | If absent, the Apple model is unavailable and cloud-only notes cannot be downloaded or read; hosted drafting and the manual editor continue. |
+| Swift helper | `ND_APPLE_BRIDGE_PATH`, then installed `../libexec/apple-bridge` relative to `nd`, then `helpers/apple-bridge/.build/debug/apple-bridge` in a development checkout | If absent, the Apple model is unavailable and cloud-only notes cannot be downloaded or read; hosted drafting and the manual editor continue. One process handles one capped newline-delimited JSON request and response. |
 
 ## Control API Server module
 

@@ -66,7 +66,7 @@ research-only milestone used its documented exit-gate exemption.
 
 ### P1-M2: Software architecture
 
-Status: Active
+Status: Done
 
 Goal: Define the Phase 1 software architecture.
 
@@ -74,14 +74,26 @@ Plan: [overview](milestone-02-software-architecture-overview.md),
 [architecture plan](milestone-02-software-architecture-architecture.md),
 [product architecture](../planned-mvp-architecture.md).
 
+Notes: Completed under the documentation-only gate exemption recorded in the
+overview; link, anchor, terminology, and diff validation supplied the
+alternative acceptance evidence. P1-M3 remains planned pending its required
+owner-reviewed dependency and toolchain approval packet.
+
 ### P1-M3: Scaffolding and tools
 
-Status: Planned
+Status: Done
 
 Goal: Establish the Rust project scaffold and development tools.
 
 Plan: [overview](milestone-03-scaffolding-overview.md),
 [architecture plan](milestone-03-scaffolding-architecture.md).
+
+Notes: The P1-M2 entry gate is satisfied. The owner approved P1-M3's
+dependency, Cargo-feature, build-tool, Swift-toolchain, and scaffold decision
+packet on 2026-10-28 before manifest or tooling changes began. The six-package
+Rust workspace, one `nd` binary, Swift protocol helper, safe configuration
+baseline, and contributor workflow are implemented; the full Rust and Swift
+gate passed on 2026-10-28.
 
 ### P1-M4: Core workflow and persistence
 
