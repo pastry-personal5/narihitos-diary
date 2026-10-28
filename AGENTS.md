@@ -86,7 +86,7 @@ See [README.md](README.md) for the overview. Setup and contribution rules are in
   creating pages or appending a daily section.
 
 The interview decisions and remaining page-compatibility check are mapped in the
-[research summary](docs/archive/phase-1/milestone-01-research-summary.md).
+[research summary](docs/phase-1/milestone-01-research-summary.md).
 
 ## Environment
 

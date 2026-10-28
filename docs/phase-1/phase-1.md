@@ -47,11 +47,26 @@ Status: Done
 Goal: Turn the existing MVP research into an evidence-backed, decision-ready
 foundation for later Phase 1 planning.
 
-Plan: [overview](../archive/phase-1/milestone-01-research-overview.md),
-[research approach](../archive/phase-1/milestone-01-research-architecture.md)
+Plan: [overview](milestone-01-research-overview.md),
+[research approach](milestone-01-research-architecture.md)
 
 Notes: The owner interview, Notion hierarchy evidence, and remaining runtime
-checks are in the [research summary](../archive/phase-1/milestone-01-research-summary.md). This
-research-only milestone used its documented exit-gate exemption. No other
-Phase 1 milestones are planned yet.
+checks are in the [research summary](milestone-01-research-summary.md). This
+research-only milestone used its documented exit-gate exemption.
+
+### P1-M2: Software architecture
+
+Status: Planned
+
+Goal: Define the Phase 1 software architecture.
+
+Plan: Not yet created.
+
+### P1-M3: Scaffolding and tools
+
+Status: Planned
+
+Goal: Establish the Rust project scaffold and development tools.
+
+Plan: Not yet created.
 

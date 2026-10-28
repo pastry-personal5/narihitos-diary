@@ -6,34 +6,37 @@ This changelog records owner decisions and material plan changes for Phase 1.
 
 ## Entries
 
+- 2026-10-28 — Owner — Restored the completed P1-M1 milestone documents and
+  their supporting research notes to `docs/` for P1-M2/P1-M3 preparation.
+  Added only milestone titles and goals; no milestone plans or code were created.
 - 2026-10-28 — Research — Closed P1-M1 after all checklist items gained
   evidence. Its research-only exit-gate exemption applies; no production Rust
   code, dependency, or later milestone was added. Archived the concluded
-  research and milestone documents. See [P1-M1 overview](../archive/phase-1/milestone-01-research-overview.md).
+  research and milestone documents. See [P1-M1 overview](./milestone-01-research-overview.md).
 - 2026-10-28 — Owner and research — The owner reaffirmed that the configured
   Notion root stays uninspected during P1-M1 and must pass the runtime read-only
   preflight. A twelve-scenario synthetic hierarchy fixture covered missing,
   existing, duplicate, incompatible, and ambiguous year/month paths. This
   closes the remaining P1-M1 evidence item while retaining live connector
-  validation as later acceptance work. See [validation evidence](../archive/research/p1-m1-validation-evidence.md).
+  validation as later acceptance work. See [validation evidence](../research/p1-m1-validation-evidence.md).
 - 2026-10-28 — Owner correction — The configured Notion page is the root of a
   page hierarchy: `Root → YYYY → YYYY-MM`. Create missing year and month
   subpages under their respective parents, then append each `YYYY-MM-DD` daily
   section at the bottom of its month page. This supersedes the earlier
   direct-to-root publication destination; the confirmed body, duplicate
   checks, and read-before-retry rule remain. See [Notion
-  research](../archive/research/notion-diary-section.md).
+  research](../research/notion-diary-section.md).
 - 2026-10-28 — Owner correction — Place each new Notion daily section at the
   bottom of its destination page (later clarified above as the month page).
   This supersedes the page-top placement and
   deferred top-insertion design recorded in the interview below. The
   researched append operation and duplicate-safe read-back remain the
-  connector direction. See [Notion research](../archive/research/notion-diary-section.md).
+  connector direction. See [Notion research](../research/notion-diary-section.md).
 - 2026-10-28 — Owner interview — Confirmed that an unverifiable source
   freshness check stops output until reread and reconfirmation, and that the
   app requests download of selected cloud-only notes through a coordinated
-  macOS read. See [input research](../archive/research/markdown-input-format.md) and
-  [operational constraints](../archive/research/mvp-operational-constraints.md).
+  macOS read. See [input research](../research/markdown-input-format.md) and
+  [operational constraints](../research/mvp-operational-constraints.md).
 - 2026-10-28 — Owner interview — Chose reviewed two-pass Apple on-device
   drafting and an always-available multiline manual path, including after
   model failure. Composition remains on device. Each entry offers US English
@@ -41,13 +44,13 @@ This changelog records owner decisions and material plan changes for Phase 1.
   language is remembered and concise is the style default. Model-inferred
   reflection is allowed by default but visibly marked for review. The complete
   edited entry requires confirmation, and unfinished drafts persist locally
-  for recovery. See [composition research](../archive/research/agent-assisted-diary-composition.md).
+  for recovery. See [composition research](../research/agent-assisted-diary-composition.md).
 - 2026-10-28 — Owner interview — Chose a configurable local Documents entry
   root with `YYYY/MM/YYYY-MM-DD.md` files, YAML front matter containing day
   and language, and no automatic overwrite of different content. A private
   per-user SQLite database in Application Support holds draft recovery and
   publication receipts, excluding the Notion token. See [operational
-  constraints](../archive/research/mvp-operational-constraints.md).
+  constraints](../research/mvp-operational-constraints.md).
 - 2026-10-28 — Owner interview — Chose the confirmed Markdown body without
   YAML front matter for Notion, under an ISO-date `heading_2`, with newest
   daily sections at the top of the configured page (superseded by the correction
@@ -55,13 +58,13 @@ This changelog records owner decisions and material plan changes for Phase 1.
   publication; an ambiguous write is read back before retry. The configured
   page is not inspected in P1-M1; a fail-closed read-only runtime preflight is
   required. The exact safe top-insertion method is deferred to connector
-  design. See [Notion research](../archive/research/notion-diary-section.md).
+  design. See [Notion research](../research/notion-diary-section.md).
 - 2026-10-28 — Owner interview — Confirmed Apple Silicon, macOS 26.0+, Rust
   1.89+, bounded workers, Ratatui/Crossterm multiline editing, and TIS
   notifications with a 500 ms polling fallback and unknown-language label.
   Chose a plaintext Notion token in a per-user global config file requiring
-  owner-only permissions instead of Keychain. See [TUI research](../archive/research/rust-tui-stack.md)
-  and [IME research](../archive/research/macos-ime-language-status.md).
+  owner-only permissions instead of Keychain. See [TUI research](../research/rust-tui-stack.md)
+  and [IME research](../research/macos-ime-language-status.md).
 - 2026-10-28 — Owner — Confirmed best-effort source freshness checks rather
   than continuous monitoring. When metadata/digest checks detect a change, the
   app invalidates the draft and previews and requires reread/reconfirmation.
@@ -85,7 +88,7 @@ This changelog records owner decisions and material plan changes for Phase 1.
   decisions until individually confirmed here.
 - 2026-10-28 — Owner — Completed P1-M1 under its research-only exit-gate
   exemption. The final decision/evidence map and bounded runtime uncertainties
-  are in [the research summary](../archive/phase-1/milestone-01-research-summary.md); this status
+  are in [the research summary](./milestone-01-research-summary.md); this status
   was superseded by the reopening entry above.
 - 2026-10-28 — Research — Recommended Apple on-device guided two-pass drafting with
   source-linked review and a full multiline manual fallback. Phase 1 sends no
