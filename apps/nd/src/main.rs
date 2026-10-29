@@ -721,6 +721,15 @@ fn run_connected_session(
     let mut assistant_selection_pending = false;
     let mut memory_review_pending = false;
     let mut draft_editor = DraftEditor::new("");
+    // The Sources-stage source-body editor. Never shares `draft_editor`: a
+    // canonical reload resets that one to the entry text (which a Ctrl-S
+    // here would then write over the source note), and a leftover source
+    // body there would replace the diary entry on the next Compose keystroke.
+    let mut source_editor = DraftEditor::new("");
+    // The source (ID, content digest) `source_editor` was opened on. Ctrl-S
+    // saves to this, never to whatever source is displayed by then: a preview
+    // finishing mid-edit would otherwise write this text over that source.
+    let mut source_edit_target: Option<(String, String)> = None;
     let mut editor_active = false;
     let mut compose_active_resource = 0usize;
     let mut confirmed_source_detail: Option<SourceDetailDto> = None;
@@ -924,7 +933,13 @@ fn run_connected_session(
                             );
                             compose_view.load_from_canonical(workflow);
                             if !compose_view.is_dirty() {
-                                draft_editor = DraftEditor::new(&compose_view.text);
+                                // Reloads follow every autosave (its own
+                                // `entry.changed` event); rebuilding an editor
+                                // that already shows this text would snap the
+                                // cursor back to the top mid-writing.
+                                if draft_editor.text() != compose_view.text {
+                                    draft_editor = DraftEditor::new(&compose_view.text);
+                                }
                                 save_blocked_for_resolution = false;
                             }
                             current_workflow = Some(workflow.clone());
@@ -1596,6 +1611,9 @@ fn run_connected_session(
         } else if quit_confirmation {
             if compose_view.is_dirty() || save_in_flight.is_some() {
                 "Draft is not safely saved. Ctrl-C again to quit; Esc cancels".to_owned()
+            } else if source_editor_active {
+                "Source edit is not saved (Ctrl-S saves). Ctrl-C again abandons it; Esc cancels"
+                    .to_owned()
             } else {
                 "Press Ctrl-C again to quit; Esc cancels".to_owned()
             }
@@ -1727,12 +1745,19 @@ fn run_connected_session(
                 main_height,
                 &mut shown_source_detail_id,
             );
-            if (current_stage == Stage::Compose && editor_active && compose_active_resource == 0)
-                || (current_stage == Stage::Sources && source_editor_active)
+            let editor_pane = if current_stage == Stage::Sources && source_editor_active {
+                Some(&source_editor)
+            } else if current_stage == Stage::Compose
+                && editor_active
+                && compose_active_resource == 0
             {
+                Some(&draft_editor)
+            } else {
+                None
+            };
+            if let Some(editor) = editor_pane {
                 frame.render_widget(
-                    DraftEditorPane::new(&draft_editor, focus.zone == FocusZone::Main)
-                        .palette(palette),
+                    DraftEditorPane::new(editor, focus.zone == FocusZone::Main).palette(palette),
                     areas.main_pane,
                 );
             } else {
@@ -1790,6 +1815,8 @@ fn run_connected_session(
                 feedback = Some(if compose_view.is_dirty() || save_in_flight.is_some() {
                     save_requested = true;
                     "Saving before quit; Ctrl-C again abandons unsaved edits".to_owned()
+                } else if source_editor_active {
+                    "Source edit is not saved; Ctrl-C again abandons it".to_owned()
                 } else {
                     "Press Ctrl-C again to quit".to_owned()
                 });
@@ -1823,16 +1850,16 @@ fn run_connected_session(
                     && source_editor_active
                     && !source_mutation_pending
                 {
-                    if let (Some(workflow), Some(detail)) =
-                        (&current_workflow, &sources_view.active_detail)
+                    if let (Some(workflow), Some((source_id, digest))) =
+                        (&current_workflow, &source_edit_target)
                     {
                         source_mutation_pending = worker
                             .try_send(Intent::EditSourceBody {
                                 workflow_id: workflow.id.clone(),
-                                source_id: detail.id.clone(),
+                                source_id: source_id.clone(),
                                 revision: workflow.revision,
-                                text: draft_editor.text().to_owned(),
-                                digest: detail.content_digest.clone(),
+                                text: source_editor.text().to_owned(),
+                                digest: digest.clone(),
                             })
                             .is_ok();
                     }
@@ -2065,7 +2092,7 @@ fn run_connected_session(
                 feedback = Some("Source edit cancelled".to_owned());
             }
             InputPoll::Event(event) if source_editor_active && current_stage == Stage::Sources => {
-                let _ = draft_editor.handle_input(&event);
+                let _ = source_editor.handle_input(&event);
             }
             InputPoll::Event(event) if editor_active && current_stage == Stage::Compose => {
                 let changed = draft_editor.handle_input(&event);
@@ -2421,7 +2448,9 @@ fn run_connected_session(
                         }
                         9 if can_mutate && !source_mutation_pending => {
                             if let Some(detail) = &sources_view.active_detail {
-                                draft_editor = DraftEditor::new(&detail.body);
+                                source_editor = DraftEditor::new(&detail.body);
+                                source_edit_target =
+                                    Some((detail.id.clone(), detail.content_digest.clone()));
                                 source_editor_active = true;
                                 focus.zone = FocusZone::Main;
                             }

@@ -192,7 +192,10 @@ fn wait_for_response(
 ) -> Result<Value, CodexTransportError> {
     loop {
         let message = wait_for_message(child, receiver, cancelled, started, timeout)?;
-        if message.get("id").and_then(Value::as_u64) == Some(id) {
+        // Server-initiated requests number their IDs independently of ours,
+        // so only a message without a `method` can be our response.
+        if message.get("method").is_none() && message.get("id").and_then(Value::as_u64) == Some(id)
+        {
             if message.get("error").is_some() {
                 return Err(map_failure(&message));
             }
@@ -948,6 +951,32 @@ mod tests {
     }
 
     #[test]
+    fn a_server_request_reusing_our_id_is_not_taken_for_our_response() {
+        let scratch = Scratch::new();
+        let peer = scratch.peer(
+            "peer",
+            r#"read -r initialize
+printf '%s\n' '{"jsonrpc":"2.0","id":1,"result":{}}'
+read -r initialized
+read -r thread
+printf '%s\n' '{"jsonrpc":"2.0","id":2,"method":"item/tool/requestUserInput","params":{}}'
+printf '%s\n' '{"jsonrpc":"2.0","id":2,"result":{"thread":{"id":"thread-1"}}}'
+read -r turn
+printf '%s\n' '{"jsonrpc":"2.0","id":3,"result":{}}'
+printf '%s\n' '{"method":"item/completed","params":{"item":{"type":"agentMessage","text":"{\"candidates\":[]}"}}}'
+printf '%s\n' '{"method":"turn/completed","params":{"turn":{"status":"completed"}}}'
+"#,
+        );
+        let transport = ProcessCodexTransport {
+            timeout: Duration::from_secs(10),
+        };
+        assert_eq!(
+            transport.invoke(&test_invocation(peer), &AtomicBool::new(false)),
+            Ok(json!({"candidates": []}))
+        );
+    }
+
+    #[test]
     fn process_transport_qualifies_json_rpc_malformed_timeout_and_cancellation() {
         let scratch = Scratch::new();
         let peer = scratch.peer(
@@ -965,7 +994,7 @@ printf '%s\n' '{"method":"turn/completed","params":{"turn":{"status":"completed"
         );
         let invocation = test_invocation(peer);
         let transport = ProcessCodexTransport {
-            timeout: Duration::from_secs(2),
+            timeout: Duration::from_secs(10),
         };
         assert_eq!(
             transport

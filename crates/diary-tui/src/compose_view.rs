@@ -89,11 +89,20 @@ impl ComposeViewModel {
         self.local_generation += 1;
     }
 
+    /// Whether local text may be written. While a canonical conflict is
+    /// unresolved, `buffer_version` already names the server's newer text,
+    /// so a write would silently replace it; the person must first choose
+    /// `keep_local_after_conflict` or `use_server_after_conflict`.
+    #[must_use]
+    pub const fn can_save(&self) -> bool {
+        self.is_dirty() && self.conflicting_server_text.is_none()
+    }
+
     /// Captures the exact conditional write an async worker should make.
     /// The caller owns the one-in-flight guard.
     #[must_use]
     pub fn save_snapshot(&self) -> Option<SaveSnapshot> {
-        self.is_dirty().then(|| SaveSnapshot {
+        self.can_save().then(|| SaveSnapshot {
             generation: self.local_generation,
             buffer_version: self.buffer_version,
             text: self.text.clone(),
@@ -130,7 +139,7 @@ impl ComposeViewModel {
         attachment: &Attachment,
         workflow_id: &str,
     ) {
-        if !self.is_dirty() {
+        if !self.can_save() {
             return;
         }
         let generation_at_send = self.local_generation;
@@ -407,6 +416,26 @@ mod tests {
         view.use_server_after_conflict();
         assert_eq!(view.text, "server");
         assert!(!view.is_dirty());
+    }
+
+    #[test]
+    fn an_unresolved_conflict_never_autosaves_over_the_server_text() {
+        let mut view = ComposeViewModel::default();
+        view.load_from_canonical(&workflow_from(2, "old"));
+        view.edit("local".to_owned());
+        view.load_from_canonical(&workflow_from(3, "server"));
+        // Buffer version 3 now names "server": a save would replace it.
+        assert_eq!(view.save_snapshot(), None);
+
+        view.keep_local_after_conflict();
+        assert_eq!(
+            view.save_snapshot(),
+            Some(SaveSnapshot {
+                generation: 1,
+                buffer_version: 3,
+                text: "local".to_owned(),
+            })
+        );
     }
 
     #[test]

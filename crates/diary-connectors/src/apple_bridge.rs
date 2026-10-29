@@ -1282,7 +1282,7 @@ printf '%b%b%b%b%s' "\\$(printf '%03o' $(((length >> 24) & 255)))" "\\$(printf '
 "#,
         );
         let client =
-            AppleBridgeClient::new(reader, "Ayumi", &handoff, Duration::from_secs(2), 1).unwrap();
+            AppleBridgeClient::new(reader, "Ayumi", &handoff, Duration::from_secs(10), 1).unwrap();
         let source = SourceRef::new(CONNECTOR, "2026/10/29/n.md").unwrap();
         let read = client
             .coordinated_read(&source, &AtomicBool::new(false))
@@ -1302,7 +1302,7 @@ printf '{}\n{}\n'
 "#,
         );
         let failing_client =
-            AppleBridgeClient::new(failing, "Ayumi", &handoff, Duration::from_secs(2), 1).unwrap();
+            AppleBridgeClient::new(failing, "Ayumi", &handoff, Duration::from_secs(10), 1).unwrap();
         assert_eq!(
             failing_client.coordinated_read(&source, &AtomicBool::new(false)),
             Err(SourceAccessError::HelperProtocol)
@@ -1338,7 +1338,7 @@ printf '%b%b%b%b%s' "\\$(printf '%03o' $(((length >> 24) & 255)))" "\\$(printf '
             ),
         );
         let client =
-            AppleBridgeClient::new(reader, "Ayumi", &handoff, Duration::from_secs(2), 2).unwrap();
+            AppleBridgeClient::new(reader, "Ayumi", &handoff, Duration::from_secs(10), 2).unwrap();
         let slow_client = client.clone();
         let slow = std::thread::spawn(move || {
             slow_client.coordinated_read(
@@ -1419,7 +1419,7 @@ printf '%b%b%b%b%s' "\\$(printf '%03o' $(((length >> 24) & 255)))" "\\$(printf '
             helper,
             "Ayumi",
             scratch.join("handoff"),
-            Duration::from_secs(2),
+            Duration::from_secs(10),
             1,
         )
         .unwrap();

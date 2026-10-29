@@ -36,6 +36,19 @@ content and with enough intent/receipt evidence to recover after interruption.
   Resources/Main row of the stage being shown (focus is bounded only by the
   current stage's per-frame clamp); a regression test covers a reload outside
   Sources.
+- [x] Job polls are serialized and each reply is routed by the polled job ID,
+  so a recovery read can no longer finish a still-running assistant job; a
+  `job-not-found` reply releases the pending job. Covered by poll-order and
+  forgotten-job tests.
+- [x] Editing a source body uses its own editor bound to the source opened
+  for editing, so neither a canonical reload nor a finishing preview can write
+  the diary entry over a source note (or a source body over the entry).
+- [x] An unresolved Draft conflict blocks autosave until the person keeps the
+  local or the server text; a regression test covers the blocked snapshot.
+- [x] A healthy SSE stream's deliberate 45-second reconnect with an event
+  cursor no longer reports a transport loss (which paused actions and reloaded
+  canonical state); an unchanged canonical reload no longer resets the Draft
+  editor's cursor. Covered by event-worker rollover tests.
 - [ ] The preview shows the exact target path, YAML front matter, body, digest,
   and intended filesystem changes before approval.
 - [ ] Approval is accepted only for the current entry, source snapshots,
