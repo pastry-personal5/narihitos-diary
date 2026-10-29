@@ -10,3 +10,7 @@ paths:
 notion:
   token: "REPLACE_WITH_NOTION_TOKEN"
   root_page_id: "REPLACE_WITH_NOTION_ROOT_PAGE_ID"
+
+server:
+  # After 8771 and 8772, try this many additional consecutive loopback ports.
+  port_fallback_count: 8

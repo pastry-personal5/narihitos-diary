@@ -128,13 +128,22 @@ synthetic fakes. The full Rust and Swift gate passed on 2026-10-29.
 
 ### P1-M6: Control API Server
 
-Status: Planned
+Status: Done
 
 Goal: Expose the core through the secure, loopback-only `nd serve` REST, event,
 job, and lifecycle contract.
 
 Plan: [overview](milestone-06-control-api-server-overview.md),
 [architecture plan](milestone-06-control-api-server-architecture.md).
+
+Notes: The owner-approved Tokio/Axum server, strict v1 DTOs, command/CAS layer,
+bounded jobs and SSE, private lifecycle/runtime advertisement, loopback
+authorization, and content-free rotating diagnostics are implemented. Synthetic
+command, real-socket, restart, permission, retention, and privacy tests pass;
+the full Rust and Swift gate passed on 2026-10-29. A post-completion review then
+hardened prepared-source review, job/SSE recovery, request diagnostics,
+filesystem safety, and retention; its focused regressions and the complete gate
+passed again on 2026-10-29.
 
 ### P1-M7: TUI and manual workflow
 

@@ -7,8 +7,8 @@ use crate::digest::push_framed;
 use crate::{
     Approval, CompositionPath, DestinationKind, DestinationProgress, DestinationStatus, DiaryDay,
     Digest, DraftAssistantRequest, EntryBuffer, EntryConfirmation, FreshnessCheckpoint,
-    FreshnessOutcome, InvalidationReason, JobStatus, OutputPlan, Preferences, SourceCandidate,
-    SourceSnapshot, Timestamp, WorkflowState, WritingLanguage, WritingStyle,
+    FreshnessOutcome, InvalidationReason, JobStatus, OutputPlan, Preferences, SelectedSource,
+    SourceCandidate, SourceSnapshot, Timestamp, WorkflowState, WritingLanguage, WritingStyle,
 };
 
 /// Reserved markers used around model-inferred reflection text.
@@ -212,6 +212,11 @@ impl Workflow {
     }
 
     #[must_use]
+    pub const fn explicit_empty_selection(&self) -> bool {
+        self.explicit_empty_selection
+    }
+
+    #[must_use]
     pub const fn language(&self) -> Option<WritingLanguage> {
         self.language
     }
@@ -353,6 +358,36 @@ impl Workflow {
         Ok(())
     }
 
+    /// Confirms server-prepared sources and incorporates date evidence observed
+    /// by the trusted reader in the same workflow revision.
+    pub fn confirm_selected_sources(
+        &mut self,
+        expected_revision: u64,
+        selected: Vec<SelectedSource>,
+        explicitly_continue_empty: bool,
+        now: Timestamp,
+    ) -> Result<(), WorkflowError> {
+        self.expect_revision(expected_revision)?;
+        let mut seen = BTreeSet::new();
+        for source in &selected {
+            if !seen.insert(source.snapshot.source.clone()) {
+                return Err(WorkflowError::DuplicateSource);
+            }
+            let candidate = self
+                .candidates
+                .iter_mut()
+                .find(|candidate| candidate.source == source.snapshot.source)
+                .ok_or(WorkflowError::UnknownSource)?;
+            candidate.date_evidence = source.date_evidence.clone();
+        }
+        self.confirm_sources(
+            expected_revision,
+            selected.into_iter().map(|source| source.snapshot).collect(),
+            explicitly_continue_empty,
+            now,
+        )
+    }
+
     pub fn apply_freshness(
         &mut self,
         expected_revision: u64,
@@ -474,6 +509,26 @@ impl Workflow {
         if self.composition_path == path {
             return Ok(());
         }
+        self.composition_path = path;
+        self.invalidate_composition(now);
+        Ok(())
+    }
+
+    pub fn set_writing_settings(
+        &mut self,
+        expected_revision: u64,
+        language: WritingLanguage,
+        style: WritingStyle,
+        path: CompositionPath,
+        now: Timestamp,
+    ) -> Result<(), WorkflowError> {
+        self.expect_revision(expected_revision)?;
+        self.ensure_entry_editable()?;
+        if self.language == Some(language) && self.style == style && self.composition_path == path {
+            return Ok(());
+        }
+        self.language = Some(language);
+        self.style = style;
         self.composition_path = path;
         self.invalidate_composition(now);
         Ok(())

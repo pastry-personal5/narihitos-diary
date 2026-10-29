@@ -14,7 +14,7 @@ fn help_describes_only_the_two_command_shells() {
     assert!(output.status.success());
     let stdout = String::from_utf8(output.stdout).expect("help output must be UTF-8");
     assert!(stdout.contains("nd           Open the TUI (not implemented yet)"));
-    assert!(stdout.contains("nd serve     Start the Control API Server (not implemented yet)"));
+    assert!(stdout.contains("nd serve     Start the Control API Server"));
     assert!(output.stderr.is_empty());
 }
 
@@ -31,14 +31,14 @@ fn default_mode_reports_that_it_is_not_implemented() {
 }
 
 #[test]
-fn serve_reports_that_it_is_not_implemented() {
+fn serve_rejects_missing_configuration_before_creating_state() {
     let output = run_in_empty_home(&["serve"]);
 
     assert_eq!(output.status.code(), Some(1));
     assert!(output.stdout.is_empty());
     assert_eq!(
         String::from_utf8(output.stderr).expect("diagnostic must be UTF-8"),
-        "nd: Control API Server mode is not implemented yet\n"
+        "nd serve: configuration-invalid\n"
     );
 }
 
@@ -50,7 +50,7 @@ fn unsupported_arguments_fail_without_starting_a_mode() {
     assert!(output.stdout.is_empty());
     let stderr = String::from_utf8(output.stderr).expect("diagnostic must be UTF-8");
     assert!(stderr.starts_with("nd: unsupported arguments\n\n"));
-    assert!(stderr.contains("nd serve     Start the Control API Server (not implemented yet)"));
+    assert!(stderr.contains("nd serve     Start the Control API Server"));
 }
 
 fn run_in_empty_home(arguments: &[&str]) -> Output {

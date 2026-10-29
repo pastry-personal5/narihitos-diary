@@ -10,12 +10,11 @@ Markdown and publishes its body to a Notion daily section under root, year,
 and month pages. See the
 [product roadmap](docs/roadmap.md).
 
-The repository contains the P1-M3 project scaffold, P1-M4's independently
-testable workflow core and private SQLite persistence adapter, and P1-M5's
-bounded Ayumi source ingestion plus Swift iCloud bridge. The `nd` and `nd
-serve` commands deliberately report that their modes are not implemented; the
-control server assembles the production adapters in P1-M6 and the TUI arrives
-in P1-M7.
+The repository contains the independently testable workflow core, private
+SQLite persistence, bounded Ayumi source ingestion and Swift iCloud bridge,
+and P1-M6's secure loopback Control API Server. Start the foreground server
+with `cargo run -p nd -- serve`; the default `nd` TUI mode remains unfinished
+until P1-M7.
 
 ## License
 

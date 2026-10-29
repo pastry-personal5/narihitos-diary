@@ -16,9 +16,17 @@ rust-version = "1.89"
 license = "Apache-2.0"
 
 [workspace.dependencies]
+axum = { version = "=0.8.9", default-features = false, features = ["http1", "json", "query", "tokio"] }
 diary-connectors = { version = "0.1.0", path = "crates/diary-connectors", default-features = false }
 diary-control = { version = "0.1.0", path = "crates/diary-control", default-features = false }
 diary-control-contract = { version = "0.1.0", path = "crates/diary-control-contract", default-features = false }
 diary-core = { version = "0.1.0", path = "crates/diary-core", default-features = false }
 diary-tui = { version = "0.1.0", path = "crates/diary-tui", default-features = false }
+fs2 = { version = "=0.4.3", default-features = false }
+futures-core = { version = "=0.3.34", default-features = false }
+getrandom = { version = "=0.3.4", default-features = false, features = ["std"] }
 rusqlite = { version = "0.40.2", default-features = false }
+serde = { version = "=1.0.229", default-features = false, features = ["derive", "std"] }
+serde_json = { version = "=1.0.151", default-features = false, features = ["std"] }
+subtle = { version = "=2.6.1", default-features = false, features = ["std"] }
+tokio = { version = "=1.53.1", default-features = false, features = ["macros", "net", "rt-multi-thread", "signal", "sync", "time"] }

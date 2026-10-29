@@ -6,6 +6,34 @@ This changelog records owner decisions and material plan changes for Phase 1.
 
 ## Entries
 
+- 2026-10-29 — P1-M6 completion — Marked P1-M6 `Done`. Implemented the
+  owner-approved Tokio/Axum loopback server, strict v1 DTO and ETag contract,
+  purpose-named command/CAS layer, per-day reconciliation gates, server-owned
+  expiring source preparation, bounded jobs and SSE, private lock/runtime/token
+  lifecycle, and typed rotating diagnostics. Synthetic core/SQLite, real-socket,
+  isolated-process restart, permission, retention, capacity, and privacy tests
+  pass. The full Rust and Swift gate passed with Rust/Cargo 1.98.0 and Apple
+  Swift 6.4; no private diary tree, live Notion root, or model/provider was
+  accessed.
+- 2026-10-29 — P1-M6 owner approval and start — Marked P1-M6 `Active` and
+  approved the dependency and exact-limit packet in the milestone overview.
+  Approved exact direct dependencies are Tokio 1.53.1, Axum 0.8.9, Serde
+  1.0.229, Serde JSON 1.0.151, futures-core 0.3.34, getrandom 0.3.4, subtle
+  2.6.1, and fs2 0.4.3 with only the recorded features. The packet adds no
+  build tool, generator, logging/config framework, HTTP client, hosted-provider
+  choice, or Swift package. It also freezes the v1 transport, source, job, SSE,
+  identifier, port-attempt, diagnostic, and shutdown bounds and the optional
+  `server.port_fallback_count` configuration key.
+- 2026-10-29 — P1-M6 planning review — Reconciled the server plan with the
+  implemented M4/M5 contracts. Added the missing workflow-list, writing-setting,
+  manual-composition, and explicit empty-selection command boundaries; made
+  prepared source bodies/stamps server-owned and expiring with a freshness
+  recheck; defined buffer-only autosave CAS recovery; and tightened startup,
+  degraded optional capabilities, runtime/database permissions, log crash
+  recovery, numeric transport limits, job expiry, and SSE gap behavior. Fixed
+  the diagnostic `rg` example to match uppercase log levels. P1-M6 remains
+  `Planned`; no dependency, listener, production state, or private data was
+  added or accessed.
 - 2026-10-29 — P1-M6 logging requirement — Planned an internal owner-only
   Control API Server log under `.local/logs/control-api/`, with UTC-day and
   8 MiB rotation, a strict rolling 72-hour retention limit, a 24 MiB directory

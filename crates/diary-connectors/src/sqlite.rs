@@ -7,7 +7,7 @@ use diary_core::{
     IntentTerminal, InvalidationReason, JobStatus, OperationIntent, OperationLog, OutputPlan,
     PersistedWorkflow, Preferences, Receipt, ReconciliationGate, SourceAvailability,
     SourceCandidate, SourceRef, SourceSnapshot, StartOutcome, StoreError, Timestamp, Workflow,
-    WorkflowState, WorkflowStore, WritingLanguage, WritingStyle,
+    WorkflowState, WorkflowStore, WorkflowSummary, WritingLanguage, WritingStyle,
 };
 use rusqlite::{Connection, OptionalExtension, Transaction, TransactionBehavior, params};
 
@@ -79,6 +79,49 @@ impl WorkflowStore for SqliteStore {
         load_workflow(&connection, day)
     }
 
+    fn list_summaries(&self, limit: usize) -> Result<Vec<WorkflowSummary>, StoreError> {
+        if limit > 256 {
+            return Err(StoreError::InvalidRecord(
+                "workflow summary limit exceeds 256".to_owned(),
+            ));
+        }
+        let connection = self.connect()?;
+        let mut statement = connection
+            .prepare(
+                "SELECT day, state, revision, buffer_version, updated_at, discarded_at
+                 FROM workflows
+                 ORDER BY CASE WHEN state = 'completed' THEN 1 ELSE 0 END,
+                          updated_at DESC, day DESC
+                 LIMIT ?1",
+            )
+            .map_err(map_sql_error)?;
+        let rows = statement
+            .query_map([to_i64(limit, "workflow summary limit")?], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, i64>(2)?,
+                    row.get::<_, i64>(3)?,
+                    row.get::<_, i64>(4)?,
+                    row.get::<_, Option<i64>>(5)?,
+                ))
+            })
+            .map_err(map_sql_error)?;
+        rows.map(|row| {
+            let (day, state, revision, buffer_version, updated_at, discarded_at) =
+                row.map_err(map_sql_error)?;
+            Ok(WorkflowSummary {
+                day: DiaryDay::parse(day).map_err(invalid_value)?,
+                state: WorkflowState::parse(&state).map_err(invalid_value)?,
+                revision: to_u64(revision, "workflow revision")?,
+                buffer_version: to_u64(buffer_version, "buffer version")?,
+                updated_at: Timestamp(updated_at),
+                discarded_at: discarded_at.map(Timestamp),
+            })
+        })
+        .collect()
+    }
+
     fn compare_and_swap(
         &self,
         expected_revision: u64,
@@ -134,29 +177,58 @@ impl WorkflowStore for SqliteStore {
 
     fn save_preferences(&self, preferences: &Preferences) -> Result<(), StoreError> {
         let connection = self.connect()?;
-        let changed = connection
-            .execute(
-                "UPDATE preferences SET last_language = ?1, last_composition_path = ?2
-                 WHERE singleton = 1",
-                params![
-                    preferences.last_language.map(WritingLanguage::as_str),
-                    preferences.last_composition_path.as_str()
-                ],
-            )
-            .map_err(map_sql_error)?;
-        if changed != 1 {
-            return Err(StoreError::InvalidRecord(
-                "preferences singleton is missing".to_owned(),
-            ));
-        }
-        Ok(())
+        update_preferences(&connection, preferences)
     }
 
-    fn discard(&self, day: &DiaryDay, now: Timestamp) -> Result<(), StoreError> {
+    fn compare_and_swap_with_preferences(
+        &self,
+        expected_revision: u64,
+        workflow: &Workflow,
+        preferences: &Preferences,
+    ) -> Result<(), StoreError> {
         let mut connection = self.connect()?;
         let transaction = connection
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .map_err(map_sql_error)?;
+        let actual: i64 = transaction
+            .query_row(
+                "SELECT revision FROM workflows WHERE day = ?1",
+                [workflow.day().as_str()],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(map_sql_error)?
+            .ok_or_else(|| StoreError::InvalidRecord("workflow is missing".to_owned()))?;
+        if actual != to_i64(expected_revision, "workflow revision")? {
+            return Err(StoreError::StaleRevision);
+        }
+        replace_workflow(&transaction, &workflow.persisted())?;
+        update_preferences(&transaction, preferences)?;
+        transaction.commit().map_err(map_sql_error)
+    }
+
+    fn discard(
+        &self,
+        day: &DiaryDay,
+        expected_revision: u64,
+        now: Timestamp,
+    ) -> Result<(), StoreError> {
+        let mut connection = self.connect()?;
+        let transaction = connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(map_sql_error)?;
+        let actual: i64 = transaction
+            .query_row(
+                "SELECT revision FROM workflows WHERE day = ?1",
+                [day.as_str()],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(map_sql_error)?
+            .ok_or_else(|| StoreError::InvalidRecord("workflow is missing".to_owned()))?;
+        if actual != to_i64(expected_revision, "workflow revision")? {
+            return Err(StoreError::StaleRevision);
+        }
         purge_day(&transaction, day, now, true)?;
         transaction.commit().map_err(map_sql_error)
     }
@@ -194,6 +266,28 @@ impl WorkflowStore for SqliteStore {
         transaction.commit().map_err(map_sql_error)?;
         Ok(days)
     }
+}
+
+fn update_preferences(
+    connection: &Connection,
+    preferences: &Preferences,
+) -> Result<(), StoreError> {
+    let changed = connection
+        .execute(
+            "UPDATE preferences SET last_language = ?1, last_composition_path = ?2
+             WHERE singleton = 1",
+            params![
+                preferences.last_language.map(WritingLanguage::as_str),
+                preferences.last_composition_path.as_str()
+            ],
+        )
+        .map_err(map_sql_error)?;
+    if changed != 1 {
+        return Err(StoreError::InvalidRecord(
+            "preferences singleton is missing".to_owned(),
+        ));
+    }
+    Ok(())
 }
 
 impl OperationLog for SqliteStore {
@@ -2030,7 +2124,14 @@ mod tests {
                 .len(),
             1
         );
-        store.discard(abandoned.day(), Timestamp(99)).unwrap();
+        let purged_abandoned = store.load(abandoned.day()).unwrap().unwrap();
+        store
+            .discard(
+                purged_abandoned.day(),
+                purged_abandoned.revision(),
+                Timestamp(99),
+            )
+            .unwrap();
         assert_eq!(
             store
                 .unresolved_intents(Some(abandoned.day()))
@@ -2041,7 +2142,9 @@ mod tests {
 
         let restart_day = day("2026-10-30");
         let before_discard = create_started(&store, restart_day.as_str());
-        store.discard(&restart_day, Timestamp(10)).unwrap();
+        store
+            .discard(&restart_day, before_discard.revision(), Timestamp(10))
+            .unwrap();
         let discarded = store.load(&restart_day).unwrap().unwrap();
         assert_eq!(discarded.revision(), before_discard.revision() + 1);
         assert_eq!(

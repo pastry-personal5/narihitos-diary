@@ -5,7 +5,8 @@ use std::fmt;
 use crate::{
     CatalogRequest, DiaryDay, FreshnessCheckpoint, FreshnessOutcome, InspectionOutcome,
     OperationIntent, Preferences, Receipt, ReconciliationGate, SourceAccessError, SourceDiscovery,
-    SourceReadOutcome, SourceSnapshot, Timestamp, Workflow, WorkflowError, WriteOutcome,
+    SourceReadOutcome, SourceSnapshot, Timestamp, Workflow, WorkflowError, WorkflowSummary,
+    WriteOutcome,
 };
 
 pub trait Clock {
@@ -39,6 +40,10 @@ pub trait WorkflowStore {
 
     fn load(&self, day: &DiaryDay) -> Result<Option<Workflow>, StoreError>;
 
+    /// Returns at most `limit` summaries, unfinished and most-recently updated
+    /// first, followed by completed workflows in the same ordering.
+    fn list_summaries(&self, limit: usize) -> Result<Vec<WorkflowSummary>, StoreError>;
+
     /// Atomically replaces a workflow when both independent versions still
     /// match. The buffer condition is optional for non-editor commands.
     fn compare_and_swap(
@@ -51,9 +56,22 @@ pub trait WorkflowStore {
     fn load_preferences(&self) -> Result<Preferences, StoreError>;
     fn save_preferences(&self, preferences: &Preferences) -> Result<(), StoreError>;
 
+    /// Atomically commits per-entry writing settings and remembered choices.
+    fn compare_and_swap_with_preferences(
+        &self,
+        expected_revision: u64,
+        workflow: &Workflow,
+        preferences: &Preferences,
+    ) -> Result<(), StoreError>;
+
     /// Clears recoverable source/model/entry text but preserves digests,
     /// receipts, and unresolved intents.
-    fn discard(&self, day: &DiaryDay, now: Timestamp) -> Result<(), StoreError>;
+    fn discard(
+        &self,
+        day: &DiaryDay,
+        expected_revision: u64,
+        now: Timestamp,
+    ) -> Result<(), StoreError>;
 
     /// Applies the seven-day verified-output and 30-day abandoned-draft rules.
     fn purge_expired(&self, now: Timestamp) -> Result<Vec<DiaryDay>, StoreError>;
@@ -112,7 +130,7 @@ pub trait SourceReader {
 
 pub fn revalidate_workflow_sources(
     workflow: &mut Workflow,
-    reader: &impl SourceReader,
+    reader: &(impl SourceReader + ?Sized),
     checkpoint: FreshnessCheckpoint,
     now: Timestamp,
 ) -> Result<(), SourceCheckpointError> {

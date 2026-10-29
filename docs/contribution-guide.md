@@ -36,17 +36,19 @@ cargo build --workspace
 swift build --package-path helpers/apple-bridge
 ```
 
-Inspect and smoke-test the command shells. The two mode commands currently
-exit with status 1 and an explicit not-implemented diagnostic. P1-M4 adds the
-inward workflow and test-only SQLite assembly; P1-M5 adds bounded Ayumi source
-adapters and the iCloud helper commands. The production server and TUI remain
-unassembled until P1-M6 and P1-M7.
+Inspect the command boundary and start the server from the repository root.
+`nd serve` validates the owner-only configuration, private state and diagnostic
+directories, binds only numeric IPv4 loopback using the documented bounded
+port sequence, and publishes an ephemeral attachment file only after its
+health check succeeds. The default `nd` TUI mode still exits with the explicit
+not-implemented diagnostic until P1-M7.
 
 ```sh
 cargo run -p nd -- --help
 cargo run -p nd
 cargo run -p nd -- serve
 cargo test -p nd --test command_shells
+cargo test -p nd --test p1_m6_process
 printf '%s\n' '{"protocol_version":1,"request_id":"smoke-1","command":"ping","payload":{}}' | swift run --package-path helpers/apple-bridge apple-bridge
 ```
 
@@ -56,6 +58,27 @@ installed `../libexec/apple-bridge` path relative to `nd`, then
 `helpers/apple-bridge/.build/debug/apple-bridge` in a development checkout.
 Source tests use synthetic trees and fake helper services or executables; they
 must not read a contributor's live iCloud tree.
+
+The optional `server.port_fallback_count` configuration value defaults to `8`
+and may be `0` through `16`. The server always tries `8771` and `8772` first,
+then that many additional consecutive ports. An unavailable Apple helper or
+unconfigured Notion destination is reported as a disabled capability and does
+not prevent the manual no-notes workflow.
+
+Content-free `ndlog-v1` diagnostics are stored in the Git-ignored
+`.local/logs/control-api/` directory with owner-only permissions. Contributors,
+Codex, and Claude Code may use bounded read-only inspection without a Control
+API token:
+
+```sh
+tail -n 200 .local/logs/control-api/control-api.log
+rg 'level=(WARN|ERROR)' .local/logs/control-api/
+```
+
+Do not change log permissions or inspect the separate Application Support
+runtime directory, which contains the ephemeral control token. Logs must never
+contain diary text, source metadata or paths, credentials, raw request data, or
+arbitrary error strings.
 
 ## Required validation
 

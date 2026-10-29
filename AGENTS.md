@@ -201,6 +201,23 @@ swift build --package-path helpers/apple-bridge           # build the Apple help
 swift test --package-path helpers/apple-bridge            # test the Apple helper with fakes
 ```
 
+## Control API diagnostics
+
+P1-M6 writes versioned, content-free server records beneath the Git-ignored
+`.local/logs/control-api/` directory. Codex and Claude Code may inspect only
+that log directory for diagnosis; do not change its permissions and do not
+read the separate Application Support runtime directory or its control token.
+Keep inspection bounded, for example:
+
+```sh
+tail -n 200 .local/logs/control-api/control-api.log
+rg 'level=(WARN|ERROR)' .local/logs/control-api/
+```
+
+Records use `ndlog-v1` with typed ASCII fields. Treat diary text, source
+metadata or paths, credentials, request data, and arbitrary errors in a record
+as a privacy defect.
+
 ## Code conventions
 
 - Format Rust code with rustfmt; do not hand-format around it.

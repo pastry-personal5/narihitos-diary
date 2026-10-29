@@ -15,3 +15,4 @@ diary-control.workspace = true
 diary-control-contract.workspace = true
 diary-core.workspace = true
 diary-tui.workspace = true
+tokio.workspace = true

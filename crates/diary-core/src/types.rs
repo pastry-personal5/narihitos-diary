@@ -261,6 +261,16 @@ pub struct Preferences {
     pub last_composition_path: CompositionPath,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct WorkflowSummary {
+    pub day: DiaryDay,
+    pub state: WorkflowState,
+    pub revision: u64,
+    pub buffer_version: u64,
+    pub updated_at: Timestamp,
+    pub discarded_at: Option<Timestamp>,
+}
+
 impl Default for Preferences {
     fn default() -> Self {
         Self {
