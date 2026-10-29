@@ -52,14 +52,21 @@ pub enum SourceReadError {
 /// the naming style of [`SourceReadError`].
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum SourceWriteError {
-    /// The file's current content no longer matches the caller's expected
-    /// digest; nothing was written.
+    /// The file's current content no longer matches what the caller last
+    /// saw: either the readable body's digest no longer matches
+    /// `expected_content_digest`, or the file now contains content the
+    /// parser could not safely read (an ambiguous attachment line, or
+    /// unclosed front matter). Nothing was written.
     Stale,
-    /// A filesystem operation failed.
-    Io,
+    /// A filesystem operation failed. Carries the paths, if any, that were
+    /// already deleted before the failure (always empty for
+    /// `overwrite_body`, which deletes nothing).
+    Io(Vec<PathBuf>),
     /// A path (the source itself or a linked audio file) failed the same
-    /// symlink/traversal/containment checks used for reads; nothing was
-    /// written or deleted.
+    /// symlink/traversal/containment checks used for reads, or an audio
+    /// link destination contained a `?`/`#` that could let it resolve to a
+    /// different literal file than the one the audio-extension check saw;
+    /// nothing was written or deleted.
     UnsafePath,
 }
 
@@ -362,9 +369,24 @@ impl AyumiCatalog {
     }
 
     /// Overwrites the Markdown body of `source`, preserving its front matter
-    /// (including `created_at`) byte-for-byte. Rejects the write with
-    /// `SourceWriteError::Stale` if the file's current readable body does not
-    /// match `expected_content_digest`, without modifying anything.
+    /// text (including `created_at`) — after the same BOM-strip and
+    /// CRLF-to-LF normalization [`parse_markdown`] applies, so this is not a
+    /// byte-for-byte reproduction of a source file that used a BOM or CRLF
+    /// line endings, only of the header text itself. Any audio links the
+    /// parser withheld from the readable body are re-appended after
+    /// `new_body` (each as its own `[audio](<destination>)` line) so a
+    /// later re-parse, and therefore [`Self::delete_source`], still finds
+    /// them. Rejects the write with `SourceWriteError::Stale`, without
+    /// modifying anything, if the file's current readable body does not
+    /// match `expected_content_digest`, or if the file now contains any
+    /// content the parser could not safely read (an ambiguous attachment
+    /// line, or unclosed front matter) that the caller's digest could not
+    /// have accounted for.
+    ///
+    /// `expected_content_digest` is a digest of the readable body text
+    /// (`Digest::of_bytes` over the sanitized `SourceSnapshot.body`), not
+    /// the same thing as `FreshnessStamp.content_digest` returned here or
+    /// elsewhere in this module, which digests the whole raw file.
     pub fn overwrite_body(
         &self,
         source: &SourceRef,
@@ -374,51 +396,91 @@ impl AyumiCatalog {
         let path = self
             .resolve(source)
             .map_err(|_| SourceWriteError::UnsafePath)?;
-        let bytes = fs::read(&path).map_err(|_| SourceWriteError::Io)?;
-        let parsed = parse_markdown(&bytes).ok_or(SourceWriteError::Io)?;
+        let metadata = fs::symlink_metadata(&path).map_err(|_| SourceWriteError::Io(Vec::new()))?;
+        if metadata.len() > MAX_SOURCE_BYTES {
+            return Err(SourceWriteError::Io(Vec::new()));
+        }
+        let bytes = fs::read(&path).map_err(|_| SourceWriteError::Io(Vec::new()))?;
+        let parsed = parse_markdown(&bytes).ok_or(SourceWriteError::Io(Vec::new()))?;
+        if parsed.ambiguous_attachment {
+            return Err(SourceWriteError::Stale);
+        }
         if Digest::of_bytes(parsed.body.as_bytes()) != *expected_content_digest {
             return Err(SourceWriteError::Stale);
         }
 
+        // Trim any trailing newlines from the caller's body before adding
+        // the separator: without this, a body that itself already ends in
+        // a blank line (for example, one previously round-tripped through
+        // this same re-attachment) would accumulate an extra blank line on
+        // every edit instead of keeping exactly one separator.
+        let mut new_body_section = new_body.trim_end_matches('\n').to_owned();
+        if !parsed.audio_links.is_empty() {
+            new_body_section.push_str("\n\n");
+            for (index, link) in parsed.audio_links.iter().enumerate() {
+                if index > 0 {
+                    new_body_section.push('\n');
+                }
+                new_body_section.push_str("[audio](");
+                new_body_section.push_str(link);
+                new_body_section.push(')');
+            }
+        }
+
         let header = front_matter_header(&bytes);
         let new_contents = match header {
-            Some(header) => format!("---\n{header}\n---\n{new_body}"),
-            None => new_body.to_owned(),
+            Some(header) => format!("---\n{header}\n---\n{new_body_section}"),
+            None => new_body_section,
         };
 
         // Re-check immediately before writing: the path must still be a
         // non-symlink regular file inside the catalog base. This guards
         // against the file being swapped for a symlink between the read
         // above and this write.
-        let metadata = fs::symlink_metadata(&path).map_err(|_| SourceWriteError::Io)?;
+        let metadata = fs::symlink_metadata(&path).map_err(|_| SourceWriteError::Io(Vec::new()))?;
         if metadata.file_type().is_symlink() || !metadata.is_file() {
             return Err(SourceWriteError::UnsafePath);
         }
 
-        fs::write(&path, new_contents.as_bytes()).map_err(|_| SourceWriteError::Io)?;
-        let metadata = fs::symlink_metadata(&path).map_err(|_| SourceWriteError::Io)?;
-        stamp(&metadata, new_contents.as_bytes()).map_err(|_| SourceWriteError::Io)
+        fs::write(&path, new_contents.as_bytes()).map_err(|_| SourceWriteError::Io(Vec::new()))?;
+        let metadata = fs::symlink_metadata(&path).map_err(|_| SourceWriteError::Io(Vec::new()))?;
+        stamp(&metadata, new_contents.as_bytes()).map_err(|_| SourceWriteError::Io(Vec::new()))
     }
 
     /// Deletes `source` and every locally-resolvable audio file linked from
     /// its body. Each linked audio destination is resolved against the
     /// note's own parent directory and must pass the same
-    /// symlink/traversal/containment checks as [`Self::resolve`]; if any
-    /// resolved audio path escapes that directory, nothing is deleted and
-    /// `SourceWriteError::UnsafePath` is returned. On success, returns the
-    /// paths actually deleted, audio files first and the note file last.
+    /// symlink/traversal/containment checks as [`Self::resolve`]; a
+    /// destination containing a literal `?` or `#` is rejected outright
+    /// (genuine Ayumi audio links never contain one, and such a character
+    /// would let the literal file deleted differ from the file the
+    /// audio-extension check inspected). All audio links are validated
+    /// before anything is deleted: if any one of them is unsafe, nothing is
+    /// deleted and `SourceWriteError::UnsafePath` is returned. On success,
+    /// returns the paths actually deleted, audio files first and the note
+    /// file last. On an I/O failure partway through deleting, returns
+    /// `SourceWriteError::Io` carrying the paths already deleted.
     pub fn delete_source(&self, source: &SourceRef) -> Result<Vec<PathBuf>, SourceWriteError> {
         let path = self
             .resolve(source)
             .map_err(|_| SourceWriteError::UnsafePath)?;
         let parent = path.parent().ok_or(SourceWriteError::UnsafePath)?;
-        let canonical_parent = fs::canonicalize(parent).map_err(|_| SourceWriteError::Io)?;
+        let canonical_parent =
+            fs::canonicalize(parent).map_err(|_| SourceWriteError::Io(Vec::new()))?;
 
-        let bytes = fs::read(&path).map_err(|_| SourceWriteError::Io)?;
-        let parsed = parse_markdown(&bytes).ok_or(SourceWriteError::Io)?;
+        let metadata = fs::symlink_metadata(&path).map_err(|_| SourceWriteError::Io(Vec::new()))?;
+        if metadata.len() > MAX_SOURCE_BYTES {
+            return Err(SourceWriteError::Io(Vec::new()));
+        }
+        let bytes = fs::read(&path).map_err(|_| SourceWriteError::Io(Vec::new()))?;
+        let parsed = parse_markdown(&bytes).ok_or(SourceWriteError::Io(Vec::new()))?;
 
-        let mut audio_paths = Vec::with_capacity(parsed.audio_links.len());
+        let mut audio_paths: Vec<PathBuf> = Vec::with_capacity(parsed.audio_links.len());
+        let mut seen = std::collections::HashSet::new();
         for link in &parsed.audio_links {
+            if link.contains('?') || link.contains('#') {
+                return Err(SourceWriteError::UnsafePath);
+            }
             let relative = Path::new(link);
             if relative.is_absolute() {
                 return Err(SourceWriteError::UnsafePath);
@@ -434,15 +496,17 @@ impl AyumiCatalog {
             if !canonical.starts_with(&canonical_parent) {
                 return Err(SourceWriteError::UnsafePath);
             }
-            audio_paths.push(canonical);
+            if seen.insert(canonical.clone()) {
+                audio_paths.push(canonical);
+            }
         }
 
+        let mut deleted = Vec::with_capacity(audio_paths.len() + 1);
         for audio_path in &audio_paths {
-            fs::remove_file(audio_path).map_err(|_| SourceWriteError::Io)?;
+            fs::remove_file(audio_path).map_err(|_| SourceWriteError::Io(deleted.clone()))?;
+            deleted.push(audio_path.clone());
         }
-        fs::remove_file(&path).map_err(|_| SourceWriteError::Io)?;
-
-        let mut deleted = audio_paths;
+        fs::remove_file(&path).map_err(|_| SourceWriteError::Io(deleted.clone()))?;
         deleted.push(path);
         Ok(deleted)
     }
@@ -1458,6 +1522,115 @@ fi
     }
 
     #[test]
+    fn overwrite_body_reattaches_audio_links_so_delete_can_still_find_them() {
+        let root = temp();
+        let note_path = root.join("Ayumi/2026/10/28/n.md");
+        let audio_path = root.join("Ayumi/2026/10/28/recording.m4a");
+        fs::write(&note_path, "keep\n[audio](recording.m4a)\nmore").unwrap();
+        fs::write(&audio_path, b"fake audio bytes").unwrap();
+        let catalog = AyumiCatalog::new(&root, "Ayumi").unwrap();
+        let source = SourceRef::new(CONNECTOR, "2026/10/28/n.md").unwrap();
+        let ReadOutcome::Read(selected) = catalog.read_selected(&source).unwrap() else {
+            panic!()
+        };
+        assert_eq!(selected.snapshot.body, "keep\nmore");
+        let digest = Digest::of_bytes(selected.snapshot.body.as_bytes());
+
+        catalog
+            .overwrite_body(&source, "updated keep\nmore", &digest)
+            .unwrap();
+
+        // The audio link the parser withheld from the readable body must be
+        // re-appended on disk, or a later read/delete can never find it again.
+        assert_eq!(
+            fs::read_to_string(&note_path).unwrap(),
+            "updated keep\nmore\n\n[audio](recording.m4a)"
+        );
+
+        // The blank separator line survives re-parsing as a trailing blank
+        // line in the readable body (the parser only strips the
+        // attachment-only line itself, consistent with how it has always
+        // handled a blank line preceding an attachment); what matters is
+        // that the real prose is intact and the audio link is still found.
+        let ReadOutcome::Read(refreshed) = catalog.read_selected(&source).unwrap() else {
+            panic!()
+        };
+        assert_eq!(refreshed.snapshot.body, "updated keep\nmore\n");
+
+        let deleted = catalog.delete_source(&source).unwrap();
+        assert!(!note_path.exists());
+        assert!(
+            !audio_path.exists(),
+            "delete_source must still find and delete the re-attached audio file"
+        );
+        assert_eq!(deleted.len(), 2);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn overwrite_body_rejects_when_ambiguous_attachment_appeared_since_last_read() {
+        let root = temp();
+        let path = root.join("Ayumi/2026/10/28/n.md");
+        fs::write(&path, "keep text").unwrap();
+        let catalog = AyumiCatalog::new(&root, "Ayumi").unwrap();
+        let source = SourceRef::new(CONNECTOR, "2026/10/28/n.md").unwrap();
+        let ReadOutcome::Read(selected) = catalog.read_selected(&source).unwrap() else {
+            panic!()
+        };
+        assert_eq!(selected.snapshot.body, "keep text");
+        let digest = Digest::of_bytes(selected.snapshot.body.as_bytes());
+
+        // Simulate another device adding an unseen, ambiguous attachment
+        // line. It is stripped from the readable body (so the body digest
+        // alone still matches) but the file now carries content the parser
+        // could not safely surface to the caller. (`read_selected` reports
+        // this file as `Unreadable` once it is ambiguous, which is exactly
+        // why `overwrite_body` cannot rely on the readable-body digest
+        // alone to detect it.)
+        fs::write(&path, "keep text\n[audio]: private/recording.m4a").unwrap();
+
+        let result = catalog.overwrite_body(&source, "new body", &digest);
+        assert_eq!(result, Err(SourceWriteError::Stale));
+        assert_eq!(
+            fs::read_to_string(&path).unwrap(),
+            "keep text\n[audio]: private/recording.m4a"
+        );
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn overwrite_body_rejects_when_front_matter_becomes_unclosed_since_last_read() {
+        let root = temp();
+        let path = root.join("Ayumi/2026/10/28/n.md");
+        fs::write(&path, "---\ncreated_at: 2026-10-28T09:00:00+09:00\n---\n").unwrap();
+        let catalog = AyumiCatalog::new(&root, "Ayumi").unwrap();
+        let source = SourceRef::new(CONNECTOR, "2026/10/28/n.md").unwrap();
+        let ReadOutcome::Read(selected) = catalog.read_selected(&source).unwrap() else {
+            panic!()
+        };
+        assert_eq!(selected.snapshot.body, "");
+        let digest = Digest::of_bytes(selected.snapshot.body.as_bytes());
+
+        // Simulate the front matter becoming unclosed (so the parser can no
+        // longer see any body at all). Its readable body is also empty, so
+        // the empty-body digest alone would wrongly match the caller's
+        // stale digest and silently destroy the hidden content.
+        fs::write(
+            &path,
+            "---\ncreated_at: 2026-10-28T09:00:00+09:00\nsome more content without closing",
+        )
+        .unwrap();
+
+        let result = catalog.overwrite_body(&source, "new body", &digest);
+        assert_eq!(result, Err(SourceWriteError::Stale));
+        assert_eq!(
+            fs::read_to_string(&path).unwrap(),
+            "---\ncreated_at: 2026-10-28T09:00:00+09:00\nsome more content without closing"
+        );
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
     fn delete_source_removes_note_and_its_audio() {
         let root = temp();
         let note_path = root.join("Ayumi/2026/10/28/n.md");
@@ -1478,32 +1651,93 @@ fi
     }
 
     #[test]
-    fn delete_source_rejects_traversal_audio_link() {
+    fn delete_source_rejects_traversal_via_symlinked_subdirectory() {
+        // Task 2's string-level `destination_is_path_safe` check (no leading
+        // `/`, no `..` component) already excludes an attempt like
+        // `../../../x.m4a`, so that shape never reaches `delete_source`'s own
+        // defense. This test uses a destination that passes the upstream
+        // string check cleanly (`sub/recording.m4a`, no `..`, no leading `/`)
+        // but where `sub` is a symlink whose target escapes the note's
+        // directory — the exact case the resolved/canonicalized
+        // `starts_with` check exists to catch.
         let root = temp();
-        let outside_target = root.join("outside-passwd.m4a");
-        fs::write(&outside_target, b"must not be deleted").unwrap();
-        let note_path = root.join("Ayumi/2026/10/28/n.md");
-        fs::write(
-            &note_path,
-            "prose\n[audio](../../../outside-passwd.m4a)\nmore prose",
-        )
-        .unwrap();
+        let outside_dir = root.join("outside");
+        fs::create_dir_all(&outside_dir).unwrap();
+        let outside_audio = outside_dir.join("recording.m4a");
+        fs::write(&outside_audio, b"must not be deleted").unwrap();
+        let note_dir = root.join("Ayumi/2026/10/28");
+        symlink(&outside_dir, note_dir.join("sub")).unwrap();
+        let note_path = note_dir.join("n.md");
+        fs::write(&note_path, "prose\n[audio](sub/recording.m4a)\nmore prose").unwrap();
         let catalog = AyumiCatalog::new(&root, "Ayumi").unwrap();
         let source = SourceRef::new(CONNECTOR, "2026/10/28/n.md").unwrap();
 
-        // Confirm the upstream parser already withholds this destination, so
-        // it is a defense-in-depth check: either the parser kept it out of
-        // `audio_links` entirely (nothing unsafe is ever attempted) or, were
-        // it present, our own containment check would reject it. Either way
-        // nothing outside the fixture is touched and the outside file survives.
         let result = catalog.delete_source(&source);
-        match result {
-            Ok(deleted) => {
-                assert!(deleted.iter().all(|p| p != &outside_target));
-            }
-            Err(error) => assert_eq!(error, SourceWriteError::UnsafePath),
-        }
-        assert!(outside_target.exists(), "traversal target must survive");
+
+        assert_eq!(result, Err(SourceWriteError::UnsafePath));
+        assert!(
+            note_path.exists(),
+            "the all-or-nothing design means the note itself must survive \
+             when any one of its audio links is unsafe"
+        );
+        assert_eq!(
+            fs::read(&outside_audio).unwrap(),
+            b"must not be deleted",
+            "the file the symlink escapes to must be untouched"
+        );
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn delete_source_rejects_audio_link_with_query_or_fragment_character() {
+        // `is_local_audio_destination` strips a trailing `?...`/`#...` only
+        // to decide whether a destination *looks like* audio; the literal
+        // destination string (including the `?`/`#` suffix) is what
+        // `delete_source` would otherwise resolve and delete. A literal
+        // sibling file with that exact crafted name must never be reachable
+        // through this path.
+        let root = temp();
+        let note_path = root.join("Ayumi/2026/10/28/n.md");
+        let sibling_path = root.join("Ayumi/2026/10/28/other.m4a?.md");
+        fs::write(&sibling_path, b"unrelated sibling note").unwrap();
+        fs::write(&note_path, "prose\n[audio](other.m4a?.md)\nmore").unwrap();
+        let catalog = AyumiCatalog::new(&root, "Ayumi").unwrap();
+        let source = SourceRef::new(CONNECTOR, "2026/10/28/n.md").unwrap();
+
+        let result = catalog.delete_source(&source);
+
+        assert_eq!(result, Err(SourceWriteError::UnsafePath));
+        assert!(
+            note_path.exists(),
+            "nothing should be deleted when any audio link is unsafe"
+        );
+        assert_eq!(fs::read(&sibling_path).unwrap(), b"unrelated sibling note");
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn delete_source_dedupes_duplicate_audio_links() {
+        let root = temp();
+        let note_path = root.join("Ayumi/2026/10/28/n.md");
+        let audio_path = root.join("Ayumi/2026/10/28/recording.m4a");
+        fs::write(
+            &note_path,
+            "prose\n[audio](recording.m4a)\nmore\n[audio](./recording.m4a)\nend",
+        )
+        .unwrap();
+        fs::write(&audio_path, b"fake audio bytes").unwrap();
+        let catalog = AyumiCatalog::new(&root, "Ayumi").unwrap();
+        let source = SourceRef::new(CONNECTOR, "2026/10/28/n.md").unwrap();
+
+        let deleted = catalog.delete_source(&source).unwrap();
+
+        assert!(!note_path.exists());
+        assert!(!audio_path.exists());
+        assert_eq!(
+            deleted.len(),
+            2,
+            "the duplicate alias must collapse to a single delete, not fail the second remove"
+        );
         let _ = fs::remove_dir_all(root);
     }
 
