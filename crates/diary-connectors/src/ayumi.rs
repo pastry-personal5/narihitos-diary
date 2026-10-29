@@ -584,6 +584,9 @@ struct Parsed {
     header_day: Option<DiaryDay>,
     warning: Option<String>,
     ambiguous_attachment: bool,
+    // Consumed by a later task's delete path; not yet read outside tests.
+    #[allow(dead_code)]
+    audio_links: Vec<String>,
 }
 
 fn parse_markdown(bytes: &[u8]) -> Option<Parsed> {
@@ -600,6 +603,7 @@ fn parse_markdown(bytes: &[u8]) -> Option<Parsed> {
                 header_day: None,
                 warning: Some("front matter is unclosed".into()),
                 ambiguous_attachment: true,
+                audio_links: Vec::new(),
             });
         };
         (Some(header), body)
@@ -642,10 +646,14 @@ fn parse_markdown(bytes: &[u8]) -> Option<Parsed> {
     };
     let mut output = Vec::new();
     let mut ambiguous_attachment = false;
+    let mut audio_links = Vec::new();
     for line in body.lines() {
         let trimmed = line.trim();
         match classify_attachment_line(trimmed) {
-            AttachmentLine::StandaloneLocalAudio => continue,
+            AttachmentLine::StandaloneLocalAudio(destination) => {
+                audio_links.push(destination);
+                continue;
+            }
             AttachmentLine::Ambiguous => {
                 ambiguous_attachment = true;
                 continue;
@@ -659,6 +667,7 @@ fn parse_markdown(bytes: &[u8]) -> Option<Parsed> {
         header_day,
         warning,
         ambiguous_attachment,
+        audio_links,
     })
 }
 
@@ -680,10 +689,10 @@ fn unquote(value: &str) -> &str {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 enum AttachmentLine {
     Safe,
-    StandaloneLocalAudio,
+    StandaloneLocalAudio(String),
     Ambiguous,
 }
 
@@ -725,10 +734,21 @@ fn classify_attachment_line(line: &str) -> AttachmentLine {
         && open > 0
         && close + 1 == line.len()
         && !destination.is_empty()
+        && destination_is_path_safe(destination)
     {
-        return AttachmentLine::StandaloneLocalAudio;
+        return AttachmentLine::StandaloneLocalAudio(destination.to_owned());
     }
     AttachmentLine::Ambiguous
+}
+
+/// Returns whether a parsed link destination is safe to treat as a
+/// locally-resolvable relative path: no leading `/` (absolute) and no `..`
+/// component that could escape the source's directory.
+fn destination_is_path_safe(destination: &str) -> bool {
+    !destination.starts_with('/')
+        && destination
+            .split('/')
+            .all(|component| !component.is_empty() && component != "..")
 }
 
 fn matching_link_close(value: &str) -> Option<usize> {
@@ -1107,6 +1127,26 @@ mod tests {
         let titled = parse_markdown(b"[audio](private/recording.mp3 \"voice memo\")").unwrap();
         assert!(!titled.ambiguous_attachment);
         assert_eq!(titled.body, "");
+    }
+
+    #[test]
+    fn parser_collects_standalone_local_audio_links_removed_from_body() {
+        let parsed = parse_markdown(b"prose\n[audio](recording.m4a)\nmore prose").unwrap();
+        assert_eq!(parsed.audio_links, vec!["recording.m4a".to_owned()]);
+        assert_eq!(parsed.body, "prose\nmore prose");
+
+        let ambiguous = parse_markdown(b"prose [audio](private/recording.mp3) remains").unwrap();
+        assert!(ambiguous.audio_links.is_empty());
+
+        let traversal =
+            parse_markdown(b"prose\n[audio](../outside/recording.m4a)\nmore prose").unwrap();
+        assert!(traversal.audio_links.is_empty());
+        assert!(traversal.ambiguous_attachment);
+
+        let absolute =
+            parse_markdown(b"prose\n[audio](/Users/x/recording.m4a)\nmore prose").unwrap();
+        assert!(absolute.audio_links.is_empty());
+        assert!(absolute.ambiguous_attachment);
     }
 
     #[test]
