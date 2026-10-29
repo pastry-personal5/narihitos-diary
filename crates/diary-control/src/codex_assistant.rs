@@ -22,7 +22,7 @@ use serde_json::{Value, json};
 
 use crate::CodexProfileConfig;
 
-const MINIMUM_CODEX_VERSION: (u64, u64, u64) = (0, 138, 0);
+const MINIMUM_CODEX_VERSION: (u64, u64, u64) = (0, 165, 0);
 const APP_SERVER_TIMEOUT: Duration = Duration::from_secs(120);
 const MAX_PROTOCOL_LINE_BYTES: usize = 20 * 1024 * 1024;
 
@@ -330,6 +330,8 @@ impl DraftAssistant for CodexAssistant {
             return Err(DraftAssistantError::Unavailable);
         }
         let payload = request_payload(request);
+        let sandbox_dir = job_sandbox_dir()?;
+        let sandbox_cwd = sandbox_dir.to_string_lossy().into_owned();
         let invocation = CodexInvocation {
             launch: self.launch.clone(),
             initialize: json!({
@@ -351,7 +353,7 @@ impl DraftAssistant for CodexAssistant {
                 "jsonrpc": "2.0",
                 "id": 2,
                 "method": "thread/start",
-                "params": {"ephemeral": true, "cwd": "/"}
+                "params": {"ephemeral": true, "cwd": sandbox_cwd}
             }),
             turn_start: json!({
                 "jsonrpc": "2.0",
@@ -362,7 +364,6 @@ impl DraftAssistant for CodexAssistant {
                     "approvalPolicy": "never",
                     "sandboxPolicy": {
                         "type": "readOnly",
-                        "access": {"type": "restricted", "readableRoots": []},
                         "networkAccess": false
                     },
                     "input": [{
@@ -376,12 +377,26 @@ impl DraftAssistant for CodexAssistant {
                 }
             }),
         };
-        let output = self
-            .transport
-            .invoke(&invocation, cancelled)
-            .map_err(map_transport_error)?;
+        let result = self.transport.invoke(&invocation, cancelled);
+        let _ = fs::remove_dir_all(&sandbox_dir);
+        let output = result.map_err(map_transport_error)?;
         parse_output(request, output)
     }
+}
+
+/// Creates a fresh, empty, owner-only directory to scope a single job's
+/// `cwd`/`runtimeWorkspaceRoots`. The app-server's own sandbox no longer
+/// accepts an empty `readableRoots` list (`readOnly.access` was removed), so
+/// confinement now also relies on there being nothing reachable to read:
+/// this directory never contains diary content and is removed once the job
+/// completes.
+fn job_sandbox_dir() -> Result<PathBuf, DraftAssistantError> {
+    let suffix = crate::lifecycle::random_id("").map_err(|_| DraftAssistantError::Unavailable)?;
+    let dir = std::env::temp_dir().join(format!("nd-codex-sandbox-{suffix}"));
+    fs::create_dir(&dir).map_err(|_| DraftAssistantError::Unavailable)?;
+    fs::set_permissions(&dir, fs::Permissions::from_mode(0o700))
+        .map_err(|_| DraftAssistantError::Unavailable)?;
+    Ok(dir)
 }
 
 fn descriptor(
@@ -761,14 +776,33 @@ mod tests {
             Some(&Value::Bool(false))
         );
         assert_eq!(
+            invocation.turn_start.pointer("/params/sandboxPolicy/type"),
+            Some(&Value::String("readOnly".to_owned()))
+        );
+        assert!(
             invocation
                 .turn_start
-                .pointer("/params/sandboxPolicy/access/readableRoots"),
-            Some(&json!([]))
+                .pointer("/params/sandboxPolicy/access")
+                .is_none(),
+            "app-server rejects sandboxPolicy.access; it must not be sent"
         );
         assert_eq!(
             invocation.turn_start.pointer("/params/approvalPolicy"),
             Some(&Value::String("never".to_owned()))
+        );
+        let cwd = invocation
+            .thread_start
+            .pointer("/params/cwd")
+            .and_then(Value::as_str)
+            .unwrap();
+        assert_ne!(cwd, "/", "cwd must not expose the real filesystem root");
+        assert!(
+            Path::new(cwd).starts_with(std::env::temp_dir()),
+            "cwd must be a job-scoped sandbox directory, got {cwd}"
+        );
+        assert!(
+            fs::metadata(cwd).is_err(),
+            "sandbox directory must be removed once the job completes"
         );
     }
 
@@ -804,6 +838,48 @@ mod tests {
         for forbidden in ["source_id", "path", "metadata", "notion", "credential"] {
             assert!(!prompt.contains(forbidden));
         }
+    }
+
+    struct FailingTransport {
+        invocation: Mutex<Option<CodexInvocation>>,
+    }
+
+    impl CodexAppServerTransport for FailingTransport {
+        fn invoke(
+            &self,
+            invocation: &CodexInvocation,
+            _cancelled: &AtomicBool,
+        ) -> Result<Value, CodexTransportError> {
+            *self.invocation.lock().unwrap() = Some(invocation.clone());
+            Err(CodexTransportError::Unavailable)
+        }
+    }
+
+    #[test]
+    fn sandbox_directory_is_removed_even_when_the_transport_fails() {
+        let transport = Arc::new(FailingTransport {
+            invocation: Mutex::new(None),
+        });
+        let adapter = CodexAssistant::with_transport(&profile("one"), true, transport.clone());
+        let error = adapter
+            .invoke(
+                &AssistantRequest::ExtractMemories(
+                    MemoryExtractionRequest::new(vec!["body".to_owned()]).unwrap(),
+                ),
+                &AtomicBool::new(false),
+            )
+            .unwrap_err();
+        assert_eq!(error, DraftAssistantError::Unavailable);
+        let invocation = transport.invocation.lock().unwrap().clone().unwrap();
+        let cwd = invocation
+            .thread_start
+            .pointer("/params/cwd")
+            .and_then(Value::as_str)
+            .unwrap();
+        assert!(
+            fs::metadata(cwd).is_err(),
+            "sandbox directory must be removed even after a failed job"
+        );
     }
 
     #[test]

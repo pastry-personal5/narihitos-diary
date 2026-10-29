@@ -185,25 +185,41 @@ packet(s) above in `AGENTS.md` and the Phase 1 changelog.
   server per profile was considered and rejected for exactly that reason.
 - **Per-turn confinement**, set on every `turn/start`, never left to the
   profile's own `config.toml`:
-  - `sandboxPolicy: { type: "readOnly", access: { type: "restricted",
-    readableRoots: [] } }` and `networkAccess: false` — no readable path at
-    all; diary content rides in the prompt, never the filesystem, so the
-    account can read nothing, including `config/global_config.yaml`'s
-    Notion token.
+  - `sandboxPolicy: { type: "readOnly", networkAccess: false }`, combined
+    with scoping each job's `thread/start.cwd` (and so its
+    `runtimeWorkspaceRoots`) to a freshly created, empty, owner-only (`0700`)
+    directory under the system temp dir that is removed once the job ends.
+    **Revised in 0.165.0:** the app-server dropped
+    `sandboxPolicy.access`/`readableRoots` (`turn/start` now rejects it with
+    `-32600 Invalid request: readOnly.access is no longer supported; use
+    permissionProfile for restricted reads`); the only replacement profiles
+    the installed CLI exposes (`:read-only`, `:workspace`,
+    `:danger-full-access`) can read anywhere, so confinement now also relies
+    on there being nothing diary-related reachable from the scoped `cwd`
+    rather than on a literal zero-readable-roots sandbox flag. Diary content
+    still rides only in the prompt, never the filesystem.
   - MCP servers disabled (`-c mcp_servers={}` or the equivalent app-server
     launch override) and web search disabled (`-c web_search="disabled"`),
     so no account-side tool exists for a hostile prompt to invoke regardless
-    of what the account's own `config.toml` otherwise enables.
+    of what the account's own `config.toml` otherwise enables. **Known gap:**
+    confirmed against the installed 0.165.0 binary, `-c mcp_servers={}` does
+    *not* clear a profile's `config.toml`-defined `[mcp_servers.*]` entries
+    (e.g. `filesystem`, `context7`, `node_repl`) — they still start on every
+    `thread/start`. `-c model=...` overrides do take effect in the same
+    invocation, so this is specific to how `mcp_servers` merges, not a
+    general `-c` failure. This needs its own investigation and fix; until
+    then, the "no MCP servers" guarantee is not actually enforced on this
+    CLI version.
   - Approval policy set so the child never blocks waiting for a human who
     is not present (the non-interactive/never-ask equivalent of `-a never`).
   - Local history/rollout persistence disabled (`history.persistence =
     "none"`, or an `ephemeral` thread) so no diary text is written inside
     `codex_home`.
-  - Readiness check pins a minimum Codex version (0.138.0, the floor for
-    restricted read-access policies) against the resolved binary at each
-    profile's `codex_executable`; the installed development binary is
-    0.165.0. A profile whose resolved binary is older is a typed unavailable
-    backend, not a startup failure.
+  - Readiness check pins a minimum Codex version (0.165.0, matching the
+    installed binary and the `sandboxPolicy.access` removal above) against
+    the resolved binary at each profile's `codex_executable`. A profile
+    whose resolved binary is older is a typed unavailable backend, not a
+    startup failure.
 - **Credential and account location:** inside each profile's own
   `codex_home`, managed by Codex's own login state. Rust never reads, copies,
   enumerates, or logs it — only the directory's own existence and safe
