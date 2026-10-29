@@ -1,0 +1,5 @@
+# nextest profile for `cargo nextest run`. A hung test is killed instead of
+# stalling the whole run; the slowest known test (p1_m7_worker) takes ~10 s.
+[profile.default]
+fail-fast = false
+slow-timeout = { period = "30s", terminate-after = 4 }

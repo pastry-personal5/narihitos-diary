@@ -137,6 +137,11 @@ include `make run`, `make serve`, `make fmt`, `make fmt-check`, `make clippy`,
 `make test`, `make rust-test`, `make swift-build`, and `make swift-test`; run
 plain `make` to list them.
 
+For quick iteration, `make fast-test` runs the Rust tests with
+[cargo-nextest](https://nexte.st) (`cargo install cargo-nextest --locked`) plus
+the doc tests. `.config/nextest.toml` kills any test that runs past 120 s so a
+hang cannot stall the run. It does not replace the gate above.
+
 ## AI prompts
 
 - Never hard-code text sent to an AI in Rust or Swift. Every prompt lives in `assets/prompts/<provider>/<action>.md`, paired with its provider, model, and reasoning effort; the file format is in [assets/prompts/README.md](../assets/prompts/README.md).

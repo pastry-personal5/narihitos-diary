@@ -1,6 +1,6 @@
 .DEFAULT_GOAL := help
 
-.PHONY: help build run serve fmt fmt-check clippy test rust-test swift-build swift-test check
+.PHONY: help build run serve fmt fmt-check clippy test rust-test fast-test swift-build swift-test check
 
 help:
 	@printf '%s\n' \
@@ -12,6 +12,7 @@ help:
 		'make clippy       Lint all Rust targets and features' \
 		'make test         Run Rust and Swift tests' \
 		'make rust-test    Run all Rust tests and features' \
+		'make fast-test    Run Rust tests with nextest (hung tests are killed)' \
 		'make swift-build  Build the Swift helper' \
 		'make swift-test   Test the Swift helper' \
 		'make check        Run the complete Rust and Swift gate'
@@ -39,6 +40,10 @@ test: rust-test swift-test
 
 rust-test:
 	cargo test --all-features --quiet
+
+fast-test:
+	cargo nextest run --all-features
+	cargo test --all-features --doc --quiet
 
 swift-build:
 	swift build --package-path helpers/apple-bridge
