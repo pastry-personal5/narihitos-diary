@@ -48,6 +48,21 @@ pub enum SourceReadError {
     Access(SourceAccessError),
 }
 
+/// Errors from a write-back or delete operation on an Ayumi source. Mirrors
+/// the naming style of [`SourceReadError`].
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum SourceWriteError {
+    /// The file's current content no longer matches the caller's expected
+    /// digest; nothing was written.
+    Stale,
+    /// A filesystem operation failed.
+    Io,
+    /// A path (the source itself or a linked audio file) failed the same
+    /// symlink/traversal/containment checks used for reads; nothing was
+    /// written or deleted.
+    UnsafePath,
+}
+
 /// Catalog rooted at the already-resolved iCloud Drive location.  The
 /// configured Ayumi value is strictly one directory component beneath it.
 #[derive(Clone, Debug)]
@@ -345,6 +360,105 @@ impl AyumiCatalog {
         }
         Ok(canonical)
     }
+
+    /// Overwrites the Markdown body of `source`, preserving its front matter
+    /// (including `created_at`) byte-for-byte. Rejects the write with
+    /// `SourceWriteError::Stale` if the file's current readable body does not
+    /// match `expected_content_digest`, without modifying anything.
+    pub fn overwrite_body(
+        &self,
+        source: &SourceRef,
+        new_body: &str,
+        expected_content_digest: &Digest,
+    ) -> Result<FreshnessStamp, SourceWriteError> {
+        let path = self
+            .resolve(source)
+            .map_err(|_| SourceWriteError::UnsafePath)?;
+        let bytes = fs::read(&path).map_err(|_| SourceWriteError::Io)?;
+        let parsed = parse_markdown(&bytes).ok_or(SourceWriteError::Io)?;
+        if Digest::of_bytes(parsed.body.as_bytes()) != *expected_content_digest {
+            return Err(SourceWriteError::Stale);
+        }
+
+        let header = front_matter_header(&bytes);
+        let new_contents = match header {
+            Some(header) => format!("---\n{header}\n---\n{new_body}"),
+            None => new_body.to_owned(),
+        };
+
+        // Re-check immediately before writing: the path must still be a
+        // non-symlink regular file inside the catalog base. This guards
+        // against the file being swapped for a symlink between the read
+        // above and this write.
+        let metadata = fs::symlink_metadata(&path).map_err(|_| SourceWriteError::Io)?;
+        if metadata.file_type().is_symlink() || !metadata.is_file() {
+            return Err(SourceWriteError::UnsafePath);
+        }
+
+        fs::write(&path, new_contents.as_bytes()).map_err(|_| SourceWriteError::Io)?;
+        let metadata = fs::symlink_metadata(&path).map_err(|_| SourceWriteError::Io)?;
+        stamp(&metadata, new_contents.as_bytes()).map_err(|_| SourceWriteError::Io)
+    }
+
+    /// Deletes `source` and every locally-resolvable audio file linked from
+    /// its body. Each linked audio destination is resolved against the
+    /// note's own parent directory and must pass the same
+    /// symlink/traversal/containment checks as [`Self::resolve`]; if any
+    /// resolved audio path escapes that directory, nothing is deleted and
+    /// `SourceWriteError::UnsafePath` is returned. On success, returns the
+    /// paths actually deleted, audio files first and the note file last.
+    pub fn delete_source(&self, source: &SourceRef) -> Result<Vec<PathBuf>, SourceWriteError> {
+        let path = self
+            .resolve(source)
+            .map_err(|_| SourceWriteError::UnsafePath)?;
+        let parent = path.parent().ok_or(SourceWriteError::UnsafePath)?;
+        let canonical_parent = fs::canonicalize(parent).map_err(|_| SourceWriteError::Io)?;
+
+        let bytes = fs::read(&path).map_err(|_| SourceWriteError::Io)?;
+        let parsed = parse_markdown(&bytes).ok_or(SourceWriteError::Io)?;
+
+        let mut audio_paths = Vec::with_capacity(parsed.audio_links.len());
+        for link in &parsed.audio_links {
+            let relative = Path::new(link);
+            if relative.is_absolute() {
+                return Err(SourceWriteError::UnsafePath);
+            }
+            let candidate = canonical_parent.join(relative);
+            let metadata =
+                fs::symlink_metadata(&candidate).map_err(|_| SourceWriteError::UnsafePath)?;
+            if metadata.file_type().is_symlink() || !metadata.is_file() {
+                return Err(SourceWriteError::UnsafePath);
+            }
+            let canonical =
+                fs::canonicalize(&candidate).map_err(|_| SourceWriteError::UnsafePath)?;
+            if !canonical.starts_with(&canonical_parent) {
+                return Err(SourceWriteError::UnsafePath);
+            }
+            audio_paths.push(canonical);
+        }
+
+        for audio_path in &audio_paths {
+            fs::remove_file(audio_path).map_err(|_| SourceWriteError::Io)?;
+        }
+        fs::remove_file(&path).map_err(|_| SourceWriteError::Io)?;
+
+        let mut deleted = audio_paths;
+        deleted.push(path);
+        Ok(deleted)
+    }
+}
+
+/// Returns the raw front-matter header text (between the opening and closing
+/// `---` delimiters), exactly as [`split_front_matter`] splits it for
+/// [`parse_markdown`], or `None` if there is no front matter. Used to
+/// preserve the header verbatim when overwriting a note's body.
+fn front_matter_header(bytes: &[u8]) -> Option<String> {
+    let input = std::str::from_utf8(bytes).ok()?;
+    let input = input.strip_prefix('\u{feff}').unwrap_or(input);
+    let normalized = input.replace("\r\n", "\n");
+    let after = normalized.strip_prefix("---\n")?;
+    let (header, _) = split_front_matter(after)?;
+    Some(header.to_owned())
 }
 
 #[derive(Clone, Debug)]
@@ -584,8 +698,6 @@ struct Parsed {
     header_day: Option<DiaryDay>,
     warning: Option<String>,
     ambiguous_attachment: bool,
-    // Consumed by a later task's delete path; not yet read outside tests.
-    #[allow(dead_code)]
     audio_links: Vec<String>,
 }
 
@@ -1290,6 +1402,140 @@ fi
             )
             .unwrap();
         }
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn overwrite_body_replaces_text_and_returns_new_stamp() {
+        let root = temp();
+        let path = root.join("Ayumi/2026/10/28/n.md");
+        fs::write(
+            &path,
+            "---\ncreated_at: 2026-10-28T09:00:00+09:00\n---\noriginal body",
+        )
+        .unwrap();
+        let catalog = AyumiCatalog::new(&root, "Ayumi").unwrap();
+        let source = SourceRef::new(CONNECTOR, "2026/10/28/n.md").unwrap();
+        let ReadOutcome::Read(selected) = catalog.read_selected(&source).unwrap() else {
+            panic!()
+        };
+        let expected_digest = Digest::of_bytes(selected.snapshot.body.as_bytes());
+        assert_eq!(selected.snapshot.body, "original body");
+
+        let new_stamp = catalog
+            .overwrite_body(&source, "new body", &expected_digest)
+            .unwrap();
+
+        let on_disk = fs::read_to_string(&path).unwrap();
+        assert_eq!(
+            on_disk,
+            "---\ncreated_at: 2026-10-28T09:00:00+09:00\n---\nnew body"
+        );
+        let ReadOutcome::Read(refreshed) = catalog.read_selected(&source).unwrap() else {
+            panic!()
+        };
+        assert_eq!(refreshed.snapshot.body, "new body");
+        assert_eq!(
+            new_stamp.content_digest,
+            refreshed.snapshot.stamp.content_digest
+        );
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn overwrite_body_rejects_stale_digest() {
+        let root = temp();
+        let path = root.join("Ayumi/2026/10/28/n.md");
+        fs::write(&path, "original body").unwrap();
+        let catalog = AyumiCatalog::new(&root, "Ayumi").unwrap();
+        let source = SourceRef::new(CONNECTOR, "2026/10/28/n.md").unwrap();
+
+        let wrong_digest = Digest::of_bytes(b"not the current body");
+        let result = catalog.overwrite_body(&source, "new body", &wrong_digest);
+        assert_eq!(result, Err(SourceWriteError::Stale));
+        assert_eq!(fs::read_to_string(&path).unwrap(), "original body");
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn delete_source_removes_note_and_its_audio() {
+        let root = temp();
+        let note_path = root.join("Ayumi/2026/10/28/n.md");
+        let audio_path = root.join("Ayumi/2026/10/28/recording.m4a");
+        fs::write(&note_path, "prose\n[audio](recording.m4a)\nmore prose").unwrap();
+        fs::write(&audio_path, b"fake audio bytes").unwrap();
+        let catalog = AyumiCatalog::new(&root, "Ayumi").unwrap();
+        let source = SourceRef::new(CONNECTOR, "2026/10/28/n.md").unwrap();
+
+        let deleted = catalog.delete_source(&source).unwrap();
+
+        assert!(!note_path.exists());
+        assert!(!audio_path.exists());
+        assert_eq!(deleted.len(), 2);
+        assert!(deleted[0].ends_with("recording.m4a"), "audio deleted first");
+        assert!(deleted[1].ends_with("n.md"), "note deleted last");
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn delete_source_rejects_traversal_audio_link() {
+        let root = temp();
+        let outside_target = root.join("outside-passwd.m4a");
+        fs::write(&outside_target, b"must not be deleted").unwrap();
+        let note_path = root.join("Ayumi/2026/10/28/n.md");
+        fs::write(
+            &note_path,
+            "prose\n[audio](../../../outside-passwd.m4a)\nmore prose",
+        )
+        .unwrap();
+        let catalog = AyumiCatalog::new(&root, "Ayumi").unwrap();
+        let source = SourceRef::new(CONNECTOR, "2026/10/28/n.md").unwrap();
+
+        // Confirm the upstream parser already withholds this destination, so
+        // it is a defense-in-depth check: either the parser kept it out of
+        // `audio_links` entirely (nothing unsafe is ever attempted) or, were
+        // it present, our own containment check would reject it. Either way
+        // nothing outside the fixture is touched and the outside file survives.
+        let result = catalog.delete_source(&source);
+        match result {
+            Ok(deleted) => {
+                assert!(deleted.iter().all(|p| p != &outside_target));
+            }
+            Err(error) => assert_eq!(error, SourceWriteError::UnsafePath),
+        }
+        assert!(outside_target.exists(), "traversal target must survive");
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn delete_source_with_ambiguous_attachment_line_deletes_note_but_no_audio() {
+        let root = temp();
+        let note_path = root.join("Ayumi/2026/10/28/n.md");
+        let safe_audio = root.join("Ayumi/2026/10/28/safe.m4a");
+        let ambiguous_target = root.join("Ayumi/2026/10/28/private");
+        fs::create_dir_all(&ambiguous_target).unwrap();
+        let ambiguous_audio = ambiguous_target.join("ambiguous.mp3");
+        fs::write(&safe_audio, b"safe audio bytes").unwrap();
+        fs::write(&ambiguous_audio, b"ambiguous audio bytes").unwrap();
+        fs::write(
+            &note_path,
+            "prose\n[audio](safe.m4a)\nprose [audio](private/ambiguous.mp3) remains",
+        )
+        .unwrap();
+        let catalog = AyumiCatalog::new(&root, "Ayumi").unwrap();
+        let source = SourceRef::new(CONNECTOR, "2026/10/28/n.md").unwrap();
+
+        let deleted = catalog.delete_source(&source).unwrap();
+
+        assert!(!note_path.exists());
+        assert!(!safe_audio.exists());
+        assert!(
+            ambiguous_audio.exists(),
+            "ambiguous attachment target must be left untouched"
+        );
+        assert_eq!(deleted.len(), 2);
+        assert!(deleted.iter().any(|p| p.ends_with("safe.m4a")));
+        assert!(deleted.iter().any(|p| p.ends_with("n.md")));
         let _ = fs::remove_dir_all(root);
     }
 }
