@@ -6,6 +6,22 @@ This changelog records owner decisions and material plan changes for Phase 1.
 
 ## Entries
 
+- 2026-10-29 — M8 post-implementation correction — The Codex app-server
+  transport now follows the complete documented connection lifecycle:
+  `initialize`, the required `initialized` notification, `thread/start`, and
+  `turn/start`. It includes complete client metadata, accepts output only when
+  `turn/completed` reports `turn.status: completed`, maps failed and interrupted
+  turns to safe typed outcomes, and unconditionally kills and reaps the per-job
+  child after success or any protocol error.
+
+- 2026-10-29 — Owner decision — Sources-stage Ayumi maintenance — P1-M8 is
+  reopened for per-source assistant refinement with approve/reject, direct
+  body editing, and explicitly confirmed hard deletion. Approve/edit writes
+  the real note; delete removes it and only safely resolved linked audio. The
+  canonical six workflow stages remain unchanged. This amends the earlier
+  three-action Apple adapter scope: Codex and Apple now both support the fourth
+  source-refinement action; refinement input remains en-US Ayumi text.
+
 - 2026-10-29 — Owner decision — M8 Apple on-device packet — The owner approved
   the Apple on-device production-adapter packet, the last of M8's five gating
   packets. Deployment target: the latest stable macOS/Foundation Models SDK

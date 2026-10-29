@@ -20,8 +20,8 @@ publishes its body to a Notion daily section.
   decoded, transcribed, or supplied to diary composition.
 - Compose the entry in a multiline editor, with optional reviewed two-pass
   drafting and paragraph review through a selectable assistant-backend
-  registry: hosted by default (provider undecided), Apple on-device, and future
-  approved adapters without a workflow-layout change.
+  registry: Codex through `codex app-server` by default, Apple on-device, and
+  future approved adapters without a workflow-layout change.
 - Produce one finished diary entry as a Markdown file on the local filesystem.
 - Amend a completed entry, replacing only content the app itself wrote.
 - Use the configured Notion root page with `YYYY` year and `YYYY-MM` month
@@ -183,7 +183,7 @@ run recorded in the overview, completing P1-M7.
 
 ### P1-M8: Draft assistants
 
-Status: Active
+Status: Done
 
 Goal: Add an extensible assistant-backend registry with hosted-default and Apple
 on-device two-pass drafting and paragraph review, without bypassing human review
@@ -192,22 +192,18 @@ or the data-egress boundary.
 Plan: [overview](milestone-08-draft-assistants-overview.md),
 [architecture plan](milestone-08-draft-assistants-architecture.md).
 
-Notes: Planning is active after the completed P1-M7 manual slice. The
-overview's gate is split: the contract/migration packet unblocks the
-provider-neutral core, SQLite, Control API, and TUI work; the configuration
-packet separately unblocks the strict Codex profile parser; and the
-hosted-default and Apple packets each unblock only their own production
-adapter. All five packets (contract/migration, configuration, hosted-default,
-Apple, and the Codex configuration/hosted-adapter integration) are now
-owner-approved and recorded in the overview and the Phase 1 changelog, but no
-implementation has started yet. The already-approved multi-profile Codex
-configuration shape (see `AGENTS.md` "Composition") does not by itself select
-Codex as a provider; that selection is the separately recorded hosted-default
-packet above.
+Notes: The original assistant slice passed its gate on 2026-10-29. P1-M8 was
+reopened for the owner-approved Sources-stage refine/edit/delete subflow.
+Contract v3/schema v5, strict multi-profile Codex
+configuration, confined per-job `codex app-server`, Apple Foundation Models,
+durable bound artifacts, assistant jobs/resources, and the Compose TUI vertical
+slice passed the full Rust and Swift milestone gate. Synthetic tests use no live
+model, account, private diary, or iCloud tree; detailed evidence is in the
+overview.
 
 ### P1-M9: Local publication and recovery
 
-Status: Planned
+Status: Active
 
 Goal: Preview, approve, write, verify, and recover the local Markdown output
 without clobbering different content.

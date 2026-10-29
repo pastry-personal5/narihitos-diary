@@ -6,9 +6,9 @@ This document summarizes the intended user-visible diary workflow. The
 [architecture](architecture.md) describes where the behavior lives;
 the [terminal UX](ux-tui.md) describes how it appears to a person.
 
-P1-M7 implements the manual journey through complete-entry Review. P1-M8 is
-active for assistant planning, with production work gated on its owner decision
-packets; Preview, Publish, and amendments remain planned for later milestones.
+P1-M7 implements the manual journey through complete-entry Review. P1-M8 adds
+the optional Codex hosted and Apple Foundation Models assistant paths inside
+Compose; Preview, Publish, and amendments remain planned for later milestones.
 The implemented client keeps unavailable later behavior visible but locked, so
 the stage model below remains stable as it arrives.
 
@@ -30,7 +30,11 @@ stage, and activating one displays its content in the right Main Pane.
    valid offset-aware `created_at` date can suggest a note for the chosen day.
    Show disagreements and warnings; the person decides which readable notes to
    include. Activating a source note in the Resources Sidebar shows its readable text in
-   the Main Pane without changing whether it is included. Acquire included
+   the Main Pane without changing whether it is included. From that inspection,
+   the person can request a digest-bound assistant refinement, approve or reject
+   it, edit the body directly, or explicitly confirm hard deletion of the note
+   and its safely resolved linked audio. Approve/edit writes the real Ayumi note.
+   Acquire included
    cloud-only notes when needed, then confirm a fresh source selection. A source
    change requires rereading and reconfirmation before any output. A day with no
    notes can continue through an explicit "continue without notes"
@@ -81,14 +85,24 @@ stage, and activating one displays its content in the right Main Pane.
   detect or block it.
 - Audio and attachment paths do not enter composition or output, and attachment
   presence does not change eligibility.
+- Linked audio is deleted by path only when the person explicitly confirms
+  deletion of its Ayumi source; it is never opened, decoded, transcribed, or sent.
 - The complete edited entry requires confirmation, and a blank entry cannot be
   confirmed. Assistant drafts and paragraph reviews are never accepted
   automatically.
-- Drafting is hosted by default, so readable note bodies, memories, drafts, and
-  the edited entry may be sent to the hosted provider, with no extra consent
-  step. Note metadata (location, weather), attachment paths, audio, and
-  credentials never leave the Mac. The screen labels the selected assistant
-  backend and whether its composition path is hosted or Apple on-device.
+- Drafting is hosted by default when at least one configured Codex profile is
+  ready. Extraction may send only confirmed readable note bodies; drafting may
+  send only reviewed memories and an explicitly selected prior draft; paragraph
+  review may send only the displayed paragraph. Writing settings accompany only
+  drafting and review. Each hosted job starts a fresh confined `codex
+  app-server` process for the selected profile with no readable filesystem
+  roots, network, MCP servers, web search, approval prompts, or persisted
+  history. Note metadata (location, weather), persistent source IDs, attachment
+  paths, audio, credentials, and Notion details never leave the Mac. Apple
+  Foundation Models keeps the same action contract on device and appears
+  unavailable when the model or locale is not ready. The screen labels the
+  selected backend and whether its composition path is hosted or Apple
+  on-device; manual editing always remains available.
 - A different local file at the target path is never overwritten automatically.
   Conflicting same-day Notion content stops publication for resolution. A
   conflict shows both versions and offers only reread, discard the entry, or

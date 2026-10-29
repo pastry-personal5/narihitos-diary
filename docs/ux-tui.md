@@ -8,8 +8,10 @@ component vocabulary is in [ux-terms.md](ux-terms.md).
 
 ## Current interface
 
-P1-M7 now implements the manual Start → Sources → Compose → Review slice in the
-`nd` terminal client; Preview and Publish remain locked for later milestones.
+The `nd` terminal client implements Start → Sources → Compose → Review,
+including M8 backend selection, two-pass memory review and drafting, paragraph
+suggestions, assistant job progress/cancellation, and manual fallback. Preview
+and Publish remain locked for later milestones.
 The adaptive shell keeps both sidebars inline at 120 columns or wider, overlays
 Resources from 100 through 119, and opens either focused sidebar over the Main
 Pane from 80 through 99. Work Status keeps its four content rows, while Command
@@ -136,7 +138,9 @@ selection only after its readable snapshot has been reviewed.
 The editor should keep backend/path, language, and style choices visible and
 allow paste, multiline editing, and review of source-linked memories. The
 Resources Sidebar keeps the draft, confirmed sources, and assistant suggestions
-reachable. Opening a source is read-only; returning to the draft preserves the
+reachable. Opening a source exposes Refine, Approve, Reject, Edit, and Delete
+controls. Edit reuses the multiline editor; Delete requires an Enter/Esc
+confirmation naming the source and linked-audio consequence. Returning to the draft preserves the
 unsent buffer and cursor. When an assistant draft completes against the current
 buffer version, it becomes active and its full text opens editable in the Main
 Pane. A late result remains inspectable but cannot overwrite unsent or newer

@@ -14,3 +14,11 @@ notion:
 server:
   # After 8771 and 8772, try this many additional consecutive loopback ports.
   port_fallback_count: 8
+
+assistants:
+  # Zero or more profiles are allowed. Each alias becomes backend `codex.<alias>`.
+  codex_profiles:
+    - alias: "example"
+      codex_home: "/ABSOLUTE/PATH/TO/CODEX_HOME"
+      # Optional; when omitted, `codex` is resolved from PATH at startup.
+      codex_executable: "/ABSOLUTE/PATH/TO/codex"

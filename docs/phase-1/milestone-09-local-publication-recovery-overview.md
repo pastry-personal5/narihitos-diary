@@ -1,6 +1,6 @@
 # P1-M9: Local publication and recovery overview
 
-Status: Planned
+Status: Active
 
 This milestone completes a safe local-only diary journey: preview, approve,
 write, verify, recover, and resolve local conflicts. Notion may appear as

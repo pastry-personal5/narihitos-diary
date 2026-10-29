@@ -145,8 +145,10 @@ two samples are approximately 4.9 seconds and 33.7 seconds long. The Markdown
 body already includes transcription-related metadata and prose, so audio
 decoding is not demonstrably required for the MVP.
 
-Phase 1 ignores audio attachments. It does not play, copy, upload, decode,
-transcribe, delete, or use audio for composition. Audio attachment paths are
+Phase 1 ignores audio attachments while reading and composing. It does not
+play, copy, upload, decode, transcribe, or use audio for composition. The one
+write-side exception is explicit source deletion: safely resolved linked audio
+is deleted by path together with its Ayumi note. Audio attachment paths are
 also excluded from composition input and final output. An entry remains eligible
 whether it has no attachment, one attachment, or multiple attachments; the
 application can recognize an audio link in order to omit it but must not open

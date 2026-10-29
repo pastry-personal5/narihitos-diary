@@ -25,8 +25,13 @@ cp config/global_config.example.yaml config/global_config.yaml
 chmod 600 config/global_config.yaml
 ```
 
-Replace every placeholder before using a later server implementation. The
-Ayumi value is one directory name beneath iCloud Drive, not an absolute path.
+Replace every placeholder before starting the server. The Ayumi value is one
+directory name beneath iCloud Drive, not an absolute path. The optional
+`assistants.codex_profiles` collection accepts zero or more records containing
+a safe alias, an absolute owner-controlled `codex_home`, and an optional
+absolute `codex_executable`. Each valid record becomes a separate hosted
+backend; a runtime readiness failure disables that descriptor without stopping
+manual editing or other backends.
 By default the server will resolve `config/global_config.yaml` from its working
 directory. `ND_CONFIG_PATH` selects a different file and takes precedence.
 
@@ -44,10 +49,10 @@ Inspect the command boundary and start the server from the repository root.
 directories, binds only numeric IPv4 loopback using the documented bounded
 port sequence, and publishes an ephemeral attachment file only after its
 health check succeeds. Run it in one terminal, then open the TUI from a second
-terminal. The implemented P1-M7 slice supports Start, Sources, manual Compose,
-and complete-entry Review; Preview and Publish are visible but locked until
-their later milestones. The TUI needs at least 80 columns by 30 rows and never
-starts the server itself.
+terminal. The implemented client supports Start, Sources, manual or assisted
+Compose, and complete-entry Review; Preview and Publish are visible but locked
+until their later milestones. The TUI needs at least 80 columns by 30 rows and
+never starts the server itself.
 
 ```sh
 cargo run -p nd -- --help

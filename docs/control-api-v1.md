@@ -2,10 +2,10 @@
 
 Status: Active
 
-This document describes how the P1-M7 terminal client attaches to the loopback
-server after P1-M12's pre-client contract revision. The REST namespace remains
-`/v1`; the current native `contract_version` is `2` and rejects incompatible
-clients. The checked Rust DTO and route table in
+This document describes how the terminal client attaches to the loopback
+server. The REST namespace remains `/v1`; P1-M8 advances the current native
+`contract_version` to `3` and rejects incompatible clients. The checked Rust
+DTO and route table in
 `diary-control-contract` remain the executable contract.
 
 ## Attachment and authorization
@@ -30,9 +30,10 @@ RFC 9457 problem JSON and SSE, uses `Cache-Control: no-store`.
 The route inventory is frozen in `diary_control_contract::ROUTES`. The current
 server exposes health/capabilities/setup, preferences, workflows, discovery,
 source preparation and confirmation, explicit no-notes continuation, writing
-settings, opening the Draft editor for manual composition, entry
-save/confirmation, jobs, and events. Draft-assistant, output, amendment,
-publication, and `/mcp` routes do not exist.
+settings, assistant backend selection, memory extraction/review, draft
+requests/results, paragraph-review suggestions/resolution, opening the Draft
+editor for manual composition, entry save/confirmation, jobs, and events.
+Output, amendment, publication, and `/mcp` routes do not exist.
 `source:read`, including availability-aware discovery and preparation, is
 advertised and accepted only while the Swift helper is available; its absence
 does not prevent the explicit continue-without-notes action from a newly
@@ -40,11 +41,29 @@ started workflow.
 
 Capabilities report `manual_workflow_available` separately from
 `assistant_backends[]`. Manual editing has no backend ID or composition path.
-Until P1-M8 changes this executable contract, the backend array is empty and
-writing settings accept only a null assistant backend ID. A future descriptor
-binds one stable backend ID to its display label, hosted or Apple-on-device
-path, availability/reason, supported languages, and supported actions.
-Preferences remember an optional backend ID, never an independent path.
+Each descriptor binds one stable backend ID to its display label, hosted or
+Apple-on-device path, availability/reason, supported languages, and supported
+actions. Preferences and workflows remember an optional backend ID, never an
+independent path; the server derives the path. `GET /v1/assistant-backends`
+returns the same safe global descriptor collection. Selecting or highlighting a
+backend does not invoke it.
+
+Assistant actions are jobs observed and cancelled through `/v1/jobs/{id}`.
+Extraction accepts no content body from the client: the server rereads the
+confirmed source snapshots, rechecks freshness before invocation and commit,
+and constructs an ordinal-only provider envelope. `memory-review` is a
+conditional human-reviewed resource. A draft request uses reviewed memory and
+an explicitly requested prior draft, then populates the unconfirmed entry only
+if its captured buffer version remains current. Paragraph review binds the
+displayed UTF-8 range to the buffer version and exact-text digest; resolution
+accepts or rejects once under the same binding. Artifacts remain durable and
+inspectable when stale, but stale material cannot mutate canonical text.
+
+Per-source resources add assistant refinement, suggestion resolution, direct
+body edit, and confirmed delete. Refinement sends only readable body text and
+stores a content-digest-bound proposal. Approve/edit use the digest as an
+optimistic precondition. Delete requires `confirm: true` and cascades only to
+linked audio paths validated by the Ayumi adapter; audio bytes are never read.
 
 Workflow IDs use `wf_YYYYMMDD` but are opaque to clients. Workflow mutations
 require strong `If-Match: "wf-<revision>"`; entry autosave instead requires
@@ -71,8 +90,13 @@ a discovery result.
 
 ## Bounds and recovery
 
-Requests are at most 1 MiB with JSON nesting at most 16; entry text is at most
-512 KiB. Workflow lists are bounded to 256 and paged 50 at a time; a workflow
+Requests are at most 8 MiB plus a 64 KiB JSON envelope (to permit one direct
+source-body edit) with JSON nesting at most 16; entry, reviewed-memory,
+and draft text are at most 512 KiB. Memory extraction returns at most 128
+candidates of 4 KiB each and at most 64 request-local source ordinals. A
+paragraph and its replacement are at most 32 KiB; explanations are at most 4
+KiB; draft and paragraph results contain at most 32 validated reflection
+ranges. Workflow lists are bounded to 256 and paged 50 at a time; a workflow
 has at most 512 candidates, candidate-list pages contain at most 256 items, and
 an entry has at most 64 selected sources. Other request strings are at most 4
 KiB, and source-ID lists reject duplicates. A source is at most 8 MiB and

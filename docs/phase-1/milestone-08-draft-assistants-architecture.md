@@ -1,6 +1,6 @@
 # P1-M8: Draft assistants architecture plan
 
-Status: Active
+Status: Done
 
 This plan extends the implemented manual workflow with action-specific,
 version-bound assistant proposals. It keeps provider execution at the outer
@@ -256,7 +256,7 @@ strictly capped, `Cache-Control: no-store` remains universal, and response
 bounds account for the approved maximum draft or paragraph size. A contract
 fixture proves unknown fields and old/new mixed clients fail closed.
 
-## Global configuration and conditional Codex profiles
+## Global configuration and Codex profiles
 
 The approved configuration shape is a collection of structured records, not a
 singleton and not a shell-command string:
@@ -276,14 +276,10 @@ shell-lookalike-string shape (`run_command: "CODEX_HOME=... codex"`), which no
 implementation ever used; `codex_home` and `codex_executable` directly replace
 it, so there is no command grammar to parse.
 
-The owner-approved configuration packet must first select how this nested YAML
-is parsed. Parsing and readiness are two different gates, and only the first
-one can fail server startup — this repo's existing config reader uses
-`#[serde(deny_unknown_fields)]`, so an unrecognized key under `assistants:`
-already means `nd serve` refuses to start, and M8 must not widen that to a
-filesystem check that can fail for reasons having nothing to do with syntax
-(an unmounted volume, a not-yet-installed `codex`, for a profile nobody has
-selected yet):
+The owner-approved hand-rolled parser accepts exactly this nested shape.
+Parsing and readiness are two different gates, and only syntax and shape can
+fail server startup; an unmounted volume or not-yet-installed `codex` instead
+makes that profile's descriptor unavailable:
 
 - **Parse-time (startup error):** unknown or duplicate keys, duplicate
   aliases, invalid backend-ID aliases, a missing or non-absolute
@@ -328,18 +324,15 @@ stay inside config validation and process setup; API state, SQLite, TUI text,
 diagnostics, prompts, and safe errors use only the alias-derived backend
 ID/display label.
 
-If no Codex adapter packet is approved, valid profile records are inert: no
-descriptor is registered and no process is launched. If approved, each profile
-is a separate hosted registry member. The implementation must use the selected
-documented Codex surface with fixed structured output, a private empty working
-directory, explicit tool/filesystem/network denial, bounded in-memory capture,
-and termination of the complete child process group. It never forwards raw
-stdout/stderr to logs or clients. A profile that fails a content-free readiness
-check is a typed unavailable backend; the server never probes a different home
-or account.
+The approved Codex adapter registers each profile as a separate hosted registry
+member and invokes only `codex app-server` with structured output, explicit
+tool/filesystem/network denial, bounded in-memory capture, and termination of
+the complete child process group. It never forwards raw stdout/stderr to logs
+or clients. A profile that fails a content-free readiness check is a typed
+unavailable backend; the server never probes a different home or account.
 
-**Candidate fixed argv, for the separate Codex adapter packet to confirm, not a
-decision made here.** The owner confirmed `pp7` and `work` are separate
+**Rejected earlier `codex exec` candidate (historical rationale).** Before the
+owner selected `codex app-server`, the owner confirmed `pp7` and `work` are separate
 Codex/ChatGPT accounts, so the per-alias `codex_home` separation above stays
 in the same spirit as originally approved, now expressed through the
 structured-fields shape. Current upstream

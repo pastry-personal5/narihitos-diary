@@ -3,8 +3,9 @@
 Make remembering a day feel effortless.
 
 The active Phase 1 MVP is a macOS terminal client that reads Markdown source
-notes from a mounted iCloud directory, lets the user choose which dated source
-notes belong in an entry, and composes it with a selectable assistant backend,
+notes from a mounted iCloud directory, lets the user inspect, refine, edit, or
+explicitly delete an Ayumi source and its linked audio, choose which dated source
+notes belong in an entry, and compose it with a selectable assistant backend,
 paragraph suggestions, or manual writing in an always-available Draft editor.
 It saves the confirmed entry as local Markdown and publishes it to a Notion
 daily section. See the [product roadmap](docs/roadmap.md) and
@@ -13,9 +14,13 @@ boundaries.
 
 ## Status
 
-P1-M7 (manual Start → Sources → Compose → Review) is done; P1-M8 (assistant
-backends) is active, with no production assistant backend live yet. Preview
-and Publish remain visibly locked until their later milestones.
+P1-M8 is done and adds optional Codex hosted and Apple on-device assistants for
+memory extraction, drafting, paragraph review, and source refinement. Codex profiles are
+configured explicitly and each call
+uses a fresh confined `codex app-server` process; Apple assistance is available
+only when Foundation Models reports ready. Manual editing remains available.
+P1-M9 (local publication and recovery) is active. Preview and Publish remain
+visibly locked until their implementation milestones land.
 
 ## Quick start
 

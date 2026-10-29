@@ -1,28 +1,23 @@
 # P1-M8: Draft assistants overview
 
-Status: Active
+Status: Done
 
 This milestone adds optional assistant backends to the completed manual
 workflow without weakening the Draft editor, source-freshness, or human-review
-contracts. The plan is grounded in the implemented P1-M12/P1-M7 baseline.
-Provider-neutral core, schema, Control API, and TUI work needs only the
-contract and migration packet below; the strict `assistants:` configuration
-parser (today the Codex profile collection, and any later hosted/Apple keys
-added to the same file) needs the configuration packet; and each production
-adapter (hosted and Apple) needs only its own packet; the hosted-default
-packet is Codex, reached only through `codex app-server`. See "Decision and
-approval gate" for the exact split.
+contracts. The implementation is grounded in the P1-M12/P1-M7 baseline and the
+resolved contract, configuration, hosted-Codex, and Apple packets below. The
+hosted default is Codex, reached only through `codex app-server`.
 
 ## Goal
 
 Offer a chosen hosted default and Apple on-device memory extraction, drafting,
-and paragraph review through an extensible backend registry. Every action uses
+paragraph review, and Ayumi source refinement through an extensible backend registry. Every action uses
 exactly one selected backend, sends only its action-specific allowed data, and
 produces a version-bound proposal that cannot confirm or publish an entry.
 
-## Implemented baseline
+## Starting baseline
 
-P1-M8 extends these observed contracts rather than rebuilding them:
+P1-M8 extended these pre-milestone contracts rather than rebuilding them:
 
 - P1-M12 implemented stable backend IDs and descriptors, optional backend
   selection, hosted versus Apple-on-device composition paths, assistant-neutral
@@ -34,24 +29,19 @@ P1-M8 extends these observed contracts rather than rebuilding them:
   and SSE workers, job polling and cancellation, autosave with an independent
   buffer version, recovery, the six canonical stages, and the shared
   three-pane layout M8 must extend.
-- The server still advertises no assistant backends and rejects every non-null
-  backend selection. No extraction, memory, draft, suggestion, or paragraph
-  review route exists.
-- The current core request/response placeholders are not yet the M8 contract:
-  they are one flat envelope of strings, cannot represent source-linked memory
-  candidates, and do not prevent an action from receiving irrelevant allowed
-  fields.
-- The strict global-config reader currently accepts only the existing scalar
-  sections; it cannot parse the approved collection of Codex profiles. The
-  Apple helper protocol is iCloud-only and caps one frame at 64 KiB, so M8 must
-  approve an assistant payload budget and transport before sending confirmed
-  sources to it.
+- Before M8, the server advertised no assistant backends and rejected every
+  non-null backend selection; no extraction, memory, draft, suggestion, or
+  paragraph-review route existed.
+- The pre-M8 core request/response placeholders were one flat envelope of
+  strings, could not represent source-linked memory candidates, and could not
+  prevent an action from receiving irrelevant allowed fields.
+- The pre-M8 strict global-config reader accepted only scalar sections, and the
+  Apple helper protocol was iCloud-only with a 64 KiB frame cap.
 
 ## Decision and approval gate
 
-M8 is active for planning. The gate below is split by what it blocks, so
-provider-neutral work is not held hostage to a provider choice that is still
-undecided:
+The gate below records the decisions that separately authorized each part of
+the implementation:
 
 - The **contract and migration packet** (its own required section below) gates
   the provider-neutral work: action-specific core types, the SQLite forward
@@ -185,8 +175,9 @@ packet(s) above in `AGENTS.md` and the Phase 1 changelog.
 - **Process model:** one `codex app-server` child process per assistant job,
   not a persistent server per profile. Sequence: launch with
   `CODEX_HOME=<profile's codex_home>` and no inherited parent environment
-  beyond what the process needs; JSON-RPC `initialize`; `thread/start` (or
-  `thread/fork` with `ephemeral: true`) with no prior history; one
+  beyond what the process needs; JSON-RPC `initialize` followed by the required
+  `initialized` notification; `thread/start` (or `thread/fork` with
+  `ephemeral: true`) with no prior history; one
   `turn/start` carrying the action-specific prompt and `outputSchema`; collect
   the final structured message; terminate the complete process group. This
   keeps `CODEX_HOME` isolation, cancellation, and "no partial mutation
@@ -405,14 +396,14 @@ real Codex home, read a private diary, or send content to an external service.
 
 - [x] The owner-approved contract/migration, configuration, and hosted
   (Codex/`codex app-server`) packets are each recorded before their own
-  respective implementation begins; the Apple packet remains pending and
-  gates only the Apple production adapter (sequence step 7). Manifests and
-  resolved dependency metadata must match the approved packet.
-- [ ] The contract version is deliberately advanced for the M8 native-client
+  respective implementation begins; the Apple packet is also approved and
+  recorded before its production adapter work (sequence step 7). Manifests
+  and resolved dependency metadata must match the approved packets.
+- [x] The contract version is deliberately advanced for the M8 native-client
   resources, mixed versions fail closed, and a forward SQLite migration
   preserves every existing workflow, source snapshot, entry buffer, preference,
   output record, receipt, and operation intent.
-- [ ] `config/global_config.example.yaml` documents zero-or-more Codex profiles
+- [x] `config/global_config.example.yaml` documents zero-or-more Codex profiles
   in the structured `alias`/`codex_home`/`codex_executable` shape. Strict
   synthetic parse-time tests (these alone gate server startup) cover zero,
   one, and multiple items; duplicate or invalid aliases; duplicate/unknown
@@ -423,7 +414,7 @@ real Codex home, read a private diary, or send content to an external service.
   0.138.0 restricted-read floor, and `PATH` resolution failure when
   `codex_executable` is absent — each surfacing as a typed unavailable
   backend, never a startup failure, without reading a real profile.
-- [ ] Every configured profile maps to one distinct descriptor and
+- [x] Every configured profile maps to one distinct descriptor and
   remembered backend ID, and fake-launch tests (a fake JSON-RPC-over-stdio
   peer, no real `codex` binary) prove that only the chosen profile's
   `codex_home`-derived `CODEX_HOME` assignment, the restricted `turn/start`
@@ -432,48 +423,48 @@ real Codex home, read a private diary, or send content to an external service.
 
 ### Core policy, privacy, and persistence
 
-- [ ] The flat placeholder request/response types are replaced by
+- [x] The flat placeholder request/response types are replaced by
   action-specific types. Extraction can send only confirmed readable bodies
   plus request-local source ordinals — not writing language or style, since
   sources are en-US only and extraction produces no prose; drafting can send
   only reviewed memories, explicitly selected prior draft text, and writing
   settings; paragraph review can send only the displayed focused paragraph
   and writing settings.
-- [ ] Extraction returns bounded source-linked memory candidates. Persistent
+- [x] Extraction returns bounded source-linked memory candidates. Persistent
   links use local source-snapshot digests or identities resolved by the server;
   persistent source IDs, note names, metadata, and paths never enter an
   assistant request.
-- [ ] Memory candidates, confirmed memories, draft proposals, and paragraph
+- [x] Memory candidates, confirmed memories, draft proposals, and paragraph
   suggestions each persist only the binding fields their own artifact type
   needs (per the architecture plan's per-type binding list), not a uniform
   backend/settings/workflow/buffer tuple. A source, language, style, backend,
   memory, or entry change invalidates exactly the affected material per the
   invalidation matrix, without discarding manual entry text.
-- [ ] Draft output is validated and conditionally populates the unconfirmed
+- [x] Draft output is validated and conditionally populates the unconfirmed
   entry buffer only when the buffer version captured by the job is still
   current. A completed draft opens as editable text as decided; a late result
   cannot overwrite locally newer text, and ordinary complete-entry confirmation
   remains separate.
-- [ ] Paragraph review binds the displayed target to the entry-buffer version,
+- [x] Paragraph review binds the displayed target to the entry-buffer version,
   UTF-8 byte range, and exact-text digest. Accept applies a still-current
   replacement once; reject leaves the entry byte-for-byte unchanged; any buffer
   edit makes the old suggestion stale.
-- [ ] The core, not provider-authored raw markup, owns inferred-reflection
+- [x] The core, not provider-authored raw markup, owns inferred-reflection
   delimiters. Malformed, unbalanced, oversized, or out-of-range structured
   output is rejected; unresolved inferred reflections continue to block entry
   confirmation.
-- [ ] Adapters receive no application tools or workflow authority. A synthetic
+- [x] Adapters receive no application tools or workflow authority. A synthetic
   source containing hostile instructions can produce only a bounded proposal
   and cannot cause a file, process, connector, confirmation, approval, or
   publication side effect.
 
 ### Registry, jobs, and production adapters
 
-- [ ] Registry tests run at least three fake backends concurrently and prove
+- [x] Registry tests run at least three fake backends concurrently and prove
   stable-ID selection, default/fallback behavior, language/action capability
   checks, dynamic availability, remembered-selection resolution, and routing to
   exactly one backend without provider branches in core, transport, or TUI.
-- [ ] Every assistant job unconditionally rechecks source freshness before
+- [x] Every assistant job unconditionally rechecks source freshness before
   invocation and again before committing a successful result. Completion also
   conditionally verifies that action's own captured bindings per the
   architecture plan's per-artifact-type list, which binds the confirmed
@@ -482,55 +473,79 @@ real Codex home, read a private diary, or send content to an external service.
   even though accept/reject are plain conditional writes, not jobs; a stale,
   cancelled, timed-out, or superseded result cannot mutate canonical state or
   emit content through the job/SSE representation.
-- [ ] Cancellation reaches the hosted request, helper, or approved child
+- [x] Cancellation reaches the hosted request, helper, or approved child
   process and revokes commit authority. Server restart leaves no partial
   assistant mutation; already committed artifacts remain recoverable.
-- [ ] Hosted egress-envelope tests inspect serialized requests and prove that
+- [x] Hosted egress-envelope tests inspect serialized requests and prove that
   only the action-specific allowed fields can leave. Prompts, responses,
   provider bodies, child stdout/stderr, paths, commands, and credentials never
   enter diagnostics or arbitrary client-visible errors.
-- [ ] The hosted and Apple production adapters implement the same action policy
+- [x] The hosted and Apple production adapters implement the same action policy
   and map availability, unsupported language/action, refusal, context/size
   overflow, invalid output, timeout, and cancellation to safe typed outcomes.
-- [ ] Apple helper fake tests cover model readiness, both output locales,
+- [x] Apple helper fake tests cover model readiness, both output locales,
   unsupported locale, schema validation, input/output bounds, private handoff
   cleanup if used, crash, timeout, and cancellation without a live model.
 
 ### Control API and TUI vertical slice
 
-- [ ] Capabilities and Setup check expose only safe descriptor/readiness facts.
+- [x] Capabilities and Setup check expose only safe descriptor/readiness facts.
   The new memory, draft, suggestion, accept/reject, and cancellation
   resources use conditional writes, bounded DTOs, safe problems, canonical
   reload after gaps, and content-free job/SSE events.
-- [ ] Inside Compose, the TUI lists every registered backend, distinguishes
+- [x] Inside Compose, the TUI lists every registered backend, distinguishes
   unavailable from unsupported, labels the selected backend and path in the
   Start Setup check, Main Pane, Work Status, and Status Line, and never treats
   the label as consent or triggers a call on selection/highlight alone.
-- [ ] The Resources Sidebar keeps confirmed sources, memory review, current
+- [x] The Resources Sidebar keeps confirmed sources, memory review, current
   draft, and assistant suggestions reachable. The person explicitly confirms
   or edits memories and accepts or rejects a paragraph suggestion; a completed
   current draft opens as editable unconfirmed text, while stale resources remain
   inspectable but cannot be applied.
-- [ ] Assistant progress and cancellation do not block editor input or HTTP/SSE
+- [x] Assistant progress and cancellation do not block editor input or HTTP/SSE
   recovery. Before an action, unsent editor text is flushed or the action waits;
   after any failure, cancellation, disconnect, or restart the manual Draft
   editor and recoverable canonical text remain available.
-- [ ] Focus/Enter exposes every assistant action without adding a workflow
+- [x] Focus/Enter exposes every assistant action without adding a workflow
   stage, bare-letter shortcut, function-key alias, or unbounded Command Line
   grammar. In-memory terminal and fake-client tests cover all adaptive width
   bands, Korean display/input, safe text rendering, stale outcomes, and backend
   lists larger than two.
 
+### Sources-stage refinement, editing, and deletion
+
+- [x] Each discovered Ayumi source can be inspected and can start a bounded
+  assistant refinement job without adding a seventh workflow stage.
+- [x] A durable refinement suggestion is bound to the source content digest;
+  approve writes the suggestion to the real Ayumi note, reject leaves the note
+  untouched, and stale suggestions fail closed.
+- [x] Direct source editing uses the shared multiline editor and an optimistic
+  content-digest precondition before writing to the real Ayumi note.
+- [x] Source deletion requires an explicit in-TUI confirmation, removes the
+  real Ayumi note and only its safely resolved linked audio files, and never
+  reads or sends audio bytes.
+- [x] Editing or deleting a source updates candidates, snapshots, confirmed
+  selection, and dependent assistant artifacts without leaving dangling state.
+- [x] The Control API exposes bounded, conditional refine, resolve, edit, and
+  delete resources with typed safe problems and one active assistant job per
+  workflow.
+- [x] The Sources-stage UI exposes inspect, refine, approve, reject, edit, and
+  delete actions with recovery-safe job polling and canonical reloads.
+- [x] Connector, core, persistence, Control API, client, and terminal tests
+  cover success, stale bindings, rejection, cancellation/conflicts, unsafe
+  audio paths, and confirmed deletion before the full Rust and Swift gate is
+  rerun.
+
 ### Documentation and gate
 
-- [ ] Synthetic end-to-end tests cover the hosted and Apple adapter contracts,
+- [x] Synthetic end-to-end tests cover the hosted and Apple adapter contracts,
   three-backend selection, two-pass memory review and drafting, guarded draft
   population, paragraph accept/reject, mid-job invalidation, cancellation,
   restart recovery, and manual fallback.
-- [ ] README, product, architecture, API, UX, configuration, contributor, and
+- [x] README, product, architecture, API, UX, configuration, contributor, and
   privacy documentation name the chosen provider behavior, exact egress
   boundary, on-device availability behavior, and any approved Codex surface.
-- [ ] The standard Rust and Swift milestone gate passes and dated acceptance
+- [x] The standard Rust and Swift milestone gate passes and dated acceptance
   evidence is recorded below.
 
 ## Acceptance evidence
@@ -541,13 +556,15 @@ the result is observed; record synthetic evidence only.
 | Evidence | Result |
 |---|---|
 | M8 baseline and plan review | 2026-10-29: reconciled the plan with completed P1-M12/P1-M7 code and docs; separated required and conditional decision gates; identified action-envelope, stale-result, config-parser, and helper-frame gaps. |
+| Sources-stage refine/edit/delete subflow | 2026-10-29: digest-bound Codex refinement, durable suggestions, Ayumi write-back, explicit hard-delete with validated linked-audio cascade, Control API/client resources, shared-editor TUI controls, and focused connector/core/terminal coverage landed. Full Rust fmt/Clippy/test and Swift build/test gates passed; one transient Apple-bridge timeout passed in isolation and on the full rerun. |
 | M8 plan review continued | 2026-10-29: split the approval gate into five independently-gating packets (contract/migration, configuration, hosted, Apple, conditional Codex) so provider-neutral contract/schema/registry/TUI work is not blocked on an undecided provider, and widened the configuration packet to the whole `assistants:` section; replaced "as applicable" invalidation with an explicit per-artifact-type binding list and matrix, so a backend or style change no longer stales already-reviewed memories, while a source change still stales every artifact including a completed paragraph suggestion, now via its own source-selection-digest binding rather than the job-only freshness recheck; replaced an unenforceable reflection-delimiter "round-trip" with a refusal rule and added reflection ranges to the paragraph-review result type; made the one-active-job rule explicit (one per workflow across all three actions, not per action); named the exact v4-to-v5 field mapping and its two deliberate behavior changes; recorded the previously undocumented Codex profile-configuration approval in `AGENTS.md` and the changelog; and added a researched candidate `codex exec` fixed-argv surface for the still-ungated, conditional Codex adapter packet, including the correction that `--sandbox read-only`/`--cd` deny writes but do not confine reads, so that packet must separately prove filesystem-read and network denial with an actual OS sandbox. |
 | M8 hosted-provider decision | 2026-10-29: owner approved OpenAI's Codex, reached only through `codex app-server`, as the hosted default, merging the former conditional-Codex gate into the required hosted-default packet; recorded in `AGENTS.md` "Decided" and the Phase 1 changelog. Verified against current Codex documentation: restricted `readOnlyAccess`/`networkAccess` sandboxing, MCP/web-search disable, `history.persistence = "none"`, and `turn/start` `outputSchema` are real, version-gated (0.138.0+) mechanisms; installed `codex-cli` is 0.165.0. Apple packet (protocol version, payload transport) remains pending. |
 | Owner-approved contract/migration, configuration, and hosted (Codex) packets | Approved 2026-10-29; recorded above and in the Phase 1 changelog. Apple packet pending. |
-| Contract/schema migration and mixed-version tests | Pending |
-| Strict configuration and Codex-profile registration/launch behavior | Pending |
-| Registry, action-specific egress, and three-fake routing tests | Pending |
-| Hosted and Apple production-adapter contract tests | Pending |
-| Jobs, cancellation, stale commit, persistence, and recovery tests | Pending |
-| Compose TUI vertical flows and adaptive rendering | Pending |
-| Documentation inspection and complete Rust/Swift gate | Pending |
+| Contract/schema migration and mixed-version tests | 2026-10-29: contract v3 and schema v5 fixtures pass; prior schema workflows, assistant-neutral state, output records, receipts, and intents reopen under the forward migration; the native attachment and health fixtures reject the former contract version. |
+| Strict configuration and Codex-profile registration/launch behavior | 2026-10-29: zero/one/many and malformed profile parser cases pass; readiness covers unsafe/missing homes, missing/non-runnable executables, version floor, and PATH miss; fake transport inspection proves per-profile identity, fixed arguments, cleared environment, and restricted turn parameters. |
+| Registry, action-specific egress, and three-fake routing tests | 2026-10-29: three simultaneous fake backends route exactly once each; fallback/capability checks and type-separated extraction, draft, and paragraph envelopes pass. |
+| Hosted and Apple production-adapter contract tests | 2026-10-29: fake JSON-RPC peer covers structured success, malformed output, timeout, cancellation, and confinement; Rust fake helper and 12 Swift protocol tests cover extraction, drafting, paragraph review, source refinement, both output locales, bounds, invalid output, and cancellation without live models or accounts. |
+| Jobs, cancellation, stale commit, persistence, and recovery tests | 2026-10-29: the synthetic vertical flow proves cancelled commit fencing, extraction, reviewed memory, guarded draft population, paragraph acceptance, and SQLite restart recovery; workflow tests prove stale late results and once-only suggestion resolution. |
+| Compose TUI vertical flows and adaptive rendering | 2026-10-29: client/worker/ViewModel and in-memory terminal suites pass with provider-neutral backend collections, Korean text, memory review, draft/suggestion resources, conflict text, progress, cancellation, and the existing adaptive width bands. |
+| Documentation inspection and complete Rust/Swift gate | 2026-10-29: README, product, architecture, Control API, UX, configuration example, contribution guide, phase plan, and privacy/egress language reconciled. `cargo fmt --all -- --check`, strict all-target/all-feature Clippy, and `cargo test --all-features` pass; `swift build` and all 12 `swift test` cases pass with writable temporary module caches. |
+| Post-implementation review | 2026-10-29: reconciled the production Codex transport with the official app-server lifecycle: the client now sends the required `initialized` notification after a successful `initialize`, supplies complete client metadata, accepts only a terminal `turn.status` of `completed`, maps failed/interrupted turns safely, and unconditionally kills and reaps the per-job process after every protocol outcome. Focused fake-peer regression tests pass. |

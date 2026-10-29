@@ -100,7 +100,8 @@ The application boundary defines small ports by purpose:
 |---|---|---|
 | `SourceCatalog` | Discover candidates for a bounded day query and an explicitly requested extra day. Return source references, available date evidence, warnings, and availability. | Ayumi Markdown catalog |
 | `SourceReader` | Prepare only selected sources, coordinate reads, return readable text and a file identity/metadata/content-digest stamp; recheck freshness at workflow checkpoints. | Ayumi plus iCloud reads through the Swift helper |
-| `DraftAssistant` | Describe a stable backend ID, display label, execution boundary, runtime availability, language support, and supported actions; use separate bounded conversations to extract source-linked memories from confirmed readable bodies, draft from human-reviewed memories, and review only the displayed focused paragraph. | Chosen hosted model (default; provider undecided) and Apple on-device model through the Swift helper (optional); the registry accepts additional approved adapters |
+| `SourceWriter` | Digest-check and overwrite one Ayumi body, or hard-delete one note and its safely resolved linked audio. It never exposes audio bytes. | Ayumi write/delete adapter |
+| `DraftAssistant` | Describe a stable backend ID, display label, execution boundary, runtime availability, language support, and supported actions; use separate bounded conversations to extract source-linked memories from confirmed readable bodies, draft from human-reviewed memories, and review only the displayed focused paragraph. | Codex through a confined per-job `codex app-server` process (hosted default) and Apple Foundation Models through the Swift helper (optional); the registry accepts additional approved adapters |
 | `WorkflowStore` | Save and recover workflow revisions, unfinished edits, and preferences; purge expired draft and source text. | Per-user SQLite |
 | `OperationLog` | Record an intent before each external write, then the terminal receipt for each destination; list unresolved intents for reconciliation. | Per-user SQLite |
 | `OutputConnector` | Inspect a destination without writing, plan its exact payload, commit, read back or reconcile an uncertain commit, replace the app's own receipted output in an approved amendment, and return a receipt or explicit pending/conflict result. | Local Markdown and Notion |
@@ -161,11 +162,12 @@ as version-bound suggestions and never confirm source selection or entry text.
 
 Source text is untrusted model input. An assistant adapter receives no workflow,
 filesystem, shell, connector, confirmation, approval, or publication tools; it
-can return only its validated suggestion type. A future agent-style backend,
-including a Codex-backed adapter, must disable unrelated tools and side effects
-at the process/API boundary rather than relying only on a prompt. Injected
-instructions in a note can therefore affect proposed text but cannot perform an
-application action, and the proposal still requires human review.
+can return only its validated suggestion type. The Codex adapter disables
+filesystem reads, network, MCP servers, web search, approval prompts, and local
+history at the `codex app-server` boundary rather than relying only on a
+prompt. Injected instructions in a note can therefore affect proposed text but
+cannot perform an application action, and the proposal still requires human
+review.
 
 A paragraph review targets the blank-line-delimited Markdown paragraph at the
 editor cursor as `{entry_buffer_version, byte_range, selected_text_digest}`;
@@ -178,23 +180,25 @@ request. Reject records
 or discards the suggestion without changing the entry. In both cases, complete
 entry confirmation remains a separate human action.
 
-Phase 1's provider decision gate still applies to the hosted default. A
-Codex-backed adapter is an example of a future registry member, not a provider
-selection made by this proposal. Such an adapter requires its own approved
-process or API, credential, dependency, privacy, timeout, and cancellation
-decisions. It is distinct from a later Codex MCP client, which reads allowed
-data and writes human-reviewed proposals through `/mcp`.
+Phase 1's hosted default is OpenAI Codex through one fresh `codex app-server`
+process per job. Each configured `codex_home` profile is a separate registry
+member and the first listed ready profile is the hosted default. This adapter is
+distinct from a later Codex MCP client, which reads allowed data and writes
+human-reviewed proposals through `/mcp`.
 
 ### Hosted drafting and data egress
 
-The default registered `DraftAssistant` adapter calls a hosted model. The
-provider, its credential storage, and the HTTP client are undecided (see
-"Undecided" in [AGENTS.md](../AGENTS.md)); the port and its action-specific data
-classes are the contract until then. Extraction can carry readable note bodies
-with audio and attachment links stripped, drafting can carry reviewed memories
-and an explicitly selected prior draft, and paragraph review can carry only the
-focused paragraph; drafting and paragraph review may also carry writing
-language and style, but extraction does not — sources are en-US only and
+The default hosted `DraftAssistant` adapter calls Codex only through its
+`app-server` JSON-RPC protocol over standard I/O. The account credential remains
+inside the selected profile's `codex_home`; Rust never reads it. Each connection
+completes the required `initialize`/`initialized` handshake before starting an
+ephemeral thread, and only a terminal turn status of `completed` may yield an
+artifact; failed, interrupted, malformed, or cancelled turns terminate the
+complete per-job process group without committing output. Extraction can carry
+readable note bodies with audio and attachment links stripped, drafting can
+carry reviewed memories and an explicitly selected prior draft, and paragraph
+review can carry only the focused paragraph; drafting and paragraph review may
+also carry writing language and style, but extraction does not — sources are en-US only and
 extraction produces no prose. An adapter
 does not receive all allowed classes on every action. Raw front matter,
 location, weather, persistent source identifiers, attachment paths, audio,
@@ -679,7 +683,9 @@ status regions. The Workflow Sidebar always lists the canonical `Start`,
 canonical-state/capability-derived progress and one presentation-only current
 marker. The Resources Sidebar lists the active stage's sources, draft,
 assistant suggestions, or destinations. Activating a resource changes the Main Pane;
-activating a source for read-only inspection never toggles its inclusion.
+activating a source for inspection never toggles its inclusion. The inspection
+subflow owns digest-bound Refine/Approve/Reject, direct Edit, and explicitly
+confirmed Delete controls without adding a workflow stage.
 
 The selection ViewModel displays both directory and header dates, warnings,
 explicit include/exclude state, and the active readable source body. The
