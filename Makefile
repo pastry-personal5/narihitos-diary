@@ -38,7 +38,7 @@ clippy:
 test: rust-test swift-test
 
 rust-test:
-	cargo test --all-features
+	cargo test --all-features --quiet
 
 swift-build:
 	swift build --package-path helpers/apple-bridge
@@ -49,6 +49,6 @@ swift-test:
 check:
 	cargo fmt --all -- --check
 	cargo clippy --all-targets --all-features -- -D warnings
-	cargo test --all-features
+	cargo test --all-features --quiet
 	swift build --package-path helpers/apple-bridge
 	swift test --package-path helpers/apple-bridge

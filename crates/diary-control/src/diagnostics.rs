@@ -15,7 +15,10 @@ pub trait LogClock: Send + Sync {
     fn now_unix_ms(&self) -> u64;
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+/// Ordered Trace..Error so `<`/`>=` compare severity; `DiagnosticLog` uses
+/// this to filter records below its configured minimum level. Declaration
+/// order is the severity order — keep them in sync.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, PartialOrd, Ord)]
 pub enum DiagnosticLevel {
     Trace,
     Debug,
@@ -32,6 +35,20 @@ impl DiagnosticLevel {
             Self::Info => "INFO",
             Self::Warn => "WARN",
             Self::Error => "ERROR",
+        }
+    }
+
+    /// Parses the `ND_LOG_LEVEL` value (case-insensitive); unrecognized
+    /// input is the caller's problem, not a silent fallback here.
+    #[must_use]
+    pub fn parse(value: &str) -> Option<Self> {
+        match value.to_ascii_lowercase().as_str() {
+            "trace" => Some(Self::Trace),
+            "debug" => Some(Self::Debug),
+            "info" => Some(Self::Info),
+            "warn" => Some(Self::Warn),
+            "error" => Some(Self::Error),
+            _ => None,
         }
     }
 }
@@ -54,12 +71,31 @@ pub enum DiagnosticEvent {
         current: u64,
         limit: u64,
     },
+    /// A job's lifecycle transition. `kind` is the job type (e.g.
+    /// `source-preparation`); never the workflow day, source, or job ID.
+    /// `reason` is set only on `event: "failed"`, and only to a fixed
+    /// `&'static str` error code such as `CommandError::code()` or a literal
+    /// defined alongside `fail_job` — never request data, free-form error
+    /// text, or anything else that didn't originate as a closed, compiled-in
+    /// token.
+    Job {
+        kind: &'static str,
+        event: &'static str,
+        reason: Option<&'static str>,
+    },
+    /// A preparation handle's lifecycle: issued when a prepare job completes,
+    /// consumed when `confirm_selection` redeems it, and `expired` or
+    /// `binding-mismatch` when a later use fails — exactly the detail needed
+    /// to diagnose a `preparation-expired`/`preparation-binding-changed`
+    /// rejection. Never the handle value itself, workflow day, or source IDs.
+    Preparation { event: &'static str },
 }
 
 pub struct DiagnosticLog {
     root: PathBuf,
     expected_uid: u32,
     clock: Arc<dyn LogClock>,
+    min_level: DiagnosticLevel,
     state: Mutex<State>,
 }
 
@@ -77,6 +113,19 @@ impl DiagnosticLog {
         root: impl AsRef<Path>,
         expected_uid: u32,
         clock: Arc<dyn LogClock>,
+    ) -> Result<Self, DiagnosticError> {
+        Self::open_with_min_level(root, expected_uid, clock, DiagnosticLevel::Info)
+    }
+
+    /// Like [`Self::open`], but records below `min_level` are dropped before
+    /// they're written (e.g. pass `DiagnosticLevel::Debug` to see job and
+    /// preparation lifecycle events; the default via `open` is `Info`, which
+    /// matches every level this log previously ever wrote).
+    pub fn open_with_min_level(
+        root: impl AsRef<Path>,
+        expected_uid: u32,
+        clock: Arc<dyn LogClock>,
+        min_level: DiagnosticLevel,
     ) -> Result<Self, DiagnosticError> {
         let root = root.as_ref().to_path_buf();
         ensure_private_directory(&root, expected_uid)?;
@@ -97,6 +146,7 @@ impl DiagnosticLog {
             root,
             expected_uid,
             clock,
+            min_level,
             state: Mutex::new(State {
                 file,
                 bytes,
@@ -112,6 +162,9 @@ impl DiagnosticLog {
         level: DiagnosticLevel,
         event: DiagnosticEvent,
     ) -> Result<(), DiagnosticError> {
+        if level < self.min_level {
+            return Ok(());
+        }
         let now = self.clock.now_unix_ms();
         let record = encode(now, level, event)?;
         let mut state = self.state.lock().map_err(|_| DiagnosticError::Io)?;
@@ -201,6 +254,41 @@ fn encode(
                     ("limit", limit.to_string()),
                 ],
             )
+        }
+        DiagnosticEvent::Job {
+            kind,
+            event,
+            reason,
+        } => {
+            if !matches!(
+                kind,
+                "discovery"
+                    | "source-preparation"
+                    | "assistant-memory-extraction"
+                    | "assistant-draft"
+                    | "assistant-paragraph-review"
+                    | "assistant-source-refine"
+            ) || !matches!(
+                event,
+                "accepted" | "running" | "completed" | "failed" | "cancelled"
+            ) || (reason.is_some() && event != "failed")
+            {
+                return Err(DiagnosticError::InvalidRecord);
+            }
+            let mut fields = vec![("kind", kind.to_owned())];
+            if let Some(reason) = reason {
+                fields.push(("reason", reason.to_owned()));
+            }
+            ("job", event, fields)
+        }
+        DiagnosticEvent::Preparation { event } => {
+            if !matches!(
+                event,
+                "issued" | "consumed" | "expired" | "binding-mismatch"
+            ) {
+                return Err(DiagnosticError::InvalidRecord);
+            }
+            ("preparation", event, Vec::new())
         }
     };
     for token in [component, event_code] {
@@ -422,6 +510,34 @@ fn validate_line(line: &str) -> Result<u64, DiagnosticError> {
                 .and_then(|value| value.parse::<u64>().ok())
                 .ok_or(DiagnosticError::InvalidRecord)?;
         }
+        ("job", "accepted" | "running" | "completed" | "failed" | "cancelled")
+            if matches!(fields.len(), 6 | 7) =>
+        {
+            fields[5]
+                .strip_prefix("kind=")
+                .filter(|value| {
+                    matches!(
+                        *value,
+                        "discovery"
+                            | "source-preparation"
+                            | "assistant-memory-extraction"
+                            | "assistant-draft"
+                            | "assistant-paragraph-review"
+                            | "assistant-source-refine"
+                    )
+                })
+                .ok_or(DiagnosticError::InvalidRecord)?;
+            if let Some(field) = fields.get(6) {
+                if event != "failed" {
+                    return Err(DiagnosticError::InvalidRecord);
+                }
+                field
+                    .strip_prefix("reason=")
+                    .ok_or(DiagnosticError::InvalidRecord)?;
+            }
+        }
+        ("preparation", "issued" | "consumed" | "expired" | "binding-mismatch")
+            if fields.len() == 5 => {}
         _ => return Err(DiagnosticError::InvalidRecord),
     }
     Ok(timestamp)
@@ -614,6 +730,201 @@ mod tests {
         let text = fs::read_to_string(reopened.root().join(ACTIVE_NAME)).unwrap();
         assert!(!text.contains("private"));
         assert!(text.ends_with('\n'));
+    }
+
+    #[test]
+    fn level_parse_accepts_known_names_case_insensitively_and_rejects_others() {
+        assert_eq!(
+            DiagnosticLevel::parse("debug"),
+            Some(DiagnosticLevel::Debug)
+        );
+        assert_eq!(
+            DiagnosticLevel::parse("DEBUG"),
+            Some(DiagnosticLevel::Debug)
+        );
+        assert_eq!(DiagnosticLevel::parse("Info"), Some(DiagnosticLevel::Info));
+        assert_eq!(DiagnosticLevel::parse("verbose"), None);
+    }
+
+    #[test]
+    fn min_level_drops_records_below_it_and_keeps_records_at_or_above_it() {
+        let scratch = Scratch::new("min-level");
+        let clock = Arc::new(FixedClock::new(1));
+        let uid = fs::metadata(scratch.path()).unwrap().uid();
+        let log = DiagnosticLog::open_with_min_level(
+            scratch.path().join("logs"),
+            uid,
+            clock,
+            DiagnosticLevel::Debug,
+        )
+        .unwrap();
+        log.write(
+            DiagnosticLevel::Trace,
+            DiagnosticEvent::Job {
+                kind: "discovery",
+                event: "accepted",
+                reason: None,
+            },
+        )
+        .unwrap();
+        log.write(
+            DiagnosticLevel::Debug,
+            DiagnosticEvent::Job {
+                kind: "discovery",
+                event: "completed",
+                reason: None,
+            },
+        )
+        .unwrap();
+        let text = fs::read_to_string(log.root().join(ACTIVE_NAME)).unwrap();
+        assert!(!text.contains("event=accepted"));
+        assert!(text.contains("event=completed"));
+    }
+
+    #[test]
+    fn default_min_level_is_info_and_silently_drops_debug_records() {
+        let scratch = Scratch::new("default-min-level");
+        let clock = Arc::new(FixedClock::new(1));
+        let uid = fs::metadata(scratch.path()).unwrap().uid();
+        let log = DiagnosticLog::open(scratch.path().join("logs"), uid, clock).unwrap();
+        log.write(
+            DiagnosticLevel::Debug,
+            DiagnosticEvent::Preparation { event: "issued" },
+        )
+        .unwrap();
+        log.write(
+            DiagnosticLevel::Info,
+            DiagnosticEvent::Lifecycle {
+                component: "server",
+                event: "ready",
+            },
+        )
+        .unwrap();
+        let text = fs::read_to_string(log.root().join(ACTIVE_NAME)).unwrap();
+        assert!(!text.contains("preparation"));
+        assert!(text.contains("component=server event=ready"));
+    }
+
+    #[test]
+    fn job_and_preparation_events_reject_outside_their_closed_vocabulary() {
+        let scratch = Scratch::new("closed-vocab");
+        let clock = Arc::new(FixedClock::new(1));
+        let uid = fs::metadata(scratch.path()).unwrap().uid();
+        let log = DiagnosticLog::open_with_min_level(
+            scratch.path().join("logs"),
+            uid,
+            clock,
+            DiagnosticLevel::Debug,
+        )
+        .unwrap();
+        assert_eq!(
+            log.write(
+                DiagnosticLevel::Debug,
+                DiagnosticEvent::Job {
+                    kind: "unknown-kind",
+                    event: "accepted",
+                    reason: None,
+                },
+            ),
+            Err(DiagnosticError::InvalidRecord)
+        );
+        assert_eq!(
+            log.write(
+                DiagnosticLevel::Debug,
+                DiagnosticEvent::Preparation {
+                    event: "not-a-real-event",
+                },
+            ),
+            Err(DiagnosticError::InvalidRecord)
+        );
+    }
+
+    #[test]
+    fn job_failed_records_the_reason_code_and_other_events_reject_one() {
+        let scratch = Scratch::new("job-reason");
+        let clock = Arc::new(FixedClock::new(1));
+        let uid = fs::metadata(scratch.path()).unwrap().uid();
+        let log = DiagnosticLog::open_with_min_level(
+            scratch.path().join("logs"),
+            uid,
+            clock,
+            DiagnosticLevel::Debug,
+        )
+        .unwrap();
+        log.write(
+            DiagnosticLevel::Debug,
+            DiagnosticEvent::Job {
+                kind: "assistant-draft",
+                event: "failed",
+                reason: Some("assistant-backend-unavailable"),
+            },
+        )
+        .unwrap();
+        let text = fs::read_to_string(log.root().join(ACTIVE_NAME)).unwrap();
+        assert!(text.contains("event=failed"));
+        assert!(text.contains("reason=assistant-backend-unavailable"));
+        assert_eq!(
+            log.write(
+                DiagnosticLevel::Debug,
+                DiagnosticEvent::Job {
+                    kind: "assistant-draft",
+                    event: "running",
+                    reason: Some("assistant-backend-unavailable"),
+                },
+            ),
+            Err(DiagnosticError::InvalidRecord)
+        );
+    }
+
+    /// A server started with `ND_LOG_LEVEL=debug` writes `job`/`preparation`
+    /// records; the *next* startup re-validates the active segment it left
+    /// behind. If that validation doesn't recognize its own `job`/
+    /// `preparation` records, the server can never start again after a
+    /// single debug-level run — exactly the `diagnostic-init-failed`
+    /// failure this guards against.
+    #[test]
+    fn job_and_preparation_records_survive_a_reopen() {
+        let scratch = Scratch::new("job-reopen");
+        let clock = Arc::new(FixedClock::new(1));
+        let uid = fs::metadata(scratch.path()).unwrap().uid();
+        let log = DiagnosticLog::open_with_min_level(
+            scratch.path().join("logs"),
+            uid,
+            Arc::clone(&clock) as Arc<dyn LogClock>,
+            DiagnosticLevel::Debug,
+        )
+        .unwrap();
+        log.write(
+            DiagnosticLevel::Debug,
+            DiagnosticEvent::Job {
+                kind: "source-preparation",
+                event: "accepted",
+                reason: None,
+            },
+        )
+        .unwrap();
+        log.write(
+            DiagnosticLevel::Debug,
+            DiagnosticEvent::Job {
+                kind: "assistant-draft",
+                event: "failed",
+                reason: Some("assistant-backend-unavailable"),
+            },
+        )
+        .unwrap();
+        log.write(
+            DiagnosticLevel::Debug,
+            DiagnosticEvent::Preparation { event: "issued" },
+        )
+        .unwrap();
+        drop(log);
+        DiagnosticLog::open_with_min_level(
+            scratch.path().join("logs"),
+            uid,
+            clock,
+            DiagnosticLevel::Debug,
+        )
+        .expect("a restart must be able to re-validate its own job/preparation records");
     }
 
     #[test]

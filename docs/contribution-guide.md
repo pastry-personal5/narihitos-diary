@@ -58,13 +58,13 @@ never starts the server itself.
 cargo run -p nd -- --help
 cargo run -p nd
 cargo run -p nd -- serve
-cargo test -p nd --test command_shells
-cargo test -p nd --test p1_m6_process
-cargo test -p nd --test p1_m7_tui_attach --test p1_m7_worker
+cargo test -p nd --test command_shells --quiet
+cargo test -p nd --test p1_m6_process --quiet
+cargo test -p nd --test p1_m7_tui_attach --test p1_m7_worker --quiet
 printf '%s\n' '{"protocol_version":1,"request_id":"smoke-1","command":"ping","payload":{}}' | swift run --package-path helpers/apple-bridge apple-bridge
 ```
 
-P1-M7 uses Tab/arrows plus Enter and the Ctrl-G, Ctrl-S, Ctrl-D, Ctrl-P, and
+P1-M7 uses Tab/arrows plus Enter and the Ctrl-G, Ctrl-S, Ctrl-C, Ctrl-P, and
 Ctrl-N chords, with no function-key aliases. Its bounded Command Line grammar
 is `help`, `retry`, `day YYYY-MM-DD`, `stage <stage>`, `save`, and `quit`.
 Confirming a selection or entry is deliberately available only through focused
@@ -103,6 +103,23 @@ runtime directory, which contains the ephemeral control token. Logs must never
 contain diary text, source metadata or paths, credentials, raw request data, or
 arbitrary error strings.
 
+By default the log only records `INFO` and above (one line per HTTP request).
+Set `ND_LOG_LEVEL=debug` before `nd serve` to also record job lifecycle
+(`component=job`, fields `kind`, accepted/running/completed/failed/cancelled,
+plus `reason` — a fixed error code such as `assistant-backend-unavailable` or
+`assistant-timeout`, present only on `event=failed`) and preparation-handle
+lifecycle (`component=preparation`,
+issued/consumed/expired/binding-mismatch) — useful for diagnosing a rejected
+`preparation-expired`/`preparation-binding-changed` request. Accepted values
+are `trace`, `debug`, `info` (default), `warn`, `error`, case-insensitive; an
+unrecognized value falls back to `info`.
+
+```sh
+ND_LOG_LEVEL=debug nd serve
+tail -n 200 .local/logs/control-api/control-api.log
+rg 'component=(job|preparation)' .local/logs/control-api/
+```
+
 ## Required validation
 
 Before opening a pull request, run the full checks from the repository root:
@@ -110,7 +127,7 @@ Before opening a pull request, run the full checks from the repository root:
 ```sh
 cargo fmt --all -- --check
 cargo clippy --all-targets --all-features -- -D warnings
-cargo test --all-features
+cargo test --all-features --quiet
 swift build --package-path helpers/apple-bridge
 swift test --package-path helpers/apple-bridge
 ```

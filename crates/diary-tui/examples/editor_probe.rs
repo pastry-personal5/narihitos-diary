@@ -3,10 +3,10 @@
 //! Run with `cargo run -p diary-tui --example editor_probe`. Type freely,
 //! including Korean 2-Set IME input — Enter inserts a newline (it does
 //! not submit anything), arrow keys move the cursor, and Backspace
-//! deletes. Press Ctrl-D to quit and print the final buffer; confirm it
-//! quit rather than deleting a character (`ratatui-textarea`'s own
-//! default Ctrl-D binding), which is exactly the global-chord leak this
-//! probe exists to catch in a real terminal, not just in unit tests.
+//! deletes. Press Ctrl-D and confirm nothing is deleted (`ratatui-textarea`'s
+//! own default Ctrl-D binding is delete-next-char), which is exactly the
+//! global-chord leak this probe exists to catch in a real terminal, not
+//! just in unit tests. Press Ctrl-C to quit and print the final buffer.
 //!
 //! Test text only.
 
@@ -36,7 +36,7 @@ fn main() -> io::Result<()> {
                     continue;
                 }
                 if key.modifiers.contains(KeyModifiers::CONTROL)
-                    && matches!(key.code, crossterm::event::KeyCode::Char('d'))
+                    && matches!(key.code, crossterm::event::KeyCode::Char('c'))
                 {
                     break;
                 }

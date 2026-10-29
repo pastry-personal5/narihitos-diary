@@ -107,8 +107,10 @@ as Enter, and `Ctrl-[` as Esc; macOS reserves `Ctrl-Space` for input-source
 switching by default; and Terminal.app sends Option as a character modifier
 unless it is set to act as Meta. Avoid those collisions. On non-editor screens
 Tab and the arrow keys move focus and Enter activates. The Command Line opens
-with Ctrl-G; Ctrl-S saves or flushes the editor; Ctrl-D quits; and
-Ctrl-P/Ctrl-N move to the previous/next workflow stage. There are no
+with Ctrl-G; Ctrl-S saves or flushes the editor; Ctrl-C, pressed twice, quits
+(owner decision, 2026-10-29: replaced the single Ctrl-D chord to guard
+against an accidental single keystroke ending the session); and Ctrl-P/Ctrl-N
+move to the previous/next workflow stage. There are no
 function-key aliases: a real-terminal check found Apple Terminal does not
 reliably deliver function keys as distinct chords (F10 never arrived at
 all), so every action is reachable only by its Ctrl chord or by focus and

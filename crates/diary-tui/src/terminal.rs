@@ -67,7 +67,7 @@ impl Drop for TerminalGuard {
 }
 
 /// Blocks for the next terminal input event and reports whether it was the
-/// quit chord (Ctrl-D; see AGENTS.md "Keybindings" — it has no function-key
+/// quit chord (Ctrl-C; see AGENTS.md "Keybindings" — it has no function-key
 /// alias, since F10 does not arrive in Apple Terminal). A read error is
 /// treated as a quit request rather than looping forever on a broken
 /// terminal.
@@ -82,7 +82,7 @@ pub fn next_event_is_quit() -> bool {
         Ok(Event::Key(key)) => {
             key.kind == KeyEventKind::Press
                 && key.modifiers.contains(KeyModifiers::CONTROL)
-                && matches!(key.code, KeyCode::Char('d'))
+                && matches!(key.code, KeyCode::Char('c'))
         }
         Ok(_) => false,
         Err(_) => true,
@@ -108,7 +108,7 @@ pub fn poll_event(timeout: Duration) -> PollOutcome {
             Ok(Event::Key(key))
                 if key.kind == KeyEventKind::Press
                     && key.modifiers.contains(KeyModifiers::CONTROL)
-                    && matches!(key.code, KeyCode::Char('d')) =>
+                    && matches!(key.code, KeyCode::Char('c')) =>
             {
                 PollOutcome::Quit
             }
@@ -146,9 +146,9 @@ pub enum InputEvent {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum InputPoll {
-    /// The quit chord (Ctrl-D) or a read error.
+    /// The quit chord (Ctrl-C) or a read error.
     Quit,
-    /// A Ctrl chord other than Ctrl-D, e.g. Ctrl-G for Command Line.
+    /// A Ctrl chord other than Ctrl-C, e.g. Ctrl-G for Command Line.
     Ctrl(char),
     Event(InputEvent),
     /// A key this function does not classify (e.g. arrow keys, which the
@@ -159,9 +159,11 @@ pub enum InputPoll {
 
 /// Waits up to `timeout` for one terminal input event and classifies it
 /// for the Command Line / connected-session loop, which needs more detail
-/// than [`poll_event`]'s simple quit/other/timeout. Ctrl-D always reports
+/// than [`poll_event`]'s simple quit/other/timeout. Ctrl-C always reports
 /// `Quit` regardless of mode, since it is the one global, unconditional
-/// chord.
+/// chord. Raw mode suppresses the terminal's own SIGINT handling, so Ctrl-C
+/// arrives here as an ordinary key event rather than interrupting the
+/// process.
 #[must_use]
 pub fn poll_input_event(timeout: Duration) -> InputPoll {
     match crossterm::event::poll(timeout) {
@@ -169,7 +171,7 @@ pub fn poll_input_event(timeout: Duration) -> InputPoll {
             Ok(Event::Key(key)) if key.kind == KeyEventKind::Press => {
                 let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
                 match key.code {
-                    KeyCode::Char('d') if ctrl => InputPoll::Quit,
+                    KeyCode::Char('c') if ctrl => InputPoll::Quit,
                     KeyCode::Char(c) if ctrl => InputPoll::Ctrl(c),
                     KeyCode::Char(c) => InputPoll::Event(InputEvent::Char(c)),
                     KeyCode::Enter => InputPoll::Event(InputEvent::Enter),

@@ -448,6 +448,15 @@ fn route_code(path: &str) -> &'static str {
     }
 }
 
+/// Best-effort Debug-level write for job/preparation lifecycle events: a
+/// failure here never fails the request, matching how every other
+/// diagnostics write in this module is treated.
+fn log_debug(state: &AppState, event: DiagnosticEvent) {
+    if let Some(log) = &state.0.config.diagnostics {
+        let _ = log.write(DiagnosticLevel::Debug, event);
+    }
+}
+
 async fn logged_response(
     state: &AppState,
     route: &'static str,
@@ -1844,6 +1853,15 @@ fn new_job(state: &AppState, kind: &'static str, workflow_id: &str) -> Result<St
             cancelled: Arc::new(AtomicBool::new(false)),
         },
     );
+    drop(jobs);
+    log_debug(
+        state,
+        DiagnosticEvent::Job {
+            kind,
+            event: "accepted",
+            reason: None,
+        },
+    );
     Ok(id)
 }
 
@@ -2150,6 +2168,15 @@ async fn run_prepare_job(
                     job.status = "cancelled";
                     job.expires_at_ms = now_ms().saturating_add(JOB_EXPIRY_MS);
                 }
+                drop(jobs);
+                log_debug(
+                    &state,
+                    DiagnosticEvent::Job {
+                        kind: "source-preparation",
+                        event: "cancelled",
+                        reason: None,
+                    },
+                );
                 return;
             }
             jobs.preparations.insert(
@@ -2169,6 +2196,15 @@ async fn run_prepare_job(
                 job.expires_at_ms = expires;
             }
             drop(jobs);
+            log_debug(&state, DiagnosticEvent::Preparation { event: "issued" });
+            log_debug(
+                &state,
+                DiagnosticEvent::Job {
+                    kind: "source-preparation",
+                    event: "completed",
+                    reason: None,
+                },
+            );
             publish_event(
                 &state,
                 "job.changed",
@@ -2184,17 +2220,28 @@ async fn run_prepare_job(
 }
 
 fn mark_running(state: &AppState, id: &str) -> bool {
-    let Ok(mut jobs) = state.0.jobs.lock() else {
-        return false;
+    let kind = {
+        let Ok(mut jobs) = state.0.jobs.lock() else {
+            return false;
+        };
+        let Some(job) = jobs.jobs.get_mut(id) else {
+            return false;
+        };
+        if job.status != "queued" {
+            return false;
+        }
+        job.status = "running";
+        job.progress = 1;
+        job.kind
     };
-    let Some(job) = jobs.jobs.get_mut(id) else {
-        return false;
-    };
-    if job.status != "queued" {
-        return false;
-    }
-    job.status = "running";
-    job.progress = 1;
+    log_debug(
+        state,
+        DiagnosticEvent::Job {
+            kind,
+            event: "running",
+            reason: None,
+        },
+    );
     true
 }
 
@@ -2209,31 +2256,45 @@ fn job_commit_state(state: &AppState, id: &str) -> Option<Arc<AtomicU8>> {
         .map(|job| Arc::clone(&job.commit_state))
 }
 
-fn finish_job(state: &AppState, id: &str, handle: Option<String>, error: Option<String>) {
-    let Ok(mut jobs) = state.0.jobs.lock() else {
-        return;
-    };
-    if let Some(job) = jobs.jobs.get_mut(id) {
+fn finish_job(state: &AppState, id: &str, handle: Option<String>, error: Option<&'static str>) {
+    let outcome = {
+        let Ok(mut jobs) = state.0.jobs.lock() else {
+            return;
+        };
+        let Some(job) = jobs.jobs.get_mut(id) else {
+            return;
+        };
         if job.status == "cancellation-requested" {
             job.status = "cancelled";
             job.result_handle = None;
             job.expires_at_ms = now_ms().saturating_add(JOB_EXPIRY_MS);
+            (job.kind, "cancelled")
         } else {
-            job.status = if error.is_some() {
+            let event = if error.is_some() {
                 "failed"
             } else {
                 "completed"
             };
+            job.status = event;
             job.progress = 100;
             job.result_handle = handle;
-            job.error_code = error;
+            job.error_code = error.map(str::to_owned);
             job.expires_at_ms = now_ms().saturating_add(JOB_EXPIRY_MS);
+            (job.kind, event)
         }
-    }
+    };
+    log_debug(
+        state,
+        DiagnosticEvent::Job {
+            kind: outcome.0,
+            event: outcome.1,
+            reason: (outcome.1 == "failed").then_some(error).flatten(),
+        },
+    );
 }
 
-fn fail_job(state: &AppState, id: &str, code: &str) {
-    finish_job(state, id, None, Some(code.to_owned()));
+fn fail_job(state: &AppState, id: &str, code: &'static str) {
+    finish_job(state, id, None, Some(code));
 }
 
 fn cleanup_jobs(state: &AppState) {
@@ -2269,19 +2330,31 @@ fn take_preparation(
 ) -> Result<Vec<SelectedSource>, ApiError> {
     cleanup_jobs(state);
     let mut jobs = state.0.jobs.lock().map_err(|_| ApiError::internal())?;
-    let prepared = jobs
-        .preparations
-        .remove(handle)
-        .ok_or_else(|| ApiError::new(StatusCode::PRECONDITION_FAILED, "preparation-expired"))?;
+    let Some(prepared) = jobs.preparations.remove(handle) else {
+        drop(jobs);
+        log_debug(state, DiagnosticEvent::Preparation { event: "expired" });
+        return Err(ApiError::new(
+            StatusCode::PRECONDITION_FAILED,
+            "preparation-expired",
+        ));
+    };
+    drop(jobs);
     if prepared.workflow_id != workflow_id
         || prepared.workflow_revision != revision
         || prepared.source_ids != source_ids
     {
+        log_debug(
+            state,
+            DiagnosticEvent::Preparation {
+                event: "binding-mismatch",
+            },
+        );
         return Err(ApiError::new(
             StatusCode::PRECONDITION_FAILED,
             "preparation-binding-changed",
         ));
     }
+    log_debug(state, DiagnosticEvent::Preparation { event: "consumed" });
     Ok(prepared.selected)
 }
 
@@ -2293,26 +2366,41 @@ fn prepared_source(
 ) -> Result<SelectedSource, ApiError> {
     cleanup_jobs(state);
     let jobs = state.0.jobs.lock().map_err(|_| ApiError::internal())?;
-    let prepared = jobs
-        .preparations
-        .get(handle)
-        .ok_or_else(|| ApiError::new(StatusCode::PRECONDITION_FAILED, "preparation-expired"))?;
+    let Some(prepared) = jobs.preparations.get(handle) else {
+        log_debug(state, DiagnosticEvent::Preparation { event: "expired" });
+        return Err(ApiError::new(
+            StatusCode::PRECONDITION_FAILED,
+            "preparation-expired",
+        ));
+    };
     if prepared.workflow_id != workflow_id {
+        log_debug(
+            state,
+            DiagnosticEvent::Preparation {
+                event: "binding-mismatch",
+            },
+        );
         return Err(ApiError::new(
             StatusCode::PRECONDITION_FAILED,
             "preparation-binding-changed",
         ));
     }
-    let position = prepared
+    let Some(position) = prepared
         .source_ids
         .iter()
         .position(|prepared_id| prepared_id == source_id)
-        .ok_or_else(|| {
-            ApiError::new(
-                StatusCode::PRECONDITION_FAILED,
-                "preparation-binding-changed",
-            )
-        })?;
+    else {
+        log_debug(
+            state,
+            DiagnosticEvent::Preparation {
+                event: "binding-mismatch",
+            },
+        );
+        return Err(ApiError::new(
+            StatusCode::PRECONDITION_FAILED,
+            "preparation-binding-changed",
+        ));
+    };
     prepared
         .selected
         .get(position)

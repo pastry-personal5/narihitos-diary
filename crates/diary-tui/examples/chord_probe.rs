@@ -11,7 +11,7 @@
 //! the design entirely rather than confirm the rest one at a time.
 //!
 //! Test text only: type ASCII and, separately, Korean 2-Set Hangul syllables.
-//! Press Ctrl-D to exit the probe.
+//! Press Ctrl-C to exit the probe.
 
 use std::io::{self, Write};
 
@@ -23,7 +23,7 @@ fn main() -> io::Result<()> {
     println!(
         "Chord probe: type keys to see how this terminal delivers them.\r\n\
          Checking: Ctrl-G, Ctrl-S, Ctrl-D, Ctrl-P/Ctrl-N.\r\n\
-         Press Ctrl-D to quit.\r\n"
+         Press Ctrl-C to quit.\r\n"
     );
     io::stdout().flush()?;
 
@@ -54,7 +54,7 @@ fn probe_loop() -> io::Result<()> {
         };
         println!("received: {label}\r");
         io::stdout().flush()?;
-        if ctrl && matches!(key.code, KeyCode::Char('d')) {
+        if ctrl && matches!(key.code, KeyCode::Char('c')) {
             println!("quit chord observed, exiting\r");
             io::stdout().flush()?;
             return Ok(());

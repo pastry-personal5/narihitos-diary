@@ -43,7 +43,7 @@ use diary_tui::resources::{ResourceRow, ResourcesSidebarModel, ResourcesSidebarW
 use diary_tui::review_view::{ReviewViewModel, can_confirm, first_unresolved_delimiter};
 use diary_tui::session::{RecoveryCause, SessionAction, SessionAuthority};
 use diary_tui::sidebar::WorkflowSidebarWidget;
-use diary_tui::sources_view::{JobPhase, SourcesViewModel};
+use diary_tui::sources_view::{JobPhase, SourceJobKind, SourcesViewModel};
 use diary_tui::stage::{ALL_STAGES, Progress, Stage, adjacent_accessible_stage, map_workflow};
 use diary_tui::start_view::StartViewModel;
 use diary_tui::status_line::{StatusLineModel, StatusLineWidget};
@@ -109,9 +109,18 @@ async fn run_server() -> Result<(), &'static str> {
         .prepare_log_directory()
         .map_err(|_| "diagnostic-path-invalid")?;
     let clock = Arc::new(SystemClock);
+    let log_level = env::var("ND_LOG_LEVEL")
+        .ok()
+        .and_then(|value| DiagnosticLevel::parse(&value))
+        .unwrap_or(DiagnosticLevel::Info);
     let log = Arc::new(
-        DiagnosticLog::open(&lifecycle.log_dir, lifecycle.expected_uid, clock.clone())
-            .map_err(|_| "diagnostic-init-failed")?,
+        DiagnosticLog::open_with_min_level(
+            &lifecycle.log_dir,
+            lifecycle.expected_uid,
+            clock.clone(),
+            log_level,
+        )
+        .map_err(|_| "diagnostic-init-failed")?,
     );
     log.write(
         DiagnosticLevel::Info,
@@ -506,8 +515,8 @@ const RETRY_BACKOFF_CEILING: Duration = Duration::from_secs(4);
 
 /// The real interactive entry point. Acquires the terminal once and keeps
 /// it until the person quits: a not-running, unsafe, or version-mismatch
-/// server is a screen with a retry backoff, never an exit. Ctrl-D quits
-/// from any screen.
+/// server is a screen with a retry backoff, never an exit. Ctrl-C, pressed
+/// twice, quits from any screen.
 fn tui_mode_interactive() -> ExitCode {
     let mut guard = match TerminalGuard::acquire() {
         Ok(guard) => guard,
@@ -515,18 +524,28 @@ fn tui_mode_interactive() -> ExitCode {
     };
     let client = ApiClient::new(UreqTransport::new());
     let mut backoff = RETRY_INITIAL_BACKOFF;
+    let mut quit_armed = false;
 
     loop {
         let (runtime_dir, expected_uid) = match resolve_runtime_location() {
             Ok(value) => value,
             Err(_) => {
-                draw_phase_screen(&mut guard, "Cannot resolve the runtime location.");
+                draw_phase_screen(
+                    &mut guard,
+                    "Cannot resolve the runtime location.",
+                    quit_armed,
+                );
                 match diary_tui::terminal::poll_event(backoff) {
                     diary_tui::terminal::PollOutcome::Quit => {
-                        drop(guard);
-                        return ExitCode::SUCCESS;
+                        if quit_armed {
+                            drop(guard);
+                            return ExitCode::SUCCESS;
+                        }
+                        quit_armed = true;
                     }
-                    diary_tui::terminal::PollOutcome::Other => {}
+                    diary_tui::terminal::PollOutcome::Other => {
+                        quit_armed = false;
+                    }
                     diary_tui::terminal::PollOutcome::TimedOut => {
                         backoff = (backoff * 2).min(RETRY_BACKOFF_CEILING);
                     }
@@ -542,6 +561,7 @@ fn tui_mode_interactive() -> ExitCode {
                 }
                 SessionEnd::Reattach => {
                     backoff = RETRY_INITIAL_BACKOFF;
+                    quit_armed = false;
                 }
                 SessionEnd::RenderFailed => {
                     drop(guard);
@@ -549,13 +569,18 @@ fn tui_mode_interactive() -> ExitCode {
                 }
             },
             Err(phase) => {
-                draw_phase_screen(&mut guard, attach_phase_message(phase));
+                draw_phase_screen(&mut guard, attach_phase_message(phase), quit_armed);
                 match diary_tui::terminal::poll_event(backoff) {
                     diary_tui::terminal::PollOutcome::Quit => {
-                        drop(guard);
-                        return ExitCode::SUCCESS;
+                        if quit_armed {
+                            drop(guard);
+                            return ExitCode::SUCCESS;
+                        }
+                        quit_armed = true;
                     }
-                    diary_tui::terminal::PollOutcome::Other => {}
+                    diary_tui::terminal::PollOutcome::Other => {
+                        quit_armed = false;
+                    }
                     diary_tui::terminal::PollOutcome::TimedOut => {
                         backoff = (backoff * 2).min(RETRY_BACKOFF_CEILING);
                     }
@@ -565,19 +590,24 @@ fn tui_mode_interactive() -> ExitCode {
     }
 }
 
-fn draw_phase_screen(guard: &mut TerminalGuard, message: &str) {
+fn draw_phase_screen(guard: &mut TerminalGuard, message: &str, quit_armed: bool) {
+    let notice = if quit_armed {
+        "Retrying automatically. Press Ctrl-C again to quit."
+    } else {
+        "Retrying automatically. Press Ctrl-C twice to quit."
+    };
     let work_status = WorkStatusModel {
         current_work: Some(message.to_owned()),
         pending_or_blocked: None,
         connection_and_save_safety: Some("Not connected".to_owned()),
-        notice: Some("Retrying automatically. Press Ctrl-D to quit.".to_owned()),
+        notice: Some(notice.to_owned()),
     };
     let stage_model = map_workflow(None, false);
     let status_line = StatusLineModel {
         diary_day: None,
         connection_label: "Not connected",
         ime: ImeState::Unknown,
-        action_hint: Some("Ctrl-D: quit".to_owned()),
+        action_hint: Some("Ctrl-C twice: quit".to_owned()),
     };
     let palette = Palette::new(env::var_os("NO_COLOR").is_some());
     let _ = guard.terminal_mut().draw(|frame| {
@@ -633,13 +663,13 @@ fn run_connected_session(
         current_work: Some("Connected to nd serve".to_owned()),
         pending_or_blocked: None,
         connection_and_save_safety: Some("Connected".to_owned()),
-        notice: Some("Press Ctrl-G for Command Line, Ctrl-D to quit".to_owned()),
+        notice: Some("Press Ctrl-G for Command Line, Ctrl-C twice to quit".to_owned()),
     };
     let mut status_line = StatusLineModel {
         diary_day: None,
         connection_label: "Connected",
         ime: ImeState::Unknown,
-        action_hint: Some("Ctrl-D: quit".to_owned()),
+        action_hint: Some("Ctrl-C twice: quit".to_owned()),
     };
 
     let worker = Worker::spawn(UreqTransport::new(), client_attachment.clone());
@@ -666,12 +696,12 @@ fn run_connected_session(
     let mut discard_confirmation: Option<usize> = None;
     let mut help_open = false;
     let mut sources_view = SourcesViewModel::default();
-    let mut pending_source_job_kind: Option<bool> = None;
+    let mut pending_source_job_kind: Option<SourceJobKind> = None;
     let mut source_job_poll_in_flight = false;
     let mut source_page_pending = false;
     let mut source_page_append = false;
-    let mut source_detail_pending_index: Option<usize> = None;
-    let mut active_source_index: Option<usize> = None;
+    let mut source_detail_pending = false;
+    let mut preview_detail_pending = false;
     let mut source_confirmation_pending = false;
     let mut source_mutation_pending = false;
     let mut source_editor_active = false;
@@ -706,7 +736,7 @@ fn run_connected_session(
         MacInputLanguageQuery,
     );
     const TICK_INTERVAL: Duration = Duration::from_millis(100);
-    const DEFAULT_NOTICE: &str = "Press Ctrl-G for Command Line, Ctrl-D to quit";
+    const DEFAULT_NOTICE: &str = "Press Ctrl-G for Command Line, Ctrl-C twice to quit";
 
     let mut command_line_active = false;
     let mut command_line = diary_tui::command_line::CommandLineState::default();
@@ -716,6 +746,7 @@ fn run_connected_session(
     let mut day_draft = String::new();
     let mut day_editing = false;
     let mut main_scroll = 0u16;
+    let mut shown_source_detail_id: Option<String> = None;
     let palette = Palette::new(env::var_os("NO_COLOR").is_some());
 
     loop {
@@ -811,20 +842,14 @@ fn run_connected_session(
                     if let Some(error) = &start_view.last_error {
                         feedback = Some(error.safe_label());
                     }
-                    focus.clamp(
-                        ALL_STAGES.len(),
-                        start_view.workflows.len(),
-                        START_CONTROL_COUNT,
-                    );
+                    // No focus clamp here: an SSE-driven list refresh also
+                    // arrives while another stage is shown, and clamping with
+                    // Start's counts would move that stage's Resources/Main
+                    // focus. The per-frame clamp uses the current stage's.
                 }
                 WorkerResult::MoreWorkflows(outcome) => {
                     more_pending = false;
                     start_view.apply_more(outcome);
-                    focus.clamp(
-                        ALL_STAGES.len(),
-                        start_view.workflows.len(),
-                        START_CONTROL_COUNT,
-                    );
                     if let Some(error) = &start_view.last_error {
                         feedback = Some(error.safe_label());
                     }
@@ -875,11 +900,6 @@ fn run_connected_session(
                         } else if let Some(error) = &start_view.last_error {
                             feedback = Some(error.safe_label());
                         }
-                        focus.clamp(
-                            ALL_STAGES.len(),
-                            start_view.workflows.len(),
-                            START_CONTROL_COUNT,
-                        );
                     }
                 }
                 WorkerResult::WorkflowFetched(outcome) => {
@@ -890,7 +910,14 @@ fn run_connected_session(
                                 .as_ref()
                                 .is_some_and(|current| current.id == workflow.id)
                         {
+                            let focused_source_id =
+                                focused_source_id(current_stage, &focus, &sources_view);
                             sources_view.load_candidates_from(workflow);
+                            reanchor_source_focus(
+                                &mut focus,
+                                &sources_view,
+                                focused_source_id.as_deref(),
+                            );
                             compose_view.load_from_canonical(workflow);
                             if !compose_view.is_dirty() {
                                 draft_editor = DraftEditor::new(&compose_view.text);
@@ -912,10 +939,11 @@ fn run_connected_session(
                             ClientOutcome::Ok(job) => {
                                 let terminal = matches!(
                                     job.status.as_str(),
-                                    "succeeded" | "failed" | "cancelled" | "timed-out"
+                                    "completed" | "failed" | "cancelled" | "timed-out"
                                 );
-                                let succeeded = job.status == "succeeded";
+                                let succeeded = job.status == "completed";
                                 let kind = job.kind.clone();
+                                let error_code = job.error_code.clone();
                                 assistant_view.active_job = Some(job);
                                 if terminal {
                                     assistant_job = None;
@@ -955,7 +983,12 @@ fn run_connected_session(
                                     });
                                     feedback = Some("Assistant action complete".to_owned());
                                 } else if terminal {
-                                    feedback = Some("Assistant action did not complete; manual Draft remains available".to_owned());
+                                    feedback = Some(match error_code {
+                                        Some(code) => format!(
+                                            "Assistant action failed: {code}; manual Draft remains available"
+                                        ),
+                                        None => "Assistant action did not complete; manual Draft remains available".to_owned(),
+                                    });
                                 }
                             }
                             ClientOutcome::Problem(problem) => {
@@ -971,14 +1004,43 @@ fn run_connected_session(
                             ClientOutcome::Ok(job) => Some(job.kind.clone()),
                             _ => None,
                         };
+                        let job_id = match &outcome {
+                            ClientOutcome::Ok(job) => Some(job.id.clone()),
+                            _ => None,
+                        };
+                        let is_preview_job = job_id.is_some()
+                            && job_id.as_deref() == sources_view.pending_preview_job.as_deref();
                         let phase = sources_view.apply_job_status(outcome);
                         if let Some(error) = &sources_view.last_error {
                             feedback = Some(error.safe_label());
                         }
                         match (job_kind.as_deref(), phase) {
+                            _ if is_preview_job && phase == Some(JobPhase::Succeeded) => {
+                                if let (Some(workflow), Some(source_id), Some(handle)) = (
+                                    current_workflow.as_ref(),
+                                    sources_view.preview_source_id.clone(),
+                                    sources_view.preview_handle.take(),
+                                ) {
+                                    if worker
+                                        .try_send(Intent::SourceDetail {
+                                            workflow_id: workflow.id.clone(),
+                                            source_id,
+                                            preparation_handle: handle,
+                                        })
+                                        .is_ok()
+                                    {
+                                        preview_detail_pending = true;
+                                    } else {
+                                        sources_view.preview_source_id = None;
+                                    }
+                                }
+                            }
+                            _ if is_preview_job && phase == Some(JobPhase::Failed) => {
+                                sources_view.preview_source_id = None;
+                                feedback = Some("Preview failed; review and retry".to_owned());
+                            }
                             (Some("discovery"), Some(JobPhase::Succeeded)) => {
                                 sources_view.accept_fresh_discovery();
-                                active_source_index = None;
                                 if let Some(workflow) = &current_workflow {
                                     source_page_append = false;
                                     source_page_pending = worker
@@ -1013,8 +1075,8 @@ fn run_connected_session(
                     }
                 }
                 WorkerResult::JobAccepted(outcome) => {
-                    if let Some(preparation) = pending_source_job_kind.take() {
-                        sources_view.apply_job_accepted(preparation, outcome);
+                    if let Some(kind) = pending_source_job_kind.take() {
+                        sources_view.apply_job_accepted(kind, outcome);
                         if let Some(error) = &sources_view.last_error {
                             feedback = Some(error.safe_label());
                         }
@@ -1035,7 +1097,9 @@ fn run_connected_session(
                 }
                 WorkerResult::Sources(outcome) => {
                     source_page_pending = false;
+                    let focused_source_id = focused_source_id(current_stage, &focus, &sources_view);
                     sources_view.apply_source_page(source_page_append, outcome);
+                    reanchor_source_focus(&mut focus, &sources_view, focused_source_id.as_deref());
                     if let Some(error) = &sources_view.last_error {
                         feedback = Some(error.safe_label());
                     }
@@ -1054,12 +1118,15 @@ fn run_connected_session(
                                 feedback = Some(error.safe_label().to_owned())
                             }
                         }
-                    } else {
-                        let pending_index = source_detail_pending_index.take();
-                        sources_view.apply_source_detail(*outcome);
-                        if sources_view.last_error.is_none() {
-                            active_source_index = pending_index;
+                    } else if preview_detail_pending {
+                        preview_detail_pending = false;
+                        sources_view.apply_preview_detail(*outcome);
+                        if let Some(error) = &sources_view.last_error {
+                            feedback = Some(error.safe_label());
                         }
+                    } else {
+                        source_detail_pending = false;
+                        sources_view.apply_source_detail(*outcome);
                         if let Some(error) = &sources_view.last_error {
                             feedback = Some(error.safe_label());
                         }
@@ -1080,7 +1147,14 @@ fn run_connected_session(
                     source_mutation_pending = false;
                     match *outcome {
                         ClientOutcome::Ok(workflow) => {
+                            let focused_source_id =
+                                focused_source_id(current_stage, &focus, &sources_view);
                             sources_view.load_candidates_from(&workflow);
+                            reanchor_source_focus(
+                                &mut focus,
+                                &sources_view,
+                                focused_source_id.as_deref(),
+                            );
                             sources_view.active_detail = None;
                             sources_view.active_refine_suggestion = None;
                             sources_view.pending_delete_confirmation = None;
@@ -1361,6 +1435,7 @@ fn run_connected_session(
                 .pending_discovery_job
                 .as_ref()
                 .or(sources_view.pending_preparation_job.as_ref())
+                .or(sources_view.pending_preview_job.as_ref())
             && worker
                 .try_send(Intent::PollJob {
                     job_id: job_id.clone(),
@@ -1399,7 +1474,7 @@ fn run_connected_session(
                 || "manual".to_owned(),
                 |backend| format!("{} · {}", backend.display_label, backend.composition_path),
             );
-        status_line.action_hint = Some(format!("{selected_backend_label} | Ctrl-D: quit"));
+        status_line.action_hint = Some(format!("{selected_backend_label} | Ctrl-C twice: quit"));
 
         let stage_model = map_workflow(current_workflow.as_ref(), false);
         let can_mutate = authority.mutations_enabled()
@@ -1421,7 +1496,9 @@ fn run_connected_session(
         });
         let source_job_busy = pending_source_job_kind.is_some()
             || sources_view.pending_discovery_job.is_some()
-            || sources_view.pending_preparation_job.is_some();
+            || sources_view.pending_preparation_job.is_some()
+            || sources_view.pending_preview_job.is_some()
+            || preview_detail_pending;
         let autosave_due =
             last_edit_at.is_some_and(|edited| edited.elapsed() >= Duration::from_secs(1));
         if can_mutate
@@ -1497,7 +1574,11 @@ fn run_connected_session(
                 });
             format!("Delete {name} and linked audio? Enter confirms; Esc cancels")
         } else if quit_confirmation {
-            "Draft is not safely saved. Ctrl-D again to quit; Esc cancels".to_owned()
+            if compose_view.is_dirty() || save_in_flight.is_some() {
+                "Draft is not safely saved. Ctrl-C again to quit; Esc cancels".to_owned()
+            } else {
+                "Press Ctrl-C again to quit; Esc cancels".to_owned()
+            }
         } else if let Some(index) = discard_confirmation {
             format!(
                 "Discard {}? Enter confirms; Esc cancels",
@@ -1557,7 +1638,7 @@ fn run_connected_session(
                 source_date_editing,
                 &source_date_draft,
                 source_page_pending,
-                source_detail_pending_index.is_some(),
+                source_detail_pending,
                 source_confirmation_pending,
                 source_job_busy,
             ),
@@ -1606,7 +1687,7 @@ fn run_connected_session(
                 ResourcesSidebarWidget::new(&visible_resources)
                     .active(match current_stage {
                         Stage::Start => Some(focus.resource_index),
-                        Stage::Sources => active_source_index,
+                        Stage::Sources => sources_view.active_candidate_index(),
                         Stage::Compose => Some(compose_active_resource),
                         Stage::Review => Some(0),
                         _ => None,
@@ -1618,7 +1699,14 @@ fn run_connected_session(
                     .palette(palette)
             };
             let main_height = areas.main_pane.height.saturating_sub(2);
-            main_scroll = ensure_selected_line_visible(&main_body, main_scroll, main_height);
+            main_scroll = resolve_main_scroll(
+                current_stage,
+                &sources_view,
+                &main_body,
+                main_scroll,
+                main_height,
+                &mut shown_source_detail_id,
+            );
             if (current_stage == Stage::Compose && editor_active && compose_active_resource == 0)
                 || (current_stage == Stage::Sources && source_editor_active)
             {
@@ -1675,13 +1763,16 @@ fn run_connected_session(
         use diary_tui::terminal::{InputEvent, InputPoll};
         match diary_tui::terminal::poll_input_event(TICK_INTERVAL) {
             InputPoll::Quit => {
-                if !compose_view.is_dirty() && save_in_flight.is_none() || quit_confirmation {
+                if quit_confirmation {
                     return SessionEnd::Quit;
                 }
-                save_requested = true;
                 quit_confirmation = true;
-                feedback =
-                    Some("Saving before quit; Ctrl-D again abandons unsaved edits".to_owned());
+                feedback = Some(if compose_view.is_dirty() || save_in_flight.is_some() {
+                    save_requested = true;
+                    "Saving before quit; Ctrl-C again abandons unsaved edits".to_owned()
+                } else {
+                    "Press Ctrl-C again to quit".to_owned()
+                });
             }
             InputPoll::TimedOut | InputPoll::Ignored => {}
             InputPoll::Ctrl('g') if !command_line_active => {
@@ -2017,25 +2108,15 @@ fn run_connected_session(
                     }
                 }
                 FocusZone::Resources if current_stage == Stage::Sources => {
-                    if !source_job_busy
-                        && source_detail_pending_index.is_none()
-                        && let (Some(workflow), Some(candidate), Some(handle)) = (
-                            current_workflow.as_ref(),
-                            sources_view.candidates.get(focus.resource_index),
-                            sources_view.latest_preparation_handle.as_ref(),
-                        )
-                        && worker
-                            .try_send(Intent::SourceDetail {
-                                workflow_id: workflow.id.clone(),
-                                source_id: candidate.id.clone(),
-                                preparation_handle: handle.clone(),
-                            })
-                            .is_ok()
-                    {
-                        source_detail_pending_index = Some(focus.resource_index);
-                    } else if sources_view.latest_preparation_handle.is_none() {
-                        feedback =
-                            Some("Prepare included sources before inspecting text".to_owned());
+                    if !source_job_busy && !source_detail_pending {
+                        request_inspect_source(
+                            &worker,
+                            &mut sources_view,
+                            &current_workflow,
+                            focus.resource_index,
+                            &mut source_detail_pending,
+                            &mut pending_source_job_kind,
+                        );
                     }
                 }
                 FocusZone::Resources if current_stage == Stage::Compose => {
@@ -2210,7 +2291,7 @@ fn run_connected_session(
                     match focus.main_control_index {
                         0 if can_mutate && can_read_sources && no_source_job => {
                             if let Some(workflow) = &current_workflow {
-                                pending_source_job_kind = Some(false);
+                                pending_source_job_kind = Some(SourceJobKind::Discovery);
                                 if worker
                                     .try_send(Intent::Discover {
                                         workflow_id: workflow.id.clone(),
@@ -2233,7 +2314,7 @@ fn run_connected_session(
                             && no_source_job =>
                         {
                             if let Some(workflow) = &current_workflow {
-                                pending_source_job_kind = Some(false);
+                                pending_source_job_kind = Some(SourceJobKind::Discovery);
                                 if worker
                                     .try_send(Intent::Discover {
                                         workflow_id: workflow.id.clone(),
@@ -2252,7 +2333,6 @@ fn run_connected_session(
                             {
                                 let source_id = candidate.id.clone();
                                 let _ = sources_view.toggle_included(&source_id);
-                                active_source_index = None;
                             }
                         }
                         4 if can_mutate
@@ -2262,8 +2342,7 @@ fn run_connected_session(
                         {
                             if let Some(workflow) = &current_workflow {
                                 sources_view.invalidate_preparation();
-                                active_source_index = None;
-                                pending_source_job_kind = Some(true);
+                                pending_source_job_kind = Some(SourceJobKind::Preparation);
                                 if worker
                                     .try_send(Intent::PrepareSources {
                                         workflow_id: workflow.id.clone(),
@@ -2276,21 +2355,15 @@ fn run_connected_session(
                                 }
                             }
                         }
-                        5 if no_source_job && source_detail_pending_index.is_none() => {
-                            if let (Some(workflow), Some(candidate), Some(handle)) = (
-                                current_workflow.as_ref(),
-                                sources_view.candidates.get(focus.resource_index),
-                                sources_view.latest_preparation_handle.as_ref(),
-                            ) && worker
-                                .try_send(Intent::SourceDetail {
-                                    workflow_id: workflow.id.clone(),
-                                    source_id: candidate.id.clone(),
-                                    preparation_handle: handle.clone(),
-                                })
-                                .is_ok()
-                            {
-                                source_detail_pending_index = Some(focus.resource_index);
-                            }
+                        5 if no_source_job && !source_detail_pending => {
+                            request_inspect_source(
+                                &worker,
+                                &mut sources_view,
+                                &current_workflow,
+                                focus.resource_index,
+                                &mut source_detail_pending,
+                                &mut pending_source_job_kind,
+                            );
                         }
                         6 if can_mutate && !source_mutation_pending && assistant_job.is_none() => {
                             if let (Some(workflow), Some(detail)) =
@@ -2630,6 +2703,58 @@ fn run_connected_session(
     }
 }
 
+/// Requests the body of a candidate for display, regardless of whether it's
+/// included: activating a source and including it are independent actions
+/// (product-behavior.md, ux-tui.md). An already bulk-prepared included
+/// source reuses the confirm-bound handle; any other candidate gets an ad
+/// hoc, single-source preview that never touches the bulk preparation
+/// bookkeeping `confirm_selection` depends on.
+#[allow(clippy::too_many_arguments)]
+fn request_inspect_source(
+    worker: &Worker,
+    sources_view: &mut SourcesViewModel,
+    current_workflow: &Option<WorkflowDto>,
+    resource_index: usize,
+    source_detail_pending: &mut bool,
+    pending_source_job_kind: &mut Option<SourceJobKind>,
+) {
+    let Some(workflow) = current_workflow.as_ref() else {
+        return;
+    };
+    let Some(candidate) = sources_view.candidates.get(resource_index) else {
+        return;
+    };
+    if sources_view.included.contains(&candidate.id)
+        && let Some(handle) = sources_view.latest_preparation_handle.clone()
+    {
+        if worker
+            .try_send(Intent::SourceDetail {
+                workflow_id: workflow.id.clone(),
+                source_id: candidate.id.clone(),
+                preparation_handle: handle,
+            })
+            .is_ok()
+        {
+            *source_detail_pending = true;
+        }
+        return;
+    }
+    let source_id = candidate.id.clone();
+    sources_view.preview_source_id = Some(source_id.clone());
+    *pending_source_job_kind = Some(SourceJobKind::Preview);
+    if worker
+        .try_send(Intent::PrepareSources {
+            workflow_id: workflow.id.clone(),
+            revision: workflow.revision,
+            source_ids: vec![source_id],
+        })
+        .is_err()
+    {
+        sources_view.preview_source_id = None;
+        *pending_source_job_kind = None;
+    }
+}
+
 const START_CONTROL_COUNT: usize = 9;
 const SOURCES_CONTROL_COUNT: usize = 15;
 const COMPOSE_CONTROL_COUNT: usize = 18;
@@ -2786,6 +2911,70 @@ fn focus_item_count(focus: &FocusModel, resource_count: usize, control_count: us
     }
 }
 
+fn focused_source_id(
+    stage: Stage,
+    focus: &FocusModel,
+    sources: &SourcesViewModel,
+) -> Option<String> {
+    (stage == Stage::Sources)
+        .then(|| sources.candidates.get(focus.resource_index))
+        .flatten()
+        .map(|candidate| candidate.id.clone())
+}
+
+/// Keeps the Resources Sidebar cursor on the same source after a canonical
+/// reload or page response replaces the candidate vector. If that source was
+/// removed, or another stage is shown (no focused source), focus is left
+/// alone: the per-frame clamp bounds it with the current stage's counts,
+/// whereas clamping here with Sources' counts would move Compose's focus.
+fn reanchor_source_focus(
+    focus: &mut FocusModel,
+    sources: &SourcesViewModel,
+    previous_source_id: Option<&str>,
+) {
+    if let Some(index) = previous_source_id.and_then(|source_id| {
+        sources
+            .candidates
+            .iter()
+            .position(|candidate| candidate.id == source_id)
+    }) {
+        focus.resource_index = index;
+    }
+}
+
+/// Picks the Main Pane's scroll offset for this frame. Opening a source's
+/// text (or a refinement suggestion) resets the view to the top so freshly
+/// revealed content starts predictably rather than at whatever offset a
+/// previously shown source left behind. While that text is open, its own
+/// scrolling governs the viewport: the focused Main-zone control's header
+/// line (e.g. "Inspect active prepared source") must not keep pinning the
+/// view back up and away from the body text rendered below it, which would
+/// make the viewport snap back every frame the moment a person tries to
+/// page down into the text.
+fn resolve_main_scroll(
+    stage: Stage,
+    sources_view: &SourcesViewModel,
+    body: &str,
+    current: u16,
+    viewport_height: u16,
+    shown_source_detail_id: &mut Option<String>,
+) -> u16 {
+    let current_detail_id = sources_view.active_detail.as_ref().map(|detail| &detail.id);
+    let mut scroll = current;
+    if current_detail_id != shown_source_detail_id.as_ref() {
+        *shown_source_detail_id = current_detail_id.cloned();
+        scroll = 0;
+    }
+    let viewing_source_text = stage == Stage::Sources
+        && (sources_view.active_detail.is_some()
+            || sources_view.active_refine_suggestion.is_some());
+    if viewing_source_text {
+        scroll
+    } else {
+        ensure_selected_line_visible(body, scroll, viewport_height)
+    }
+}
+
 fn ensure_selected_line_visible(body: &str, current: u16, viewport_height: u16) -> u16 {
     if viewport_height == 0 {
         return 0;
@@ -2904,7 +3093,7 @@ fn start_screen_body(
     );
     if help_open {
         body.push_str(
-            "\n\nTab/Shift-Tab or Left/Right changes focus. Up/Down chooses an item. Enter activates it. Ctrl-G opens Command Line; Ctrl-P/Ctrl-N changes stage; Ctrl-D quits.",
+            "\n\nTab/Shift-Tab or Left/Right changes focus. Up/Down chooses an item. Enter activates it. Ctrl-G opens Command Line; Ctrl-P/Ctrl-N changes stage; Ctrl-C twice quits.",
         );
     }
     body
@@ -3108,6 +3297,101 @@ mod start_screen_tests {
         assert_eq!(ensure_selected_line_visible(body, 0, 3), 2);
         assert_eq!(ensure_selected_line_visible(body, 4, 3), 4);
         assert_eq!(ensure_selected_line_visible(body, 5, 3), 4);
+    }
+
+    fn sources_view_with_detail(id: &str) -> SourcesViewModel {
+        let mut view = SourcesViewModel::default();
+        view.apply_source_detail(ClientOutcome::Ok(diary_tui::client::SourceDetailResponse {
+            detail: diary_control_contract::SourceDetailDto {
+                id: id.to_owned(),
+                source_note_name: "note".to_owned(),
+                body: "synthetic body".to_owned(),
+                content_digest: "digest".to_owned(),
+                directory_day: None,
+                header_day: None,
+                warning_code: None,
+            },
+            preparation_handle: None,
+        }));
+        view
+    }
+
+    #[test]
+    fn opening_source_text_stops_the_focused_control_from_pinning_the_scroll_back() {
+        // A line starting with '>' near the top, as the Sources header
+        // always renders for whichever Main-zone control is focused.
+        let body = "> Inspect active prepared source\nmore header\n\n--- Source text ---\nfirst body line\nsecond body line";
+        let sources = sources_view_with_detail("src_1");
+        let mut shown = Some("src_1".to_owned());
+        // The person paged down to read the body; before the fix this would
+        // snap back up toward the '>' line every frame.
+        let scroll = resolve_main_scroll(Stage::Sources, &sources, body, 4, 3, &mut shown);
+        assert_eq!(scroll, 4);
+    }
+
+    #[test]
+    fn opening_a_different_source_resets_the_scroll_to_the_top() {
+        let sources = sources_view_with_detail("src_2");
+        let mut shown = Some("src_1".to_owned());
+        let scroll = resolve_main_scroll(Stage::Sources, &sources, "body", 7, 3, &mut shown);
+        assert_eq!(scroll, 0);
+        assert_eq!(shown, Some("src_2".to_owned()));
+    }
+
+    #[test]
+    fn canonical_source_reordering_keeps_focus_on_the_same_source() {
+        let mut sources = SourcesViewModel {
+            candidates: vec![
+                diary_control_contract::SourceCandidateDto {
+                    id: "src_1".to_owned(),
+                    source_note_name: "first".to_owned(),
+                    directory_day: None,
+                    header_day: None,
+                    warning_code: None,
+                    availability: "local".to_owned(),
+                    selected: false,
+                },
+                diary_control_contract::SourceCandidateDto {
+                    id: "src_2".to_owned(),
+                    source_note_name: "second".to_owned(),
+                    directory_day: None,
+                    header_day: None,
+                    warning_code: None,
+                    availability: "local".to_owned(),
+                    selected: false,
+                },
+            ],
+            ..SourcesViewModel::default()
+        };
+        let mut focus = FocusModel {
+            zone: FocusZone::Resources,
+            resource_index: 0,
+            ..FocusModel::default()
+        };
+        let focused_id = focused_source_id(Stage::Sources, &focus, &sources);
+
+        sources.candidates.swap(0, 1);
+        reanchor_source_focus(&mut focus, &sources, focused_id.as_deref());
+
+        assert_eq!(focus.resource_index, 1);
+        assert_eq!(sources.candidates[focus.resource_index].id, "src_1");
+    }
+
+    #[test]
+    fn a_source_reload_outside_sources_leaves_that_stages_focus_alone() {
+        let sources = SourcesViewModel::default();
+        let mut focus = FocusModel {
+            zone: FocusZone::Main,
+            resource_index: 3,
+            main_control_index: 17,
+            ..FocusModel::default()
+        };
+        let focused_id = focused_source_id(Stage::Compose, &focus, &sources);
+
+        reanchor_source_focus(&mut focus, &sources, focused_id.as_deref());
+
+        assert_eq!(focus.resource_index, 3);
+        assert_eq!(focus.main_control_index, 17);
     }
 
     #[test]

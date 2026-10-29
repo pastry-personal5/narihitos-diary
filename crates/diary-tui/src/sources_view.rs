@@ -40,6 +40,17 @@ pub enum JobPhase {
     Failed,
 }
 
+/// Which bookkeeping an accepted source job belongs to. `Preview` is the ad
+/// hoc, single-source job used to inspect any candidate's text regardless of
+/// inclusion; it never shares state with the bulk `Preparation` job that the
+/// included set uses to obtain the handle `confirm_selection` requires.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum SourceJobKind {
+    Discovery,
+    Preparation,
+    Preview,
+}
+
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct SourcesViewModel {
     pub candidates: Vec<SourceCandidateDto>,
@@ -59,6 +70,18 @@ pub struct SourcesViewModel {
     /// `confirm_selection` still takes a handle explicitly so its caller must
     /// bind confirmation to the currently reviewed preparation.
     pub latest_preparation_handle: Option<String>,
+    /// The ad hoc preview job's in-flight ID, independent of
+    /// `pending_discovery_job`/`pending_preparation_job`. Previewing a
+    /// candidate's text never touches the bulk preparation bookkeeping that
+    /// `confirm_selection` depends on.
+    pub pending_preview_job: Option<String>,
+    /// The handle a succeeded preview job produced, scoped only to
+    /// `preview_source_id`. Consumed by the follow-up source-detail fetch.
+    pub preview_handle: Option<String>,
+    /// The source a preview job targets or just resolved, so the caller can
+    /// bind the follow-up source-detail fetch and decide whether to mark it
+    /// reviewed (only if it's currently included).
+    pub preview_source_id: Option<String>,
     pub last_error: Option<SourcesError>,
 }
 
@@ -127,7 +150,7 @@ impl SourcesViewModel {
                 self.last_error = None;
                 self.job_progress_percent = Some(job.progress_percent);
                 match job.status.as_str() {
-                    "succeeded" => Some(JobPhase::Succeeded),
+                    "completed" => Some(JobPhase::Succeeded),
                     "failed" | "cancelled" | "expired" => Some(JobPhase::Failed),
                     _ => Some(JobPhase::Running),
                 }
@@ -198,15 +221,15 @@ impl SourcesViewModel {
 
     pub fn apply_job_accepted(
         &mut self,
-        preparation: bool,
+        kind: SourceJobKind,
         outcome: ClientOutcome<JobAcceptedDto>,
     ) {
         match outcome {
             ClientOutcome::Ok(job) => {
-                if preparation {
-                    self.pending_preparation_job = Some(job.job_id);
-                } else {
-                    self.pending_discovery_job = Some(job.job_id);
+                match kind {
+                    SourceJobKind::Preparation => self.pending_preparation_job = Some(job.job_id),
+                    SourceJobKind::Discovery => self.pending_discovery_job = Some(job.job_id),
+                    SourceJobKind::Preview => self.pending_preview_job = Some(job.job_id),
                 }
                 self.last_error = None;
             }
@@ -224,7 +247,7 @@ impl SourcesViewModel {
             ClientOutcome::Ok(job) => {
                 self.last_error = None;
                 let phase = match job.status.as_str() {
-                    "succeeded" => JobPhase::Succeeded,
+                    "completed" => JobPhase::Succeeded,
                     "failed" | "cancelled" | "expired" => JobPhase::Failed,
                     _ => JobPhase::Running,
                 };
@@ -233,12 +256,20 @@ impl SourcesViewModel {
                     if self.pending_preparation_job.as_deref() == Some(job.id.as_str()) {
                         self.pending_preparation_job = None;
                         if phase == JobPhase::Succeeded {
-                            self.latest_preparation_handle = job.result_handle;
+                            self.latest_preparation_handle = job.result_handle.clone();
                             self.reviewed.clear();
                         }
                     }
                     if self.pending_discovery_job.as_deref() == Some(job.id.as_str()) {
                         self.pending_discovery_job = None;
+                    }
+                    if self.pending_preview_job.as_deref() == Some(job.id.as_str()) {
+                        self.pending_preview_job = None;
+                        if phase == JobPhase::Succeeded {
+                            self.preview_handle = job.result_handle;
+                        } else {
+                            self.preview_source_id = None;
+                        }
                     }
                 }
                 Some(phase)
@@ -288,6 +319,32 @@ impl SourcesViewModel {
             ClientOutcome::Ok(response) => {
                 self.latest_preparation_handle = response.preparation_handle;
                 self.reviewed.insert(response.detail.id.clone());
+                self.active_detail = Some(response.detail);
+                self.last_error = None;
+            }
+            ClientOutcome::Problem(problem) => {
+                self.last_error = Some(SourcesError::Problem(problem));
+            }
+            ClientOutcome::Transport(error) => {
+                self.last_error = Some(SourcesError::Transport(error));
+            }
+        }
+    }
+
+    /// Applies the source-detail fetch that follows a succeeded preview job.
+    /// Shows the body like `apply_source_detail`, but never touches
+    /// `latest_preparation_handle` or clears `reviewed`: previewing a
+    /// candidate is independent of the bulk included-set preparation that
+    /// `confirm_selection` depends on. Marks the source reviewed only if it
+    /// is currently included, since `reviewed` otherwise only gates
+    /// confirmation of included sources.
+    pub fn apply_preview_detail(&mut self, outcome: ClientOutcome<SourceDetailResponse>) {
+        let previewed_id = self.preview_source_id.take();
+        match outcome {
+            ClientOutcome::Ok(response) => {
+                if previewed_id.is_some_and(|id| self.included.contains(&id)) {
+                    self.reviewed.insert(response.detail.id.clone());
+                }
                 self.active_detail = Some(response.detail);
                 self.last_error = None;
             }
@@ -416,6 +473,18 @@ impl SourcesViewModel {
                 })
                 .collect(),
         }
+    }
+
+    /// Resolves the displayed source body back to its current candidate row.
+    /// Candidate pages and canonical workflow reloads may replace or reorder
+    /// the vector, so the active marker must follow the source ID rather than
+    /// an index captured before the asynchronous read completed.
+    #[must_use]
+    pub fn active_candidate_index(&self) -> Option<usize> {
+        let active_id = &self.active_detail.as_ref()?.id;
+        self.candidates
+            .iter()
+            .position(|candidate| &candidate.id == active_id)
     }
 }
 
@@ -588,7 +657,7 @@ mod tests {
         let phase = view.apply_job_status(ClientOutcome::Ok(JobDto {
             id: "job_1".to_owned(),
             kind: "source-preparation".to_owned(),
-            status: "succeeded".to_owned(),
+            status: "completed".to_owned(),
             workflow_id: "wf_20261029".to_owned(),
             progress_percent: 100,
             result_handle: Some("prep_1".to_owned()),
@@ -599,6 +668,133 @@ mod tests {
         assert_eq!(view.latest_preparation_handle.as_deref(), Some("prep_1"));
         assert_eq!(view.pending_preparation_job, None);
         assert!(!view.all_included_reviewed());
+    }
+
+    #[test]
+    fn preview_job_acceptance_never_touches_bulk_preparation_bookkeeping() {
+        let mut view = SourcesViewModel {
+            pending_preparation_job: Some("bulk_job".to_owned()),
+            latest_preparation_handle: Some("bulk_handle".to_owned()),
+            ..SourcesViewModel::default()
+        };
+        view.preview_source_id = Some("src_other".to_owned());
+        view.apply_job_accepted(
+            SourceJobKind::Preview,
+            ClientOutcome::Ok(JobAcceptedDto {
+                job_id: "preview_job".to_owned(),
+            }),
+        );
+        assert_eq!(view.pending_preview_job.as_deref(), Some("preview_job"));
+        assert_eq!(view.pending_preparation_job.as_deref(), Some("bulk_job"));
+        assert_eq!(
+            view.latest_preparation_handle.as_deref(),
+            Some("bulk_handle")
+        );
+    }
+
+    #[test]
+    fn succeeded_preview_job_sets_only_the_preview_handle() {
+        let mut view = SourcesViewModel {
+            pending_preview_job: Some("preview_job".to_owned()),
+            preview_source_id: Some("src_1".to_owned()),
+            latest_preparation_handle: Some("bulk_handle".to_owned()),
+            reviewed: BTreeSet::from(["already_reviewed".to_owned()]),
+            ..SourcesViewModel::default()
+        };
+        let phase = view.apply_job_status(ClientOutcome::Ok(JobDto {
+            id: "preview_job".to_owned(),
+            kind: "source-preparation".to_owned(),
+            status: "completed".to_owned(),
+            workflow_id: "wf_20261029".to_owned(),
+            progress_percent: 100,
+            result_handle: Some("preview_handle_1".to_owned()),
+            error_code: None,
+            expires_at_unix_ms: 0,
+        }));
+        assert_eq!(phase, Some(JobPhase::Succeeded));
+        assert_eq!(view.pending_preview_job, None);
+        assert_eq!(view.preview_handle.as_deref(), Some("preview_handle_1"));
+        assert_eq!(view.preview_source_id.as_deref(), Some("src_1"));
+        // The bulk confirm-selection handle and prior review state are untouched.
+        assert_eq!(
+            view.latest_preparation_handle.as_deref(),
+            Some("bulk_handle")
+        );
+        assert!(view.reviewed.contains("already_reviewed"));
+    }
+
+    #[test]
+    fn previewing_an_excluded_candidate_shows_text_without_marking_it_reviewed() {
+        let mut view = SourcesViewModel {
+            preview_source_id: Some("src_1".to_owned()),
+            ..SourcesViewModel::default()
+        };
+        view.apply_preview_detail(ClientOutcome::Ok(SourceDetailResponse {
+            detail: diary_control_contract::SourceDetailDto {
+                id: "src_1".to_owned(),
+                source_note_name: "2026-10-28 note".to_owned(),
+                body: "synthetic body".to_owned(),
+                content_digest: "digest".to_owned(),
+                directory_day: Some("2026-10-28".to_owned()),
+                header_day: Some("2026-10-28".to_owned()),
+                warning_code: None,
+            },
+            preparation_handle: None,
+        }));
+        assert_eq!(
+            view.active_detail
+                .as_ref()
+                .map(|detail| detail.body.as_str()),
+            Some("synthetic body")
+        );
+        assert!(!view.reviewed.contains("src_1"));
+        assert_eq!(view.latest_preparation_handle, None);
+        assert_eq!(view.preview_source_id, None);
+    }
+
+    #[test]
+    fn previewing_an_included_candidate_marks_it_reviewed() {
+        let mut view = SourcesViewModel {
+            included: BTreeSet::from(["src_1".to_owned()]),
+            preview_source_id: Some("src_1".to_owned()),
+            ..SourcesViewModel::default()
+        };
+        view.apply_preview_detail(ClientOutcome::Ok(SourceDetailResponse {
+            detail: diary_control_contract::SourceDetailDto {
+                id: "src_1".to_owned(),
+                source_note_name: "2026-10-28 note".to_owned(),
+                body: "synthetic body".to_owned(),
+                content_digest: "digest".to_owned(),
+                directory_day: Some("2026-10-28".to_owned()),
+                header_day: Some("2026-10-28".to_owned()),
+                warning_code: None,
+            },
+            preparation_handle: None,
+        }));
+        assert!(view.reviewed.contains("src_1"));
+        assert_eq!(view.latest_preparation_handle, None);
+    }
+
+    #[test]
+    fn active_candidate_index_follows_the_displayed_source_across_reordering() {
+        let mut view = SourcesViewModel {
+            candidates: vec![candidate("src_1", "first"), candidate("src_2", "second")],
+            active_detail: Some(diary_control_contract::SourceDetailDto {
+                id: "src_1".to_owned(),
+                source_note_name: "src_1".to_owned(),
+                body: "body".to_owned(),
+                content_digest: "digest".to_owned(),
+                directory_day: None,
+                header_day: None,
+                warning_code: None,
+            }),
+            ..SourcesViewModel::default()
+        };
+        assert_eq!(view.active_candidate_index(), Some(0));
+
+        view.candidates.swap(0, 1);
+
+        assert_eq!(view.active_candidate_index(), Some(1));
     }
 
     #[test]
@@ -638,7 +834,7 @@ mod tests {
     #[test]
     fn poll_job_maps_server_statuses_to_phases() {
         for (status, expected) in [
-            ("succeeded", JobPhase::Succeeded),
+            ("completed", JobPhase::Succeeded),
             ("failed", JobPhase::Failed),
             ("running", JobPhase::Running),
         ] {

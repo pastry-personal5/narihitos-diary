@@ -1,2 +1,2 @@
 #!/usr/bin/env bash
-cargo run -p nd -- serve
+ND_LOG_LEVEL=debug cargo run -p nd -- serve

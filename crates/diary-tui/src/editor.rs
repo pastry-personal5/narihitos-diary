@@ -1,4 +1,4 @@
-//! The multiline Draft editor. Global chords (Ctrl-G, Ctrl-S, Ctrl-D,
+//! The multiline Draft editor. Global chords (Ctrl-G, Ctrl-S, Ctrl-C,
 //! Ctrl-P/Ctrl-N) are intercepted by the caller before reaching this
 //! module, so `ratatui-textarea`'s own Emacs-like Ctrl bindings (which
 //! would otherwise consume them, e.g. its default Ctrl-D delete-next-char)

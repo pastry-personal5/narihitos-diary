@@ -7,7 +7,7 @@
 //! delivered, how it normalized, and what command it parsed to.
 //!
 //! Run with `cargo run -p diary-tui --example command_line_probe`.
-//! Press Ctrl-D to exit. Test text only — type grammar tokens, not private
+//! Press Ctrl-C to exit. Test text only — type grammar tokens, not private
 //! content.
 
 use std::io::{self, Write};
@@ -21,7 +21,7 @@ fn main() -> io::Result<()> {
     println!(
         "Command Line probe: switch to the 2-Set Korean IME and type a grammar\r\n\
          token (help, retry, day 2026-10-29, stage sources, save, quit), then\r\n\
-         press Enter. Press Ctrl-D to quit.\r\n"
+         press Enter. Press Ctrl-C to quit.\r\n"
     );
     io::stdout().flush()?;
 
@@ -39,7 +39,7 @@ fn probe_loop() -> io::Result<()> {
         if key.kind != KeyEventKind::Press {
             continue;
         }
-        if key.modifiers.contains(KeyModifiers::CONTROL) && matches!(key.code, KeyCode::Char('d')) {
+        if key.modifiers.contains(KeyModifiers::CONTROL) && matches!(key.code, KeyCode::Char('c')) {
             println!("quit chord observed, exiting\r");
             io::stdout().flush()?;
             return Ok(());

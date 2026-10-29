@@ -28,6 +28,14 @@ content and with enough intent/receipt evidence to recover after interruption.
 
 ## Completion checklist
 
+- [x] Sources-stage text inspection keeps the Resources Sidebar active marker
+  on the source whose body is displayed, including across asynchronous preview
+  completion and canonical workflow reloads; a regression test covers reordered
+  candidates.
+- [x] An SSE-driven workflow-list or source reload no longer moves the focused
+  Resources/Main row of the stage being shown (focus is bounded only by the
+  current stage's per-frame clamp); a regression test covers a reload outside
+  Sources.
 - [ ] The preview shows the exact target path, YAML front matter, body, digest,
   and intended filesystem changes before approval.
 - [ ] Approval is accepted only for the current entry, source snapshots,
