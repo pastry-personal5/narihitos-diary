@@ -168,16 +168,37 @@ See [README.md](README.md) for the overview. Setup and contribution rules are in
   own receipted section.
 - **Keybindings:** focus plus Ctrl chords. Non-editor screens move focus
   between on-screen controls with Tab and the arrow keys and activate with
-  Enter. The editor and Command Line use Ctrl chords, with function keys as
-  aliases. No bare-letter or `:` hotkeys; avoid Ctrl-I, Ctrl-M, Ctrl-[, and
-  Ctrl-Space (macOS's default input-source switch). The Command Line opens with
-  a chord. Its commands are ASCII tokens, and the TUI maps Hangul typed on the
-  2-Set Korean layout back to the key that produced it, so commands work under
-  either IME. Every command is also reachable by focus and Enter. P1-M7 uses
-  Ctrl-G (F2) for Command Line, Ctrl-Enter (F3) to save/flush the editor,
-  Ctrl-D (F10) to quit, and Ctrl-Left/Ctrl-Right (F6/F7) for previous/next
-  workflow stage. These chords must pass a real-terminal check with the Korean
-  IME active.
+  Enter. The editor and Command Line use Ctrl chords. No function-key
+  aliases, bare-letter hotkeys, or `:` hotkeys; avoid Ctrl-I, Ctrl-M, Ctrl-[,
+  and Ctrl-Space (macOS's default input-source switch). The Command Line
+  opens with a chord. Its commands are ASCII tokens, and the TUI maps Hangul
+  typed on the 2-Set Korean layout back to the key that produced it, so
+  commands work under either IME. Every command is also reachable by focus
+  and Enter. P1-M7 uses Ctrl-G for Command Line, Ctrl-S to save/flush the
+  editor, Ctrl-D to quit, and Ctrl-P/Ctrl-N for previous/next workflow stage.
+  A 2026-10-29 real-terminal check found Apple Terminal does not deliver
+  Ctrl-Enter or Ctrl-Left/Ctrl-Right as distinct chords — Ctrl-Enter opened a
+  context menu and Ctrl-Left/Ctrl-Right triggered macOS Mission Control
+  Spaces switching before reaching the app — so the owner replaced those two
+  with Ctrl-S and Ctrl-P/Ctrl-N. A further 2026-10-29 real-terminal check
+  found F10 (the function-key alias originally planned for Ctrl-D) never
+  arrives at all; Ctrl-G, Ctrl-S, Ctrl-D, Ctrl-P, and Ctrl-N all arrive
+  directly as chords. The owner subsequently decided (2026-10-29) to drop
+  function-key aliases entirely rather than confirm them one at a time —
+  every P1-M7 action is reachable by its Ctrl chord or by focus and Enter,
+  with no function-key fallback. The same check found the 2-Set Korean IME in
+  Apple Terminal's raw mode
+  delivers bare Hangul Compatibility Jamo (e.g. U+3147 `ㅇ`) character by
+  character as the person types. A third 2026-10-29 check found this is not
+  the only shape: a keystroke that completes a syllable can instead arrive as
+  one fully committed precomposed syllable (U+AC00–D7A3, e.g. 디), and a bare
+  jamo can itself be a compound vowel or consonant-cluster codepoint (e.g.
+  U+3158 `ㅘ`), not only one of the 24 simple jamo. The Command Line's
+  Hangul-to-ASCII mapping must therefore handle all three shapes: decompose a
+  committed syllable with the standard Unicode Hangul algorithm, and map both
+  simple and compound bare jamo to their 2-Set key(s) directly
+  (owner-approved 2026-10-29). These chords
+  must pass a real-terminal check with the Korean IME active.
 - **Empty days:** a diary day with no source notes, or none included, may still
   produce an entry through an explicit "continue without notes" confirmation.
   Assistant extraction, drafting, and paragraph review are disabled; the manual
@@ -186,6 +207,17 @@ See [README.md](README.md) for the overview. Setup and contribution rules are in
   background workers; Ratatui/Crossterm with multiline editing; TIS input-
   language notifications with a 500 ms polling fallback; `IME: EN`, `IME: KO`,
   and `IME: ?` when unknown.
+- **Target terminal (2026-10-29, owner decision):** Wave Terminal
+  (waveterm.dev) is the first target terminal for real-terminal
+  acceptance checks; Apple Terminal remains a secondary check. Every
+  real-terminal finding recorded so far in this file and in the P1-M7 docs
+  (the Ctrl-Enter/Ctrl-Left/Ctrl-Right failure, F10 never arriving, the
+  mixed bare-jamo/precomposed-syllable Korean IME delivery shape) was
+  observed in Apple Terminal specifically and has not yet been re-checked
+  in Wave Terminal; Wave may behave differently on any of these, and the
+  existing probes (`chord_probe`, `command_line_probe`, `editor_probe`,
+  `restoration_probe`) must be re-run there before treating their results
+  as settled for Wave.
 
 ## Undecided — ask before inventing
 

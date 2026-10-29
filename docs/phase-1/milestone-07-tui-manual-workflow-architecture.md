@@ -1,6 +1,6 @@
 # P1-M7: TUI and manual workflow architecture plan
 
-Status: Planned
+Status: Active
 
 This plan connects the approved terminal information architecture to the
 Control API without creating a second workflow authority in the client.
@@ -14,7 +14,7 @@ Control API without creating a second workflow authority in the client.
 - `apps/nd`: default TUI startup, runtime-file attachment, and terminal error
   handling.
 - `diary-control`: the P1-M12 runtime-attachment, source-note naming, and
-  no-notes contracts; it remains the owner of policy and persistence.
+  empty-selection contracts; it remains the owner of policy and persistence.
 - Proposed `diary-macos`: TIS/Core Foundation query,
   notification, ownership, and run-loop integration behind a safe fakeable
   interface. Creating it and its narrow unsafe policy requires the owner
@@ -33,7 +33,7 @@ Before the TUI manifest changes, verify the P1-M12 evidence for these findings:
 |---|---|
 | Runtime advertisements previously had no safe client read operation. | P1-M12 added a descriptor-validated, size-bounded, read-only loader. It creates no state, acquires no server lock, and reads no configuration. Verify its missing, malformed, owner/mode/type/link, path-identity, oversized, and valid-file tests. |
 | `SourceCandidateDto` previously exposed only an opaque hash, so distinct notes could not be identified in Sources. | P1-M12 added the trusted server-supplied `source_note_name` to candidate and detail DTOs while retaining the opaque command ID. Verify it is absent from diagnostics and assistant request envelopes. |
-| `source:read` can be unavailable before discovery, while explicit no-notes confirmation must remain reachable. | P1-M12 lets the existing dedicated empty-selection command advance a newly started workflow only through an explicit human action and without creating candidates or pretending discovery succeeded. Verify direct and discovered-empty cases. |
+| `source:read` can be unavailable before discovery, while explicit empty-selection confirmation must remain reachable. | P1-M12 lets the existing dedicated empty-selection command advance a newly started workflow only through an explicit human action and without creating candidates or pretending discovery succeeded. Verify direct and discovered-empty cases. |
 
 P1-M12 implements these corrections. They are not permission for M7 to add
 routes or duplicate lower-layer behavior.
@@ -63,19 +63,25 @@ but never synthesize or mutate server workflow state.
 |---|---|---|---|---|---|---|---|
 | No attached workflow | available | locked | locked | locked | locked | locked | Start |
 | `Started`, or initial `Discovered` | done | available | locked | locked | locked | locked | Sources |
-| `Discovered` after source/freshness invalidation | done | stale | stale when a recovered entry buffer exists, otherwise locked | locked | locked | locked | Sources |
+| `Discovered` after `selection-changed`, `source-changed`, or `freshness-unverifiable` | done | stale | stale when a recovered entry buffer exists, otherwise locked | locked | locked | locked | Sources |
 | `SourcesConfirmed` | done | done | available | locked | locked | locked | Compose |
 | `Composing` | done | done | available | available | locked | locked | Compose |
-| `Composing` after `entry-edited` | done | done | available | stale | locked | locked | Compose |
+| `Composing` returned from a previously confirmed entry (`entry-edited` or `composition-choice-changed`) | done | done | available | stale | locked | locked | Compose |
 | `EntryConfirmed` | done | done | done | done | locked in M7 | locked in M7 | Review |
 
 An invalidation code explains a regression but does not by itself set progress:
 the core retains its most recent reason after a successful reconfirmation. The
 mapping therefore combines state, current confirmation flags, reason, and
-whether a recovered entry buffer exists. Source invalidation makes Sources
-stale and keeps recovered Compose text inspectable but unconfirmed; EntryEdited
-makes Review stale. P1-M9 replaces the build-time Preview and Publish locks
-with their normal prerequisite mapping.
+whether a recovered entry buffer exists. `selection-changed` (re-running
+discovery on an already-confirmed workflow), `source-changed`, and
+`freshness-unverifiable` (both from a freshness checkpoint) all drop the
+workflow back to `Discovered` and make Sources stale. `entry-edited` (editing
+confirmed text) and `composition-choice-changed` (changing language, style, or
+assistant backend after the entry was confirmed) both drop the workflow back to
+`Composing` with `entry_confirmed = false` and make Review stale; the mapping
+must treat the two reasons identically rather than keying off `entry-edited`
+alone. P1-M9 replaces the build-time Preview and Publish locks with their
+normal prerequisite mapping.
 
 The pure mapping also handles every later state already representable by the
 core (`OutputPlanned`, `Approved`, `Publishing`, `Partial`, and `Completed`). M7
@@ -98,10 +104,10 @@ missing route.
 | Attach and determine whether actions are available | `GET /v1/health`, then authenticated `GET /v1/capabilities` and `GET /v1/setup-check` | Compare runtime-file and health instance IDs and contract version before bearer use. Keep setup results informational; a failed setup check never turns into a client-side configuration probe. |
 | Choose defaults and remembered entry settings | `GET`/`PUT /v1/preferences` | Render only server-accepted values. A rejected preference edit remains local presentation input until the person changes or discards it. |
 | Start, resume, list, or discard a workflow | `GET`/`POST /v1/workflows`, `GET`/`DELETE /v1/workflows/{id}` | Consume bounded pagination in server order so unfinished drafts remain first. Send no diary day for the server-owned Mac-local “today” default. Use the current workflow ETag for discard and refetch after a stale precondition or domain conflict. Completed workflows are read-only in M7. |
-| Find and inspect candidates or confirmed snapshots | `POST /v1/workflows/{id}/discoveries`, `GET /v1/workflows/{id}/sources`, `GET /v1/workflows/{id}/sources/{source_id}` | Render the server-supplied `source_note_name`, date evidence, availability, and warnings. Consume bounded source pagination. Discovery summaries contain no body. Before confirmation, source detail carries the active preparation handle in its header and returns one prepared sanitized body; afterward it returns only a persisted confirmed snapshot. It performs no new source read. |
-| Prepare selected sources and confirm selection | `POST /v1/workflows/{id}/sources/prepare`, `PUT /v1/workflows/{id}/selection`, `POST /v1/workflows/{id}/empty-selection-confirmations`, `GET`/`DELETE /v1/jobs/{id}` | Track accepted work as a job and review its expiring server-owned preparation result. The Resources Sidebar's active source is presentation state separate from the prospective included IDs. Confirm by handle, never by echoing a body or stamp. If the job expires or the server restarts, prepare again. The separate empty-selection command is the only zero-note continuation. |
-| Choose current entry settings and open the Draft editor | `PUT /v1/workflows/{id}/writing-settings`, `POST /v1/workflows/{id}/manual-compositions` | Use the workflow ETag, send no assistant backend ID in M7, and treat the server as authoritative for language, style, selected backend/path, and invalidation. Manual editing is not a backend or composition path. |
-| Save and confirm the complete manual entry | `PUT /v1/workflows/{id}/entry`, `POST /v1/workflows/{id}/entry-confirmations` | Autosave uses only the entry-buffer ETag. Confirmation supplies both current versions and is disabled for blank text or unresolved inferred-reflection delimiters. |
+| Find and inspect candidates or confirmed snapshots | `POST /v1/workflows/{id}/discoveries`, `GET /v1/workflows/{id}/sources`, `GET /v1/workflows/{id}/sources/{source_id}` | Render the server-supplied `source_note_name`, date evidence, availability, and warnings. Consume bounded source pagination. Discovery summaries contain no body. Before confirmation, source detail carries the active preparation handle in its `X-ND-Preparation-Handle` response header and returns one prepared sanitized body; afterward it returns only a persisted confirmed snapshot. It performs no new source read. |
+| Prepare selected sources and confirm selection | `POST /v1/workflows/{id}/sources/prepare`, `PUT /v1/workflows/{id}/selection`, `POST /v1/workflows/{id}/empty-selection-confirmations`, `GET`/`DELETE /v1/jobs/{id}` | Track accepted work as a job and review its expiring (10-minute) server-owned preparation result. The Resources Sidebar's active source is presentation state separate from the prospective included IDs. Confirm by handle, never by echoing a body or stamp; read the handle from the `X-ND-Preparation-Handle` response header on the preceding source-detail read. If the job expires or the server restarts, prepare again. The separate empty-selection command is the only zero-note continuation. |
+| Choose current entry settings and open the Draft editor | `PUT /v1/workflows/{id}/writing-settings`, `POST /v1/workflows/{id}/manual-compositions` | Use the workflow ETag, send no assistant backend ID in M7, and treat the server as authoritative for language, style, selected backend/path, and invalidation. Manual editing is not a backend or composition path. Changing language, style, or backend after the entry was confirmed reverts the workflow to `Composing` with `composition-choice-changed`, exactly as if the text had been edited. |
+| Save and confirm the complete manual entry | `PUT /v1/workflows/{id}/entry`, `POST /v1/workflows/{id}/entry-confirmations` | Autosave uses only the entry-buffer ETag. Confirmation supplies both current versions: the workflow ETag as `If-Match` and the entry-buffer ETag in the request body. There is no separate entry-read route; current text and the buffer version always come from the same workflow response (`ETag` plus `X-Entry-Buffer-Etag` headers, `entry_text`/`buffer_version` fields) used for every other canonical refetch. Confirmation is disabled for blank text or unresolved inferred-reflection delimiters. |
 | Notice committed changes | `GET /v1/events?workflow_id={id}` plus canonical workflow/job reads | Treat every event as a prompt to reload, never as the full state or a confirmation receipt. |
 
 No P1-M7 ViewModel calls assistant, publication, amendment, or `/mcp` resources.
@@ -130,7 +136,11 @@ numeric Host and absent Origin policy expected by P1-M6; and never accepts an
 absolute request URL from a ViewModel. Encode JSON with the shared DTOs. For
 ordinary routes, read at most the route-specific response bound plus one byte
 before deserializing and reject a conflicting or oversized `Content-Length`;
-for SSE, parse incrementally and enforce the server's per-event bound. Parse
+for SSE, parse incrementally and enforce the server's per-event bound.
+Workflow, job, and event responses use the server's 2 MiB ordinary bound
+(`MAX_RESPONSE_BYTES`); a source-detail response carries a prepared body and
+uses the larger ~8 MiB source bound (`MAX_SOURCE_BYTES`) instead. Applying the
+smaller bound to source detail would reject valid prepared bodies. Parse
 only typed problems; map transport/library failures to fixed content-free UI
 codes rather than displaying arbitrary error strings.
 
@@ -217,8 +227,10 @@ display-width truncation, safe rendering, and this intentional duplication.
 ## Terminal, editor, and command input
 
 Global chords are intercepted before `ratatui-textarea`, so its default Ctrl-D
-delete and Ctrl-Left/Ctrl-Right word-motion bindings cannot consume quit or
-stage navigation. Use the editor's basic input path plus explicit M7 mappings;
+delete-next-char and Ctrl-P/Ctrl-N move-cursor-up/down-a-line bindings cannot
+consume quit or stage navigation; the editor's arrow keys remain the ordinary
+way to move the cursor by line while it owns focus. Use the editor's basic
+input path plus explicit M7 mappings;
 ordinary Enter inserts a newline only while the editor owns focus. Bracketed
 paste is one edit, enforces the 512 KiB UTF-8 byte limit before mutation, and
 never partially inserts an oversized payload.
@@ -226,19 +238,37 @@ never partially inserts an oversized payload.
 The M7 Command Line is an application parser, not a shell. Its bounded grammar
 is `help`, `retry`, `day YYYY-MM-DD`, `stage <canonical-stage>`, `save`, and
 `quit`; state-changing confirmation, discard, preparation, and entry-confirm
-actions remain deliberate focused controls. Normalize only characters produced
-by the 2-Set Korean layout into lowercase ASCII command input, then reject any
-remaining non-ASCII or extra argument. Every command has the same guards and
-effect as its focused/chord path.
+actions remain deliberate focused controls. Two 2026-10-29 real-terminal
+checks (see AGENTS.md "Keybindings") together establish the actual delivery
+shape, which is a **mix**, not the single case either check first assumed:
+Apple Terminal's raw mode delivers a bare Hangul Compatibility Jamo
+(U+3131–U+3163) one key at a time when a keystroke does not complete a
+syllable, and a fully committed precomposed syllable (U+AC00–U+D7A3, e.g. 디)
+when a later keystroke does complete one — and a bare jamo can itself be a
+compound vowel or consonant-tail-cluster codepoint (e.g. ㅘ, U+3158), not only
+one of the 24 simple jamo. Normalization therefore handles all three shapes:
+a precomposed syllable is decomposed with the standard Unicode Hangul
+algorithm into its lead/vowel/optional-tail jamo, each mapped to the one or
+two 2-Set keys that produce it; a bare jamo (simple or compound) maps to its
+key(s) the same way, using the identical lead/vowel/tail key tables, since the
+Compatibility Jamo block shares the syllable algorithm's Unicode ordering.
+Reject any remaining non-ASCII character. Tests cover a jamo/syllable vector
+for every grammar token (for example `help`, `retry`, `day`, `stage`, `save`,
+`quit`) plus the precomposed-syllable and bare-compound-jamo cases
+individually, not only one representative shape. Every command has the same
+guards and effect as its focused/chord path.
 
 `help` opens the on-screen action reference; `retry` performs the same guarded
 attachment/refetch as Retry; `day` edits the Start day field but does not start
 a workflow; `stage` only navigates to an accessible stage; `save` requests the
-same conditional flush as Ctrl-Enter/F3; and `quit` uses the same dirty-buffer
-warning as Ctrl-D/F10. If Apple Terminal cannot distinguish a primary chord in
-the real-terminal check, its function-key alias remains available but the gate
-fails until the owner explicitly revises the primary binding; ordinary Enter
-must never be silently treated as Ctrl-Enter.
+same conditional flush as Ctrl-S; and `quit` uses the same dirty-buffer warning
+as Ctrl-D. There are no function-key aliases (see AGENTS.md "Keybindings"): if
+Apple Terminal cannot distinguish a chord in the real-terminal check, the gate
+fails until the owner explicitly revises the binding, as happened twice —
+Ctrl-Enter and Ctrl-Left/Ctrl-Right (replaced with Ctrl-S and Ctrl-P/Ctrl-N)
+and, separately, F10 never arriving as Ctrl-D's planned alias, after which the
+owner decided (2026-10-29) to drop function-key aliases from the design
+entirely rather than confirm the rest one at a time.
 
 Source and entry text are untrusted terminal content. Preserve their exact
 server/editor value, but render C0/C1 controls other than intended line breaks
@@ -268,6 +298,21 @@ privacy prompt are acceptance cases.
    match its instance ID against unauthenticated health, and verify API/contract
    versions before attaching the control token to a request. Keep only the safe
    build/version fields for diagnostics, and do not print any runtime-file field.
+   In the same step, run a throwaway real-Apple-Terminal probe of the exact
+   decided chords before the dependency and layout work in steps 3–7, not only
+   at the acceptance gate in step 8. A 2026-10-29 run of this probe found Apple
+   Terminal does not deliver Ctrl-Enter or Ctrl-Left/Ctrl-Right as distinct
+   chords — Ctrl-Enter opened a context menu, and Ctrl-Left/Ctrl-Right
+   triggered macOS Mission Control Spaces switching before reaching the app —
+   so the owner revised AGENTS.md's primary binding to Ctrl-S (save/flush) and
+   Ctrl-P/Ctrl-N (previous/next stage). Re-running the probe for Ctrl-G,
+   Ctrl-D, Ctrl-S, Ctrl-P, and Ctrl-N on 2026-10-29 found all five arrive
+   directly as chords, but F10 (then the planned Ctrl-D alias) never arrives.
+   The owner subsequently decided to drop function-key aliases from the
+   design entirely rather than confirm the rest (F2, F3, F6, F7) one at a
+   time; every action is reachable only by its Ctrl chord or by focus and
+   Enter. A further chord failure stops and returns to the owner the same
+   way.
 3. Implement the typed bounded HTTP/SSE client and fake boundary, including
    route-specific body caps, timeouts, paging, conditional headers, instance
    replacement, event cursors, canonical refetch, and fixed safe errors.
@@ -303,9 +348,10 @@ privacy prompt are acceptance cases.
    confirmation until it is resolved, while leaving extraction and drafting for
    P1-M8. Implement accessible focus actions, safe Ctrl chords, Hangul-to-ASCII
    Command Line mapping, grapheme-aware display width, and the TIS run-loop /
-   500 ms polling adapter. Use Ctrl-G (F2) for Command Line, Ctrl-Enter (F3)
-   to save/flush, Ctrl-D (F10) to quit, and Ctrl-Left/Ctrl-Right (F6/F7) for
-   previous/next workflow stage. Leave assistant selection, draft generation,
+   500 ms polling adapter. Use Ctrl-G for Command Line, Ctrl-S to save/flush,
+   Ctrl-D to quit, and Ctrl-P/Ctrl-N for previous/next workflow stage, with no
+   function-key aliases for any of them. Leave assistant selection, draft
+   generation,
    and paragraph review to P1-M8; their later controls extend Compose rather
    than changing the stage model or layout.
 8. Test ViewModels and rendering with fakes, then record the required real

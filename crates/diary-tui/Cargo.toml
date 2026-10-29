@@ -6,4 +6,11 @@ rust-version.workspace = true
 license.workspace = true
 
 [dependencies]
+crossterm.workspace = true
 diary-control-contract.workspace = true
+diary-macos.workspace = true
+ratatui.workspace = true
+ratatui-textarea.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+ureq.workspace = true

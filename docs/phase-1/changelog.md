@@ -6,6 +6,14 @@ This changelog records owner decisions and material plan changes for Phase 1.
 
 ## Entries
 
+- 2026-10-29 — Owner decision — P1-M7 keybindings drop function-key aliases
+  entirely. A real-terminal check had already found F10 never arrives as a
+  distinct chord at all; rather than confirm the remaining aliases (F2, F3,
+  F6, F7) one at a time, the owner decided every P1-M7 action is reachable
+  only by its Ctrl chord or by focus and Enter, with no function-key
+  fallback. Supersedes the F-key aliases recorded in the 2026-10-28 entry
+  below (itself already revised once: Ctrl-Enter and Ctrl-Left/Ctrl-Right
+  were replaced with Ctrl-S and Ctrl-P/Ctrl-N after a real-terminal check).
 - 2026-10-29 — P1-M12 completion review — Tightened source-note presentation
   names against absolute, traversal-like, empty-component, oversized, and
   control-character forms; made shared workflow DTO decoding reject malformed

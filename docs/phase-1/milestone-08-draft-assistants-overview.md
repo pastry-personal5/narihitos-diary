@@ -5,8 +5,11 @@ Status: Planned
 This milestone adds a registry of optional assistant backends behind the
 existing `DraftAssistant` port while preserving the always-available Draft
 editor. It delivers reviewed two-pass drafting and paragraph review without
-hard-coding the TUI or workflow to exactly two implementations. It cannot start
-until the hosted-provider decisions in `AGENTS.md` are resolved.
+hard-coding the TUI or workflow to exactly two implementations. It also plans
+for zero or more named Codex profiles in the owner-only global configuration,
+without treating a configured profile as approval to send diary text. It cannot
+start until the remaining hosted-provider decisions in `AGENTS.md` are
+resolved.
 
 ## Goal
 
@@ -16,9 +19,18 @@ assistant output to bypass human review or the approved data-egress limit.
 
 ## Decision gate
 
-Before implementation, the owner must choose the hosted provider, credential
-storage, and HTTP dependency. Record those decisions in `AGENTS.md` and the
-Phase 1 changelog; do not infer them from this plan.
+The owner has decided one Codex configuration requirement: the repo-local,
+owner-only `config/global_config.yaml` may contain multiple named Codex
+profiles as user-chosen alias/run-command pairs. For example, alias `pp7` can
+map to `CODEX_HOME=/Users/user1/.codex-pp7 codex`. The command supplies the
+`CODEX_HOME` used only for that profile's child Codex process.
+
+This does not yet choose Codex as the hosted default or approve a production
+Codex adapter. Before implementation, the owner must still choose the hosted
+provider, credential and account policy, HTTP dependency or Codex process/API
+surface, executable/version policy, lifecycle, and privacy/retention posture.
+Record those decisions in `AGENTS.md` and the Phase 1 changelog; do not infer
+them from this plan.
 
 ## Entry criteria
 
@@ -40,6 +52,10 @@ Phase 1 changelog; do not infer them from this plan.
   paths, availability, language support, and per-action capabilities. The first
   production members are the chosen hosted default and Apple on-device adapter;
   additional approved adapters do not require new workflow stages.
+- A collection-shaped Codex profile configuration contract. Zero, one, or many
+  named profiles can be configured; if a production Codex adapter is approved,
+  each profile becomes a separately selectable registry member with its own
+  user alias, alias-derived stable ID, availability, and run command.
 - Source-linked memory extraction, memory review, drafting, inferred-reflection
   markers, paragraph review with accept/reject, validation, cancellation,
   timeouts, and manual fallback.
@@ -51,8 +67,13 @@ Phase 1 changelog; do not infer them from this plan.
 ## Out of scope
 
 - Automatic confirmation, output approval, publication, and agent-client MCP.
-- A Codex-backed production adapter unless its process/API, credential,
-  dependency, privacy, and lifecycle choices receive separate owner approval.
+- A Codex-backed production adapter unless its process/API, account and
+  credential policy, dependency, executable/version, privacy, and lifecycle
+  choices receive separate owner approval.
+- Arbitrary shell syntax in a configured run command, changing the parent `nd`
+  process environment, reading or copying a Codex home's credential files, or
+  exposing a Codex run command or home path through HTTP, SQLite, TUI text,
+  logs, or model input.
 - Sending front matter, metadata, paths, audio, credentials, or Notion details.
 - Model use for a confirmed empty source selection.
 
@@ -60,6 +81,17 @@ Phase 1 changelog; do not infer them from this plan.
 
 - [ ] The hosted provider, credential location, and HTTP dependency have explicit
   owner approval and are documented before manifests or adapters change.
+- [ ] `config/global_config.example.yaml` documents a collection of named Codex
+  profiles as `alias` and `run_command` pairs; strict configuration tests cover
+  zero, one, and multiple profiles, duplicate or invalid aliases, malformed or
+  disallowed commands, and unavailable profile homes without using a real
+  profile.
+- [ ] Each configured Codex profile maps to a distinct registry descriptor and
+  remembered backend selection. Fake process tests prove that the selected
+  alias's run command alone starts `codex` with the configured child
+  `CODEX_HOME`, without a shell or parent-environment mutation; aliases appear
+  in the TUI, but run commands, profile paths, and profile credentials never
+  enter API state, SQLite, logs, prompts, or errors.
 - [ ] The registry exposes a collection rather than fixed hosted/Apple fields;
   tests register at least three fake backends and prove selection and routing by
   stable ID with no UI or workflow branch per backend.
@@ -110,6 +142,7 @@ result is observed; record synthetic evidence only.
 | Evidence | Result |
 |---|---|
 | Owner-approved provider, credential, HTTP, and migration packet | Pending |
+| Multi-profile Codex configuration and child-environment tests | Pending |
 | Registry and three-fake routing tests | Pending |
 | P1-M12 contract compatibility and any M8 migration tests | Pending |
 | Hosted egress-envelope and production-adapter contract tests | Pending |

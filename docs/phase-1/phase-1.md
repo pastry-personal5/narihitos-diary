@@ -168,7 +168,7 @@ readiness work, and complete Rust/Swift gate passed on 2026-10-29.
 
 ### P1-M7: TUI and manual workflow
 
-Status: Planned
+Status: Active
 
 Goal: Let a person reach a confirmed, recoverable entry through the `nd`
 terminal client and the always-available Draft editor.
@@ -188,7 +188,10 @@ Plan: [overview](milestone-08-draft-assistants-overview.md),
 [architecture plan](milestone-08-draft-assistants-architecture.md).
 
 Notes: Implementation waits for owner decisions on the hosted provider,
-credential storage, and HTTP dependency.
+credential/account policy, HTTP dependency or Codex process/API surface, and
+runtime lifecycle. The M8 plan already records the approved requirement that
+`config/global_config.yaml` can hold multiple user-chosen Codex alias/run-command
+pairs, such as `pp7` and `CODEX_HOME=/Users/user1/.codex-pp7 codex`.
 
 ### P1-M9: Local publication and recovery
 
