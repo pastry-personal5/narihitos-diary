@@ -144,7 +144,7 @@ An amendment replaces a section the app published and receipted. The block API
 The chosen method inserts the new paragraphs after the receipted heading block,
 reads them back, and only then trashes the old paragraph blocks, so an
 interruption duplicates content instead of losing it. See
-[Amendments](../planned-mvp-architecture.md#amendments) and the references
+[Amendments](../architecture.md#amendments) and the references
 [append block children](https://developers.notion.com/reference/patch-block-children),
 [delete a block](https://developers.notion.com/reference/delete-a-block), and
 [update a block](https://developers.notion.com/reference/update-a-block).

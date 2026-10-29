@@ -8,9 +8,10 @@ How to set up `narihitos-diary`, validate a change, write commit messages, and o
 
 Prerequisites:
 
+- Apple Silicon Mac running macOS 26.0 or newer.
 - Rust 1.89 or newer with Cargo, rustfmt, and Clippy. The workspace uses Rust
   edition 2024.
-- Xcode command-line tools with Swift 6.2 or newer on macOS 26.0 or newer.
+- Xcode command-line tools with Swift 6.2 or newer.
 - The P1-M4 SQLite adapter uses `rusqlite` 0.40.2 with its default system
   linkage. Cargo downloads the Rust crates; macOS supplies SQLite, so no
   separately installed database service or bundled C build is required.

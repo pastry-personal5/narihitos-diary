@@ -37,7 +37,7 @@ scheme, HTTP dependency, or Swift package was approved.
 ## In scope
 
 - Connector-neutral value objects, ports, typed outcomes, and transition policy
-  for the [workflow state table](../planned-mvp-architecture.md#workflow-states-and-invalidation).
+  for the [workflow state table](../architecture.md#workflow-states-and-invalidation).
 - Source-selection and freshness outcomes supplied by fakes, the explicit
   empty-selection path, manual entry confirmation, and placeholders for later
   reviewed drafting without implementing an assistant adapter.

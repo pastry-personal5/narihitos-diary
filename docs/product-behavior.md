@@ -3,13 +3,14 @@
 Status: Active
 
 This document summarizes the intended user-visible diary workflow. The
-[architecture](planned-mvp-architecture.md) describes where the behavior lives;
-the [terminal UX](ux-gui.md) describes how it appears to a person.
+[architecture](architecture.md) describes where the behavior lives;
+the [terminal UX](ux-tui.md) describes how it appears to a person.
 
-P1-M7 currently implements the manual journey through complete-entry Review.
-Preview, Publish, assistant actions, and amendments remain planned for their
-later milestones. The implemented client keeps those later stages visible but
-locked, so the stage model below remains stable as they arrive.
+P1-M7 implements the manual journey through complete-entry Review. P1-M8 is
+active for assistant planning, with production work gated on its owner decision
+packets; Preview, Publish, and amendments remain planned for later milestones.
+The implemented client keeps unavailable later behavior visible but locked, so
+the stage model below remains stable as it arrives.
 
 ## Core journey
 
@@ -37,12 +38,15 @@ stage, and activating one displays its content in the right Main Pane.
 3. **Compose:** Write the entry in a multiline editor. Optional assistance is
    selected from the server's available backend list. The first backends are
    the chosen hosted default and Apple on-device, and the architecture accepts
-   more without changing the workflow. A draft action sends only the confirmed
-   source snapshots to exactly one selected backend, which extracts
-   source-linked memories for review and then drafts from confirmed memories.
-   When the draft job completes, the draft becomes the active resource and its
-   full text opens in the Main Pane's editor, where the person can edit it. The
-   Draft editor stays available for manual editing after any assistant failure. The confirmed
+   more without changing the workflow. The assisted flow sends only the
+   confirmed readable source bodies to exactly one selected backend for
+   extraction. After the person reviews the source-linked memories, drafting
+   sends those confirmed memories—not the source bodies—to one selected backend.
+   When the draft job
+   completes, it conditionally populates the unconfirmed editor only if the
+   buffer has not changed since the request, then becomes the active editable
+   resource. A late result never overwrites newer text. The Draft editor
+   stays available for manual editing after any assistant failure. The confirmed
    source notes remain in the Resources Sidebar for read-only inspection. Choose US
    English or South Korean Korean as the entry language and a concise, standard,
    or reflective style; remember the last language choice and start with concise
@@ -56,15 +60,23 @@ stage, and activating one displays its content in the right Main Pane.
 6. **Preview:** Preview the local Markdown file and the Notion section,
    including their destination paths and text. Approve the exact output plan
    before writing.
-7. **Publish:** Write the local file first. Publish the confirmed body to the
-   configured Notion root's year and month hierarchy only after the read-only
-   preflight and conflict checks. Show success, pending, or blocked state
-   separately for each destination.
+7. **Publish:** Write the local file first, at the configurable default path
+   `~/Documents/narihitos-diary/entries/YYYY/MM/YYYY-MM-DD.md`. Publish the
+   confirmed Markdown body, with YAML front matter stripped, under a
+   `heading_2: YYYY-MM-DD` section at the bottom of the configured Notion
+   root's `YYYY` year and `YYYY-MM` month subpages, creating missing subpages
+   as needed, only after the read-only preflight and conflict checks. Show
+   success, pending, or blocked state separately for each destination.
 
 ## Boundaries people can rely on
 
 - Readable notes remain selectable when front matter is missing or malformed;
-  invalid UTF-8 receives a warning and has no readable body.
+  unknown front-matter fields are ignored and missing non-date fields are
+  tolerated. Only a valid offset-aware `created_at` contributes the header
+  date; otherwise the directory date is kept with a warning.
+- Source files are read as UTF-8, with or without a BOM, and accept both LF
+  and CRLF line endings; invalid UTF-8 receives a warning and has no readable
+  body.
 - Japanese is not supported as a source or writing language. The app does not
   detect or block it.
 - Audio and attachment paths do not enter composition or output, and attachment
@@ -96,4 +108,4 @@ stage, and activating one displays its content in the right Main Pane.
   discarded at any time.
 
 These outcomes follow the owner decisions in the [research summary](phase-1/milestone-01-research-summary.md)
-and the later decisions recorded in [AGENTS.md](../AGENTS.md).
+and the later decisions recorded in the [Phase 1 changelog](phase-1/changelog.md).

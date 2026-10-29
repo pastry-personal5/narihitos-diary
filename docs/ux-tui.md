@@ -68,7 +68,7 @@ bypass review.
 - When the local file differs, stop the whole plan; when Notion holds
   conflicting same-day content, stop Notion only. Show both versions and offer
   only reread, discard the entry, or save under a different diary day, as
-  described in [Publication and recovery](planned-mvp-architecture.md#publication-and-recovery).
+  described in [Publication and recovery](architecture.md#publication-and-recovery).
   Never overwrite.
 - When Notion is unconfigured, unreachable, or fails its preflight, show it as
   blocked in the preview and still allow the local entry to be approved and
@@ -86,14 +86,21 @@ bypass review.
 - Show a “server not running” state, with the command to start it, whenever the
   client cannot attach. The client never starts the server; the start command is
   `nd serve`.
+- Display dates as `YYYY-MM-DD`, adding the abbreviated weekday as
+  `YYYY-MM-DD (Mon)` where the available space and context permit; the ISO date
+  stays visible in every form.
+- Treat Wave Terminal (waveterm.dev) as the primary real-terminal acceptance
+  target and Apple Terminal as the secondary regression target (owner decision,
+  2026-10-29). Both passed P1-M7 qualification on 2026-10-29; see the
+  [changelog](phase-1/changelog.md) for the findings that drove this choice.
 
 ## Input constraint
 
 The person types Korean as well as English. While a Korean IME is active, bare
 letters and `:` reach the application as composed text, and `Enter` or `Space`
-may commit a composition instead of acting. The decided model (“Keybindings” in
-[AGENTS.md](../AGENTS.md)) therefore uses focus navigation plus Ctrl chords and
-no bare-letter or `:` hotkeys. Terminals also encode `Ctrl-I` as Tab, `Ctrl-M`
+may commit a composition instead of acting. The decided model therefore uses
+focus navigation plus Ctrl chords and no bare-letter or `:` hotkeys. Terminals
+also encode `Ctrl-I` as Tab, `Ctrl-M`
 as Enter, and `Ctrl-[` as Esc; macOS reserves `Ctrl-Space` for input-source
 switching by default; and Terminal.app sends Option as a character modifier
 unless it is set to act as Meta. Avoid those collisions. On non-editor screens
@@ -130,8 +137,10 @@ The editor should keep backend/path, language, and style choices visible and
 allow paste, multiline editing, and review of source-linked memories. The
 Resources Sidebar keeps the draft, confirmed sources, and assistant suggestions
 reachable. Opening a source is read-only; returning to the draft preserves the
-unsent buffer and cursor. When an assistant draft completes, the draft becomes
-active and its full text opens in the editable Main Pane. When a `ko-KR` entry is
+unsent buffer and cursor. When an assistant draft completes against the current
+buffer version, it becomes active and its full text opens editable in the Main
+Pane. A late result remains inspectable but cannot overwrite unsent or newer
+text. When a `ko-KR` entry is
 drafted from en-US notes, the editor says it is a translation. An inferred
 reflection appears inline between reserved delimiters, so it survives any
 edit; the person accepts it by removing the delimiters, edits the text, or

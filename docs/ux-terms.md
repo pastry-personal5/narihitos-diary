@@ -89,4 +89,4 @@ Work Status and Status Line are the expanded and compact realizations of the
 "App status" and "Action/status area" content named in the
 [UX information architecture](ux-information-architecture.md#chrome-layout);
 intentional duplication between them is allowed.
-Keys follow "Keybindings" in [AGENTS.md](../AGENTS.md).
+Keys follow the keybinding decision in [ux-tui.md](ux-tui.md#input-constraint).

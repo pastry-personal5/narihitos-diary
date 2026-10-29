@@ -38,7 +38,7 @@ invalidation policy; the adapters provide evidence and fresh, sanitized bytes.
 | `diary-core` | Narrow source outcomes or use-case wiring needed to consume the real adapters; no filesystem, Swift, or Markdown parser types. |
 | `apps/nd` | Register source connectors and validate the configured directory name; production server startup remains P1-M6. |
 
-The [source-port contract](../planned-mvp-architecture.md#domain-and-application-contracts)
+The [source-port contract](../architecture.md#domain-and-application-contracts)
 and the [P1-M4 policy](milestone-04-core-workflow-persistence-architecture.md#core-contract)
 are the inward boundary. Keep raw front matter, absolute paths, helper frames,
 audio references, and platform errors out of core source bodies and assistant

@@ -76,7 +76,7 @@ Goal: Define the Phase 1 software architecture.
 
 Plan: [overview](milestone-02-software-architecture-overview.md),
 [architecture plan](milestone-02-software-architecture-architecture.md),
-[product architecture](../planned-mvp-architecture.md).
+[product architecture](../architecture.md).
 
 Notes: Completed under the documentation-only gate exemption recorded in the
 overview; link, anchor, terminology, and diff validation supplied the
@@ -183,7 +183,7 @@ run recorded in the overview, completing P1-M7.
 
 ### P1-M8: Draft assistants
 
-Status: Planned
+Status: Active
 
 Goal: Add an extensible assistant-backend registry with hosted-default and Apple
 on-device two-pass drafting and paragraph review, without bypassing human review
@@ -192,11 +192,16 @@ or the data-egress boundary.
 Plan: [overview](milestone-08-draft-assistants-overview.md),
 [architecture plan](milestone-08-draft-assistants-architecture.md).
 
-Notes: Implementation waits for owner decisions on the hosted provider,
-credential/account policy, HTTP dependency or Codex process/API surface, and
-runtime lifecycle. The M8 plan already records the approved requirement that
-`config/global_config.yaml` can hold multiple user-chosen Codex alias/run-command
-pairs, such as `pp7` and `CODEX_HOME=/Users/user1/.codex-pp7 codex`.
+Notes: Planning is active after the completed P1-M7 manual slice. The
+overview's gate is split: the contract/migration packet unblocks the
+provider-neutral core, SQLite, Control API, and TUI work; the configuration
+packet separately unblocks the strict Codex profile parser; and the
+hosted-default and Apple packets each unblock only their own production
+adapter. None of the five packets is approved yet, so no implementation has
+started. The already-approved multi-profile Codex configuration shape (see
+`AGENTS.md` "Composition") does not select Codex as a provider; registering
+or launching a Codex backend additionally requires its separate process/API,
+account, tool-denial, privacy, and lifecycle approval packet.
 
 ### P1-M9: Local publication and recovery
 

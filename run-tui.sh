@@ -1,2 +1,2 @@
 #!/usr/bin/env bash
-make run
+cargo run -p nd

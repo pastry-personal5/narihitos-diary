@@ -3,7 +3,7 @@
 Status: Done
 
 This plan identifies the affected boundaries and planning sequence. The
-technology-neutral product design is the [planned MVP architecture](../planned-mvp-architecture.md).
+technology-neutral product design is the [planned MVP architecture](../architecture.md).
 
 ## Affected modules and interfaces
 

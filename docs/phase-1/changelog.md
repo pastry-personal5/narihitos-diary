@@ -6,6 +6,124 @@ This changelog records owner decisions and material plan changes for Phase 1.
 
 ## Entries
 
+- 2026-10-29 — Owner decision — Codex profile configuration shape revised to
+  structured fields — The owner approved replacing the shell-lookalike
+  `run_command` string (`alias`/`run_command`, e.g. `CODEX_HOME=/Users/user1/.codex-pp7 codex`)
+  with structured fields: `alias`, an absolute `codex_home`, and an optional
+  absolute `codex_executable` (otherwise resolved and pinned once at
+  config-load time, so `nd serve`'s launch `PATH` cannot change which binary
+  runs). Example:
+  ```yaml
+  assistants:
+    codex_profiles:
+      - alias: "pp7"
+        codex_home: "/Users/user1/.codex-pp7"
+      - alias: "work"
+        codex_home: "/Users/user1/.codex-work"
+        codex_executable: "/absolute/path/to/codex"
+  ```
+  This removes the shell-grammar quoting/command-length parsing rules the
+  `run_command` form needed — the parser now only validates two path fields
+  per profile — and otherwise approves the same scope as before: profile
+  multiplicity and this representation only. It does not select Codex as a
+  provider or approve starting a Codex process with diary text; those remain
+  gated on the separate Codex adapter packet in the M8 overview. This
+  supersedes the `run_command` representation recorded in the entry below and
+  in `AGENTS.md` "Composition," which has been updated to match.
+
+- 2026-10-29 — Owner decision recorded — Codex profile configuration shape
+  (superseded above by the structured-fields revision) —
+  The owner confirmed, retroactively recorded here because the prior M8
+  planning session had not logged it in `AGENTS.md` or this changelog despite
+  the M8 overview already describing it as approved: the repo-local,
+  owner-only `config/global_config.yaml` may hold zero or more named Codex
+  profiles as user-chosen `alias`/`run_command` pairs, for example alias `pp7`
+  mapping to `CODEX_HOME=/Users/user1/.codex-pp7 codex`. This approves profile
+  multiplicity and the strict base-launcher representation only; it does not
+  select Codex as a provider, approve starting a Codex process with diary
+  text, or approve any other Codex integration detail — those remain gated on
+  the separate Codex adapter packet in the M8 overview. See `AGENTS.md`
+  "Composition."
+
+- 2026-10-29 — P1-M8 plan review continued — Picked up an M8 plan review that
+  a prior Codex session left mid-edit (uncommitted changes to the M8 overview,
+  architecture plan, and cross-referencing docs) and completed it:
+  - Split the single owner-approval gate into five independently-gating
+    packets — contract/migration, configuration, hosted, Apple, and
+    conditional Codex — and fixed the spots (architecture sequence step 1,
+    the overview's intro, and the phase-1.md P1-M8 notes) that still read as
+    if all packets must be approved before any implementation starts. The
+    configuration packet now explicitly gates the strict parser for the
+    whole `assistants:` section of `config/global_config.yaml` (today the
+    Codex profile collection, and any later hosted/Apple keys added there,
+    such as a hosted credential), not just the Codex shape, and is back in
+    the entry criteria.
+  - Replaced the "as applicable" invalidation language with an explicit
+    invalidation matrix, then rescoped each artifact type's binding-data list
+    to match it instead of giving every artifact the same binding tuple:
+    memory candidates and reviewed memories are no longer staled by a backend
+    or writing-language/style change, matching the fact that extracted
+    memories are backend-neutral. A source change still stales every
+    artifact, including a completed, not-yet-resolved paragraph suggestion —
+    its binding list gained the confirmed source-selection digest precisely
+    because accept/reject are plain conditional writes, not jobs, so the
+    job-level freshness recheck alone cannot catch a source change that
+    happened after the paragraph-review job completed but before a later
+    accept. Dropped "workflow
+    revision" from the draft-proposal bindings, since it bumps on unrelated
+    mutations and would silently widen staleness. Dropped writing
+    language/style from the extraction request type, since sources are en-US
+    only and extraction produces no prose.
+  - Replaced an unenforceable reflection-delimiter "round-trip" design
+    (strip markers, trust the provider to reproduce them, re-insert
+    structured ranges "independent of what was stripped") with a refusal
+    rule: revision drafting and paragraph review refuse to start while their
+    target still contains an unresolved reflection marker, the same
+    constraint complete-entry confirmation already enforces, one step
+    earlier. Added inferred-reflection ranges to the paragraph-review result
+    type so a provider-written replacement cannot carry unmarked inference.
+  - Made the one-active-assistant-job rule explicit: one active job per
+    workflow counted across all three actions together, not one slot per
+    action kind, so a paragraph-review request cannot run concurrently with
+    an in-flight draft job.
+  - Named the exact v4-to-v5 field mapping the contract/migration packet must
+    cover (`reviewed_memories`, `assistant_draft`, and the single coarse
+    `assistant_material_stale` flag becoming per-artifact-type records) and
+    its two deliberate behavior changes: a source change today discards
+    reviewed memories/draft outright, M8 keeps them stale but inspectable;
+    and reviewed memories now survive a backend or style change.
+  - Added a researched, non-binding candidate `codex exec` fixed-argv surface
+    for the still-ungated Codex adapter packet (`--json`, `--sandbox
+    read-only`, `--skip-git-repo-check`, `--cd <private dir>`), then corrected
+    an overclaim in that same addition: `--cd`/`--sandbox read-only` deny
+    writes but do not confine reads, so the packet must separately prove
+    filesystem-read and network denial with an actual OS sandbox (such as
+    macOS Seatbelt/App Sandbox) and audit each account's own
+    `$CODEX_HOME/config.toml` for MCP/web-search/model-provider settings, or
+    the surface is not eligible, per the plan's existing "cannot be proven"
+    rule.
+  - Pointed the Apple assistant-payload transport at the existing P1-M5
+    byte-handoff design as the reviewed starting point if a handoff (rather
+    than a larger frame) is the approved choice, named which side creates and
+    cleans the handoff root in each direction (server for the new
+    Rust-to-Swift request direction, helper for the reversed response
+    direction, mirroring M5), and flagged that a draft near the existing
+    512 KiB entry bound will not fit the 64 KiB helper frame, so the Apple
+    packet must cap output below the frame or route the response through the
+    handoff too.
+  No provider, dependency, or live model call was selected by this review.
+
+- 2026-10-29 — P1-M8 activated and plan reviewed — Marked P1-M8 active after
+  completed P1-M7 and reconciled its plan with the implemented M12/M7 baseline.
+  The revised plan separates required hosted/configuration/Apple decision
+  packets from the conditional Codex-adapter gate; replaces the flat assistant
+  envelope with action-specific egress and source-linked memory requirements;
+  binds durable proposals against stale workflow state; adds freshness and
+  cancellation commit fencing; and calls out the strict-config collection and
+  Apple helper 64 KiB transport gaps. Production implementation remains blocked
+  on the unchecked owner approvals; no provider, dependency, or live model call
+  was selected by this review.
+
 - 2026-10-29 — P1-M7 completed — The owner confirmed that the required Wave
   Terminal primary qualification and Apple Terminal secondary regression set
   passed, including the four interactive probes and integrated manual-flow
@@ -391,10 +509,10 @@ This changelog records owner decisions and material plan changes for Phase 1.
   need approval during scaffolding.
 - 2026-10-28 — Owner — Noted an MCP server (not an MCP CLI) as a Phase 2
   feature in the [roadmap](../roadmap.md). Phase 2 stays unplanned.
-- 2026-10-28 — Review — Revised the [architecture](../planned-mvp-architecture.md)
+- 2026-10-28 — Review — Revised the [architecture](../architecture.md)
   and the UX documents ([terms](../ux-terms.md),
   [information architecture](../ux-information-architecture.md),
-  [behavior](../ux-gui.md)). The architecture gained workflow states with
+  [behavior](../ux-tui.md)). The architecture gained workflow states with
   voiding rules, a process lifecycle and startup order, an authorization trust
   boundary, write-ahead operation intents, a Swift helper contract, a files
   table, and a split of the catch-all `DraftStore` port into `WorkflowStore`
@@ -425,7 +543,7 @@ This changelog records owner decisions and material plan changes for Phase 1.
   around a local Control API Server with the TUI as an HTTP client, extensible
   source and output connectors, REST and streaming interfaces, MVVM presentation,
   an explicit workflow pipeline, and a future MCP route. The
-  [architecture proposal](../planned-mvp-architecture.md) preserves the
+  [architecture proposal](../architecture.md) preserves the
   read-only runtime Notion preflight and introduces no production dependency.
 - 2026-10-28 — Owner — Restored the completed P1-M1 milestone documents and
   their supporting research notes to `docs/` for P1-M2/P1-M3 preparation.

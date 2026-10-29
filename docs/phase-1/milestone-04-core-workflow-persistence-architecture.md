@@ -2,7 +2,7 @@
 
 Status: Done
 
-This plan turns the [product architecture](../planned-mvp-architecture.md) into
+This plan turns the [product architecture](../architecture.md) into
 an executable core and a durable SQLite adapter. Implementation starts after
 P1-M2 and P1-M3 are done and the needed dependencies are approved.
 
@@ -73,7 +73,7 @@ worker scheduling, timeouts, and event delivery belong to P1-M6.
 
 ## Transition and concurrency policy
 
-Implement the [state table](../planned-mvp-architecture.md#workflow-states-and-invalidation)
+Implement the [state table](../architecture.md#workflow-states-and-invalidation)
 as one transition policy rather than independent handler checks. Each
 state-changing command requires the expected workflow revision. A successful
 mutation advances it exactly once and applies the state table's specific

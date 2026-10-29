@@ -18,7 +18,7 @@ lower-layer gap needed by the manual terminal workflow.
 - P1-M6 is `Done`; P1-M7 remains `Planned` and no terminal-client dependency or
   macOS TIS FFI packet has been applied.
 - Treat [UX terms](../ux-terms.md) and the
-  [planned MVP architecture](../planned-mvp-architecture.md) as the current
+  [planned MVP architecture](../architecture.md) as the current
   vocabulary and contract authorities, subject to the owner decisions in
   [AGENTS.md](../../AGENTS.md).
 - Review active documents before implementation. Preserve historical research

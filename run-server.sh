@@ -1,3 +1,2 @@
 #!/usr/bin/env bash
-make serve
-
+cargo run -p nd -- serve

@@ -16,7 +16,7 @@ Implementation begins only after P1-M4 and P1-M5 are `Done`, P1-M6 is `Active`,
 and the dependency packet in the [overview](milestone-06-control-api-server-overview.md#entry-criteria)
 has owner approval. Compare this plan with the actual core ports, SQLite
 schema, source outcomes, and helper protocol at that point. The
-[product architecture](../planned-mvp-architecture.md#control-api-server-module)
+[product architecture](../architecture.md#control-api-server-module)
 owns the decided server lifecycle and REST resource intent.
 
 | Boundary | P1-M6 responsibility |

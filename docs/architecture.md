@@ -1,4 +1,4 @@
-# Planned MVP architecture
+# Architecture
 
 Status: Active
 
@@ -12,6 +12,7 @@ files, cloud services, and user interfaces.
 | Concern | Decision |
 |---|---|
 | Client and server | A single per-user server process owns workflow state, the private database, credentials, connectors, and side effects. A human starts it manually with `nd serve`; the TUI never spawns it and communicates with it over loopback HTTP like any other client. |
+| Binary name | The canonical project acronym is `nd`, always lowercase. The application is the single binary `nd`; `nd serve` is its server subcommand and `nd` alone opens the TUI. |
 | Clean architecture | Domain policy and use cases depend on inward-facing types and ports. HTTP, Ratatui, macOS frameworks, SQLite, and Notion live in adapters that depend on the core. |
 | MVVM | The TUI ViewModel turns API representations and event notifications into screen state; the View renders it and sends user intent back through the API client. The server remains the source of truth. |
 | Pipeline | One explicit, resumable workflow state machine orders discovery, selection, composition, confirmation, and publication. Each step has typed inputs, outputs, and invalidation rules. |
@@ -99,7 +100,7 @@ The application boundary defines small ports by purpose:
 |---|---|---|
 | `SourceCatalog` | Discover candidates for a bounded day query and an explicitly requested extra day. Return source references, available date evidence, warnings, and availability. | Ayumi Markdown catalog |
 | `SourceReader` | Prepare only selected sources, coordinate reads, return readable text and a file identity/metadata/content-digest stamp; recheck freshness at workflow checkpoints. | Ayumi plus iCloud reads through the Swift helper |
-| `DraftAssistant` | Describe a stable backend ID, display label, execution boundary, runtime availability, language support, and supported actions; extract source-linked memories, draft from confirmed memories, and review a focused paragraph with bounded inputs built only from the allowed data classes. | Chosen hosted model (default; provider undecided) and Apple on-device model through the Swift helper (optional); the registry accepts additional approved adapters |
+| `DraftAssistant` | Describe a stable backend ID, display label, execution boundary, runtime availability, language support, and supported actions; use separate bounded conversations to extract source-linked memories from confirmed readable bodies, draft from human-reviewed memories, and review only the displayed focused paragraph. | Chosen hosted model (default; provider undecided) and Apple on-device model through the Swift helper (optional); the registry accepts additional approved adapters |
 | `WorkflowStore` | Save and recover workflow revisions, unfinished edits, and preferences; purge expired draft and source text. | Per-user SQLite |
 | `OperationLog` | Record an intent before each external write, then the terminal receipt for each destination; list unresolved intents for reconciliation. | Per-user SQLite |
 | `OutputConnector` | Inspect a destination without writing, plan its exact payload, commit, read back or reconcile an uncertain commit, replace the app's own receipted output in an approved amendment, and return a receipt or explicit pending/conflict result. | Local Markdown and Notion |
@@ -150,11 +151,13 @@ without changing the six canonical stages or the workflow state machine.
 
 Each assistant command names one registered backend ID. The server resolves it,
 rechecks its current capability and availability, performs source freshness
-checks, constructs the bounded request, and invokes only that adapter. Selecting
-or opening sources in the TUI never calls a backend. A draft action may include
-only the confirmed source snapshots; excluded, unconfirmed, stale, or merely
-highlighted notes cannot enter the request. Responses are stored as suggestions
-and never confirm source selection or entry text.
+checks, constructs the action-specific bounded request, and invokes only that
+adapter. Selecting or opening sources in the TUI never calls a backend.
+Extraction may include only confirmed readable bodies; drafting uses only
+human-reviewed memories and an explicitly selected prior draft; paragraph
+review uses only the exact displayed focused paragraph. Excluded, unconfirmed,
+stale, or merely highlighted notes cannot enter a request. Responses are stored
+as version-bound suggestions and never confirm source selection or entry text.
 
 Source text is untrusted model input. An assistant adapter receives no workflow,
 filesystem, shell, connector, confirmation, approval, or publication tools; it
@@ -170,7 +173,8 @@ the TUI shows that target before submission. It asks the chosen backend for a
 replacement and an optional short explanation. The server stores the
 suggestion with that target.
 Accept applies the replacement only when the buffer version, range, and digest
-still match; otherwise it is stale and must be requested again. Reject records
+still match; any intervening buffer edit makes it stale and requires another
+request. Reject records
 or discards the suggestion without changing the entry. In both cases, complete
 entry confirmation remains a separate human action.
 
@@ -184,17 +188,20 @@ data and writes human-reviewed proposals through `/mcp`.
 ### Hosted drafting and data egress
 
 The default registered `DraftAssistant` adapter calls a hosted model. The
-provider, its credential storage, and the HTTP client are undecided (see "Undecided" in
-[AGENTS.md](../AGENTS.md)); the port and its data classes are the contract until
-then. The adapter receives only values built from the allowed data classes:
-readable note bodies with audio and attachment links stripped, reviewed
-memories, drafts, the edited entry or focused paragraph, writing language, and
-style. Raw front matter, location, weather, identifiers, attachment paths,
-audio, credentials, and the Notion root are not types the port can carry, so an
-adapter cannot send them. Each call is bounded by size and a timeout and can be
-cancelled. A hosted failure, timeout, or invalid response becomes the same typed
-unavailable or invalid outcome as a helper failure, and the Draft editor stays
-usable.
+provider, its credential storage, and the HTTP client are undecided (see
+"Undecided" in [AGENTS.md](../AGENTS.md)); the port and its action-specific data
+classes are the contract until then. Extraction can carry readable note bodies
+with audio and attachment links stripped, drafting can carry reviewed memories
+and an explicitly selected prior draft, and paragraph review can carry only the
+focused paragraph; drafting and paragraph review may also carry writing
+language and style, but extraction does not — sources are en-US only and
+extraction produces no prose. An adapter
+does not receive all allowed classes on every action. Raw front matter,
+location, weather, persistent source identifiers, attachment paths, audio,
+credentials, and the Notion root are not types the port can carry. Each call is
+bounded by size and a timeout and can be cancelled. A hosted failure, timeout,
+or invalid response becomes the same typed unavailable or invalid outcome as a
+helper failure, and the Draft editor stays usable.
 
 No consent step precedes a call. Before the person invokes an assistant action,
 the Setup check, Compose stage, Work Status, and Status Line label both the
@@ -270,8 +277,11 @@ snapshot and after
 any assistant failure. Assisted drafting keeps two passes separate: extract
 source-linked memories for human review, then draft from confirmed memories.
 The person selects one available backend for an action; the server sends only
-the confirmed source snapshots and other allowed fields to that adapter.
-Assistant output is validated and opened in the same editor as manual text.
+the fields allowed for that action to that adapter. Assistant output is
+validated and conditionally populates the unconfirmed entry buffer only if the
+buffer version captured by the job is still current. It then opens as editable
+text in the same editor as manual text; a late job cannot replace newer text and
+never confirms the complete entry.
 After editing begins, the person may focus a paragraph and ask an available
 backend to review it. The proposed replacement is shown alongside the current
 paragraph and changes the buffer only after an explicit, non-stale acceptance;
@@ -555,8 +565,8 @@ previous plan and its approval.
 | `POST /v1/workflows/{id}/discoveries`, `GET /v1/workflows/{id}/sources`, `GET /v1/workflows/{id}/sources/{source_id}` | Discover the bounded default window or a user-requested extra date; inspect candidate summaries and warnings; and read a persisted sanitized body only for a currently confirmed snapshot. |
 | `POST /v1/workflows/{id}/sources/prepare`, `PUT /v1/workflows/{id}/selection`, `POST /v1/workflows/{id}/empty-selection-confirmations` | Request acquisition only for selected cloud-only notes, review an expiring server-owned preparation result, then confirm it by handle. Continue without notes only through the separate explicit command. |
 | `PUT /v1/workflows/{id}/writing-settings`, `POST /v1/workflows/{id}/manual-compositions` | Set current language, style, and optional assistant backend ID conditionally, then open the always-available Draft editor. The server derives and reports a selected backend's composition path; manual editing has neither a backend ID nor a composition path. |
-| `POST /v1/workflows/{id}/extractions`, `PUT /v1/workflows/{id}/memories` | Run optional memory extraction on the command's one backend ID and confirm or edit selected memories. |
-| `POST /v1/workflows/{id}/drafts`, `PUT /v1/workflows/{id}/entry`, `POST /v1/workflows/{id}/entry-confirmations` | Run optional drafting on the command's one backend ID, save manual edits (carrying the entry buffer version), and confirm the complete entry. |
+| `POST /v1/workflows/{id}/extractions`, memory-review resources | Run optional extraction on the command's one backend ID, fetch source-linked candidates durably, and conditionally confirm or edit selected memories. P1-M8 fixes the exact read/write route names in its contract packet. |
+| `POST /v1/workflows/{id}/drafts`, draft-result resources, `PUT /v1/workflows/{id}/entry`, `POST /v1/workflows/{id}/entry-confirmations` | Run optional drafting on the command's one backend ID, conditionally populate the unconfirmed entry only while the captured buffer version remains current, fetch a stale result without applying it, save manual edits, and confirm the complete entry separately. P1-M8 fixes the result route names in its contract packet. |
 | `POST /v1/workflows/{id}/paragraph-reviews`, `POST /v1/workflows/{id}/paragraph-reviews/{suggestion_id}/acceptances`, `POST /v1/workflows/{id}/paragraph-reviews/{suggestion_id}/rejections` | Ask one backend to review a versioned paragraph target, then explicitly accept its still-current replacement or reject it without changing the entry. |
 | `POST /v1/workflows/{id}/output-plans`, `GET /v1/workflows/{id}/output-plan`, `POST /v1/workflows/{id}/approvals` | Build exact per-destination previews and record an interactive approval bound to their digests. |
 | `POST /v1/workflows/{id}/publications`, `GET /v1/workflows/{id}/publications` | Execute the approved plan and inspect each destination's receipt or pending state. |
@@ -685,14 +695,14 @@ polling when registration fails, shows `IME: EN` or `IME: KO` for the two
 supported input languages, and shows `IME: ?` for any other or unknown language.
 This is presentation-only state; it does not affect diary policy. The [TUI and IME research](research/rust-tui-stack.md)
 records the compatibility and terminal constraints.
-Keys follow the keybinding decision in [AGENTS.md](../AGENTS.md): focus controls
+Keys follow the keybinding decision in [the terminal UX doc](ux-tui.md): focus controls
 plus Ctrl chords. The Command Line ViewModel decomposes Hangul typed on the
 2-Set Korean layout into jamo and maps each back to the key that produced it
 before parsing, so ASCII command tokens work under either IME. Input it cannot
 map is rejected with a message that points to the focus path. This mapping is
 presentation logic in `diary-tui`.
 The [UX information architecture](ux-information-architecture.md) and
-[terminal UX proposal](ux-gui.md) describe the stages and their behavior.
+[terminal UX proposal](ux-tui.md) describe the stages and their behavior.
 
 ## Verification boundaries
 

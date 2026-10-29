@@ -27,11 +27,12 @@ RFC 9457 problem JSON and SSE, uses `Cache-Control: no-store`.
 
 ## Resources and preconditions
 
-The route inventory is frozen in `diary_control_contract::ROUTES`. The pre-M7 server
-exposes health/capabilities/setup, preferences, workflows, discovery, source
-preparation and confirmation, explicit no-notes continuation, writing
-settings, opening the Draft editor for manual composition, entry save/confirmation, jobs, and events.
-Draft-assistant, output, amendment, publication, and `/mcp` routes do not exist.
+The route inventory is frozen in `diary_control_contract::ROUTES`. The current
+server exposes health/capabilities/setup, preferences, workflows, discovery,
+source preparation and confirmation, explicit no-notes continuation, writing
+settings, opening the Draft editor for manual composition, entry
+save/confirmation, jobs, and events. Draft-assistant, output, amendment,
+publication, and `/mcp` routes do not exist.
 `source:read`, including availability-aware discovery and preparation, is
 advertised and accepted only while the Swift helper is available; its absence
 does not prevent the explicit continue-without-notes action from a newly
@@ -39,11 +40,11 @@ started workflow.
 
 Capabilities report `manual_workflow_available` separately from
 `assistant_backends[]`. Manual editing has no backend ID or composition path.
-Before P1-M8 the backend array is empty; writing settings therefore accept only
-a null assistant backend ID. A future descriptor binds one stable backend ID to
-its display label, hosted or Apple-on-device path, availability/reason,
-supported languages, and supported actions. Preferences remember an optional
-backend ID, never an independent path.
+Until P1-M8 changes this executable contract, the backend array is empty and
+writing settings accept only a null assistant backend ID. A future descriptor
+binds one stable backend ID to its display label, hosted or Apple-on-device
+path, availability/reason, supported languages, and supported actions.
+Preferences remember an optional backend ID, never an independent path.
 
 Workflow IDs use `wf_YYYYMMDD` but are opaque to clients. Workflow mutations
 require strong `If-Match: "wf-<revision>"`; entry autosave instead requires

@@ -22,7 +22,7 @@ server, a TUI client, and extensible input and output connectors.
 - Preserve the owner-approved source, composition, output, and privacy rules.
 - Review the terminal UX documents ([terms](../ux-terms.md),
   [information architecture](../ux-information-architecture.md),
-  [behavior](../ux-gui.md)) against the architecture and record the owner
+  [behavior](../ux-tui.md)) against the architecture and record the owner
   decisions that review produced.
 
 ## Out of scope
@@ -69,7 +69,7 @@ server, a TUI client, and extensible input and output connectors.
 ## Acceptance evidence
 
 The checked design items are evidenced by the
-[architecture proposal](../planned-mvp-architecture.md), its
+[architecture proposal](../architecture.md), its
 [index entry](../README.md), the revised UX documents, and the owner direction
 in [AGENTS.md](../../AGENTS.md). A local script resolved every relative Markdown
 link and heading anchor in all 28 tracked Markdown files and found no problems.

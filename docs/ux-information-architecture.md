@@ -3,8 +3,8 @@
 Status: Active
 
 The Standard Layout is the canonical containment model for the terminal client.
-It names screens and their content; interaction behavior is in [ux-gui.md](ux-gui.md)
-and server ownership is in the [architecture](planned-mvp-architecture.md).
+It names screens and their content; interaction behavior is in [ux-tui.md](ux-tui.md)
+and server ownership is in the [architecture](architecture.md).
 
 ## Standard Layout
 
@@ -106,7 +106,7 @@ presentation state and unsent edits; the Control API Server owns confirmed
 selections, drafts, plans, and receipts. A reconnect fetches the latest server
 state before allowing another mutation. The [UX terms](ux-terms.md) name the
 components used above. The server's voiding rules are in the
-[workflow state table](planned-mvp-architecture.md#workflow-states-and-invalidation).
+[workflow state table](architecture.md#workflow-states-and-invalidation).
 
 ## Navigation and stage states
 
@@ -224,5 +224,5 @@ size.
 Korean text is double-width: measure display width rather than character
 count, wrap at grapheme boundaries, and keep the editor cursor aligned.
 
-Keys follow “Keybindings” in [AGENTS.md](../AGENTS.md): focus navigation plus
-Ctrl chords, with details in [ux-gui.md](ux-gui.md#input-constraint).
+Keys follow the keybinding decision in [ux-tui.md](ux-tui.md#input-constraint):
+focus navigation plus Ctrl chords.

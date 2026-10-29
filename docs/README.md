@@ -25,20 +25,20 @@ This index lists the design and process docs, one line each. Read only the doc y
 | [phase-1/milestone-12-consistency-contracts-architecture.md](phase-1/milestone-12-consistency-contracts-architecture.md) | Pre-M7 canonical vocabulary, assistant-neutral contract, source-note name, no-notes, runtime attachment, and migration sequence. |
 | [phase-1/milestone-07-tui-manual-workflow-overview.md](phase-1/milestone-07-tui-manual-workflow-overview.md) | P1-M7 canonical stages, four-row Work Status, two-sidebar terminal client, source inspection, Draft editor, and IME checklist. |
 | [phase-1/milestone-07-tui-manual-workflow-architecture.md](phase-1/milestone-07-tui-manual-workflow-architecture.md) | P1-M7 Work Status and canonical-stage mapping, API boundary, source-to-main-pane behavior, recovery rules, MVVM, editor, Command Line, and IME sequence. |
-| [phase-1/milestone-08-draft-assistants-overview.md](phase-1/milestone-08-draft-assistants-overview.md) | P1-M8 decision gate and multi-backend drafting and paragraph-review checklist. |
-| [phase-1/milestone-08-draft-assistants-architecture.md](phase-1/milestone-08-draft-assistants-architecture.md) | P1-M8 extensible backend registry, data boundary, versioned paragraph suggestions, and integration sequence. |
+| [phase-1/milestone-08-draft-assistants-overview.md](phase-1/milestone-08-draft-assistants-overview.md) | Active P1-M8 decision packets, implemented baseline, and verifiable multi-backend assistant checklist. |
+| [phase-1/milestone-08-draft-assistants-architecture.md](phase-1/milestone-08-draft-assistants-architecture.md) | P1-M8 action-specific egress, durable version-bound proposals, registry/jobs, optional Codex boundary, Apple bridge, and TUI sequence. |
 | [phase-1/milestone-09-local-publication-recovery-overview.md](phase-1/milestone-09-local-publication-recovery-overview.md) | P1-M9 local preview, approval, no-clobber output, conflict, and recovery checklist. |
 | [phase-1/milestone-09-local-publication-recovery-architecture.md](phase-1/milestone-09-local-publication-recovery-architecture.md) | P1-M9 local output intent, receipt, reconciliation, and TUI sequence. |
 | [phase-1/milestone-10-notion-publication-overview.md](phase-1/milestone-10-notion-publication-overview.md) | P1-M10 Notion compatibility gate, publication, partial-success, and retry checklist. |
 | [phase-1/milestone-10-notion-publication-architecture.md](phase-1/milestone-10-notion-publication-architecture.md) | P1-M10 fail-closed hierarchy, append, read-back, and reconciliation sequence. |
 | [phase-1/milestone-11-amendments-release-qualification-overview.md](phase-1/milestone-11-amendments-release-qualification-overview.md) | P1-M11 amendment, end-to-end acceptance, and Phase 1 qualification checklist. |
 | [phase-1/milestone-11-amendments-release-qualification-architecture.md](phase-1/milestone-11-amendments-release-qualification-architecture.md) | P1-M11 guarded replacement and release-evidence sequence. |
-| [planned-mvp-architecture.md](planned-mvp-architecture.md) | Local control server, two-sidebar TUI client, clean-architecture boundaries, connectors, multi-backend assistants, paragraph review, workflow states, amendments, data egress, REST, streaming, and future MCP design. |
+| [architecture.md](architecture.md) | Local control server, two-sidebar TUI client, clean-architecture boundaries, connectors, multi-backend assistants, paragraph review, workflow states, amendments, data egress, REST, streaming, and future MCP design. |
 | [control-api-v1.md](control-api-v1.md) | `/v1` native-client attachment, contract-version negotiation, assistant-neutral capabilities, route/precondition rules, preparation handles, numeric bounds, jobs, and SSE recovery. |
 | [product-behavior.md](product-behavior.md) | Intended user journey, confirmed diary behavior, and product boundaries. |
 | [ux-terms.md](ux-terms.md) | Canonical workflow-stage, terminal-component, and code-facing vocabulary. |
 | [ux-information-architecture.md](ux-information-architecture.md) | Canonical two-sidebar containment, stage/resource behavior, connection and error states, and chrome layout. |
-| [ux-gui.md](ux-gui.md) | Terminal UX: approved behavior, the Korean-IME input constraint, and proposed presentation details, kept separate. |
+| [ux-tui.md](ux-tui.md) | Terminal UX: approved behavior, the Korean-IME input constraint, and proposed presentation details, kept separate. |
 | [phase-1/changelog.md](phase-1/changelog.md) | Phase 1 owner decisions and material plan changes. |
 | [research/markdown-input-format.md](research/markdown-input-format.md) | P1-M1 iCloud directory layout, Markdown/YAML format, attachment format, time semantics, and privacy constraints. |
 | [research/notion-diary-section.md](research/notion-diary-section.md) | P1-M1 Notion authentication, block APIs, limits, and owner publication contract. |

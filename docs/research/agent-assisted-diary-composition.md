@@ -22,7 +22,7 @@ step. Readable note bodies, memories, drafts, and the edited entry may leave the
 Mac; front matter, attachment paths, audio, and credentials may not. The
 provider is undecided. Statements below that Phase 1 sends no composition text
 to a hosted model are superseded; the two-pass design, validation, and manual
-fallback still apply. See [Hosted drafting and data egress](../planned-mvp-architecture.md#hosted-drafting-and-data-egress).
+fallback still apply. See [Hosted drafting and data egress](../architecture.md#hosted-drafting-and-data-egress).
 
 ## Recommendation
 
