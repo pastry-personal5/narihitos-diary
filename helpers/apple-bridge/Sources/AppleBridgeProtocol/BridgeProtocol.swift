@@ -109,9 +109,39 @@ public enum AssistantResult: Sendable {
     case sourceRefinement(body: String)
 }
 
+/// Prompt templates supplied by the host from `assets/prompts/`. `{{locale}}`
+/// and `{{data}}` are expanded with `renderPromptTemplate`.
+public struct AssistantPrompt: Sendable {
+    public let instructions: String
+    public let prompt: String
+
+    public init(instructions: String, prompt: String) {
+        self.instructions = instructions
+        self.prompt = prompt
+    }
+}
+
+/// Expands `{{name}}` placeholders in one pass, so substituted values (diary
+/// text) are never scanned for further placeholders. Returns nil on an
+/// unterminated or unknown placeholder.
+public func renderPromptTemplate(_ template: String, values: [String: String]) -> String? {
+    var output = ""
+    var rest = Substring(template)
+    while let open = rest.range(of: "{{") {
+        output += rest[..<open.lowerBound]
+        let afterOpen = rest[open.upperBound...]
+        guard let close = afterOpen.range(of: "}}"),
+              let value = values[String(afterOpen[..<close.lowerBound])]
+        else { return nil }
+        output += value
+        rest = afterOpen[close.upperBound...]
+    }
+    return output + rest
+}
+
 public protocol AssistantService {
     func availability(locale: String) -> AssistantModelAvailability
-    func perform(_ request: AssistantRequest) throws -> AssistantResult
+    func perform(_ request: AssistantRequest, prompt: AssistantPrompt) throws -> AssistantResult
 }
 
 public enum AssistantServiceError: String, Error, Sendable {
@@ -286,10 +316,18 @@ public enum BridgeProtocol {
                 value: ["status": service.availability(locale: locale).rawValue]
             )
         }
+        guard let instructions = payload["instructions"] as? String,
+              let promptTemplate = payload["prompt"] as? String,
+              !instructions.isEmpty, !promptTemplate.isEmpty,
+              instructions.utf8.count <= 64 * 1024, promptTemplate.utf8.count <= 64 * 1024
+        else {
+            return failure(code: "malformed_input", requestID: requestID)
+        }
+        let assistantPrompt = AssistantPrompt(instructions: instructions, prompt: promptTemplate)
         let request: AssistantRequest
         switch command {
         case "assistant-extract-memories":
-            guard payload.keys.sorted() == ["locale", "sources"],
+            guard payload.keys.sorted() == ["instructions", "locale", "prompt", "sources"],
                   let rawSources = payload["sources"] as? [[String: Any]],
                   !rawSources.isEmpty,
                   rawSources.count <= 64
@@ -316,7 +354,7 @@ public enum BridgeProtocol {
             }
             request = .extract(locale: locale, sources: sources)
         case "assistant-draft-entry":
-            guard payload.keys.sorted() == ["locale", "prior_draft", "reviewed_memory", "style"],
+            guard payload.keys.sorted() == ["instructions", "locale", "prior_draft", "prompt", "reviewed_memory", "style"],
                   let memory = payload["reviewed_memory"] as? String,
                   memory.utf8.count <= 512 * 1024,
                   let style = validStyle(payload["style"]),
@@ -335,7 +373,7 @@ public enum BridgeProtocol {
                 style: style
             )
         case "assistant-review-paragraph":
-            guard payload.keys.sorted() == ["locale", "paragraph", "style"],
+            guard payload.keys.sorted() == ["instructions", "locale", "paragraph", "prompt", "style"],
                   let paragraph = payload["paragraph"] as? String,
                   !paragraph.isEmpty,
                   paragraph.utf8.count <= 32 * 1024,
@@ -345,7 +383,7 @@ public enum BridgeProtocol {
             }
             request = .reviewParagraph(locale: locale, paragraph: paragraph, style: style)
         case "assistant-refine-source":
-            guard payload.keys.sorted() == ["body", "locale"],
+            guard payload.keys.sorted() == ["body", "instructions", "locale", "prompt"],
                   let body = payload["body"] as? String,
                   !body.isEmpty,
                   body.utf8.count <= 8 * 1024 * 1024
@@ -357,7 +395,7 @@ public enum BridgeProtocol {
             return failure(code: "unknown_command", requestID: requestID)
         }
         do {
-            let result = try service.perform(request)
+            let result = try service.perform(request, prompt: assistantPrompt)
             guard let value = validatedAssistantValue(result, request: request) else {
                 return failure(code: "invalid_output", requestID: requestID)
             }

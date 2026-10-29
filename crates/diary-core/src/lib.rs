@@ -10,6 +10,7 @@ pub mod assistant;
 pub mod assistant_registry;
 pub mod digest;
 pub mod ports;
+pub mod prompt_asset;
 pub mod publication;
 pub mod types;
 pub mod workflow;

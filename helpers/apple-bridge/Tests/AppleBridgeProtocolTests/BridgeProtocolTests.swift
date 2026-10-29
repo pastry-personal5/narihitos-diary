@@ -186,7 +186,7 @@ final class BridgeProtocolTests: XCTestCase {
 
         let extraction = BridgeProtocol.handle(
             frame(
-                #"{"protocol_version":2,"request_id":"e","command":"assistant-extract-memories","payload":{"locale":"en-US","sources":[{"ordinal":1,"body":"untrusted source"}]}}"#
+                #"{"protocol_version":2,"request_id":"e","command":"assistant-extract-memories","payload":{"instructions":"i {{locale}}","prompt":"p {{data}}","locale":"en-US","sources":[{"ordinal":1,"body":"untrusted source"}]}}"#
             ),
             assistantService: service
         )
@@ -197,7 +197,7 @@ final class BridgeProtocolTests: XCTestCase {
 
         let draft = BridgeProtocol.handle(
             frame(
-                #"{"protocol_version":2,"request_id":"d","command":"assistant-draft-entry","payload":{"locale":"ko-KR","prior_draft":null,"reviewed_memory":"memory","style":"reflective"}}"#
+                #"{"protocol_version":2,"request_id":"d","command":"assistant-draft-entry","payload":{"instructions":"i {{locale}}","prompt":"p {{data}}","locale":"ko-KR","prior_draft":null,"reviewed_memory":"memory","style":"reflective"}}"#
             ),
             assistantService: service
         )
@@ -206,7 +206,7 @@ final class BridgeProtocolTests: XCTestCase {
 
         let paragraph = BridgeProtocol.handle(
             frame(
-                #"{"protocol_version":2,"request_id":"p","command":"assistant-review-paragraph","payload":{"locale":"en-US","paragraph":"paragraph","style":"standard"}}"#
+                #"{"protocol_version":2,"request_id":"p","command":"assistant-review-paragraph","payload":{"instructions":"i {{locale}}","prompt":"p {{data}}","locale":"en-US","paragraph":"paragraph","style":"standard"}}"#
             ),
             assistantService: service
         )
@@ -216,7 +216,7 @@ final class BridgeProtocolTests: XCTestCase {
         XCTAssertEqual(paragraphValue["replacement"] as? String, "replacement")
         let refinement = BridgeProtocol.handle(
             frame(
-                #"{"protocol_version":2,"request_id":"r","command":"assistant-refine-source","payload":{"locale":"en-US","body":"source body"}}"#
+                #"{"protocol_version":2,"request_id":"r","command":"assistant-refine-source","payload":{"instructions":"i {{locale}}","prompt":"p {{data}}","locale":"en-US","body":"source body"}}"#
             ),
             assistantService: service
         )
@@ -242,7 +242,10 @@ final class BridgeProtocolTests: XCTestCase {
             "protocol_version": 2,
             "request_id": "o",
             "command": "assistant-review-paragraph",
-            "payload": ["locale": "en-US", "paragraph": oversized, "style": "standard"],
+            "payload": [
+                "instructions": "i", "prompt": "p {{data}}",
+                "locale": "en-US", "paragraph": oversized, "style": "standard",
+            ],
         ], options: [.sortedKeys])
         let rejected = BridgeProtocol.handle(frame(oversizedInput), assistantService: service)
         try expectFailure(rejected, code: "malformed_input", requestID: "o")
@@ -250,11 +253,20 @@ final class BridgeProtocolTests: XCTestCase {
         service.invalidOutput = true
         let invalid = BridgeProtocol.handle(
             frame(
-                #"{"protocol_version":2,"request_id":"i","command":"assistant-extract-memories","payload":{"locale":"en-US","sources":[{"ordinal":1,"body":"source"}]}}"#
+                #"{"protocol_version":2,"request_id":"i","command":"assistant-extract-memories","payload":{"instructions":"i {{locale}}","prompt":"p {{data}}","locale":"en-US","sources":[{"ordinal":1,"body":"source"}]}}"#
             ),
             assistantService: service
         )
         try expectFailure(invalid, code: "invalid_output", requestID: "i")
+    }
+
+    func testPromptTemplatesRenderInOnePass() {
+        XCTAssertEqual(
+            renderPromptTemplate("a {{data}} b {{locale}}", values: ["data": "{{locale}}", "locale": "en-US"]),
+            "a {{locale}} b en-US"
+        )
+        XCTAssertNil(renderPromptTemplate("{{unknown}}", values: [:]))
+        XCTAssertNil(renderPromptTemplate("{{open", values: [:]))
     }
 
     private func frame(_ json: String) -> Data {
@@ -351,7 +363,7 @@ private final class FakeAssistantService: AssistantService {
         .available
     }
 
-    func perform(_ request: AssistantRequest) throws -> AssistantResult {
+    func perform(_ request: AssistantRequest, prompt: AssistantPrompt) throws -> AssistantResult {
         switch request {
         case .extract:
             actions.append("extract")

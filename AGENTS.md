@@ -66,6 +66,7 @@ as a privacy defect.
 - Keep Clippy clean with all warnings denied.
 - Prefer explicit error handling and propagate errors with context.
 - Keep terminal interaction separate from diary domain logic.
+- Never hard-code AI prompts; follow "AI prompts" in [docs/contribution-guide.md](docs/contribution-guide.md).
 
 ## Dependencies
 

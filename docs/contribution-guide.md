@@ -137,6 +137,14 @@ include `make run`, `make serve`, `make fmt`, `make fmt-check`, `make clippy`,
 `make test`, `make rust-test`, `make swift-build`, and `make swift-test`; run
 plain `make` to list them.
 
+## AI prompts
+
+- Never hard-code text sent to an AI in Rust or Swift. Every prompt lives in `assets/prompts/<provider>/<action>.md`, paired with its provider, model, and reasoning effort; the file format is in [assets/prompts/README.md](../assets/prompts/README.md).
+- Add or change a prompt only by editing its asset file. A new provider or action gets a new file and an entry in `diary-core::prompt_asset`.
+- Rust embeds assets with `include_str!`; the Swift helper receives raw templates over the bridge and must not keep its own copy.
+- Send `model` and `reasoning_effort` to the provider whenever they are not `default`. Changing a pinned value of a decided provider needs owner approval (see [AGENTS.md](../AGENTS.md)).
+- Substitute placeholders in a single pass so diary text is never re-expanded, and keep `cargo test` covering every shipped asset.
+
 ## Commit messages
 
 Use [Conventional Commits](https://www.conventionalcommits.org):

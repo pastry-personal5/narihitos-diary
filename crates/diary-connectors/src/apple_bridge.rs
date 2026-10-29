@@ -454,6 +454,7 @@ impl DraftAssistant for AppleFoundationAssistant {
                 DraftAssistantError::Unavailable
             });
         }
+        let templates = apple_templates(request.action())?;
         let (command, payload) = match request {
             AssistantRequest::ExtractMemories(request) => {
                 let sources = request
@@ -470,13 +471,13 @@ impl DraftAssistant for AppleFoundationAssistant {
                     .join(",");
                 (
                     "assistant-extract-memories",
-                    format!("{{\"locale\":\"en-US\",\"sources\":[{sources}]}}"),
+                    format!("{{\"locale\":\"en-US\",{templates},\"sources\":[{sources}]}}"),
                 )
             }
             AssistantRequest::DraftEntry(request) => (
                 "assistant-draft-entry",
                 format!(
-                    "{{\"locale\":{},\"prior_draft\":{},\"reviewed_memory\":{},\"style\":{}}}",
+                    "{{\"locale\":{},{templates},\"prior_draft\":{},\"reviewed_memory\":{},\"style\":{}}}",
                     json_string(request.language().as_str()),
                     request
                         .prior_draft()
@@ -489,7 +490,7 @@ impl DraftAssistant for AppleFoundationAssistant {
             AssistantRequest::ReviewParagraph(request) => (
                 "assistant-review-paragraph",
                 format!(
-                    "{{\"locale\":{},\"paragraph\":{},\"style\":{}}}",
+                    "{{\"locale\":{},{templates},\"paragraph\":{},\"style\":{}}}",
                     json_string(request.language().as_str()),
                     json_string(request.paragraph()),
                     json_string(request.style().as_str()),
@@ -498,7 +499,7 @@ impl DraftAssistant for AppleFoundationAssistant {
             AssistantRequest::RefineSource(request) => (
                 "assistant-refine-source",
                 format!(
-                    "{{\"locale\":\"en-US\",\"body\":{}}}",
+                    "{{\"locale\":\"en-US\",{templates},\"body\":{}}}",
                     json_string(request.body()),
                 ),
             ),
@@ -509,6 +510,20 @@ impl DraftAssistant for AppleFoundationAssistant {
             .map_err(map_assistant_bridge_error)?;
         parse_assistant_output(request, &output)
     }
+}
+
+/// The `"instructions"`/`"prompt"` payload members: raw templates from
+/// `assets/prompts/apple-foundation-models/`, rendered by the Swift helper.
+fn apple_templates(action: AssistantAction) -> Result<String, DraftAssistantError> {
+    let instructions = diary_core::prompt_asset::apple_session_instructions()
+        .map_err(|_| DraftAssistantError::Unavailable)?;
+    let prompt = diary_core::prompt_asset::apple_prompt(action)
+        .map_err(|_| DraftAssistantError::Unavailable)?;
+    Ok(format!(
+        "\"instructions\":{},\"prompt\":{}",
+        json_string(instructions.template()),
+        json_string(prompt.template())
+    ))
 }
 
 fn map_assistant_bridge_error(error: BridgeResponseError) -> DraftAssistantError {
