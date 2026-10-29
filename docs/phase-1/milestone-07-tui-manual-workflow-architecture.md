@@ -1,6 +1,6 @@
 # P1-M7: TUI and manual workflow architecture plan
 
-Status: Active
+Status: Done
 
 This plan connects the approved terminal information architecture to the
 Control API without creating a second workflow authority in the client.
@@ -15,10 +15,10 @@ Control API without creating a second workflow authority in the client.
   handling.
 - `diary-control`: the P1-M12 runtime-attachment, source-note naming, and
   empty-selection contracts; it remains the owner of policy and persistence.
-- Proposed `diary-macos`: TIS/Core Foundation query,
+- `diary-macos`: TIS/Core Foundation query,
   notification, ownership, and run-loop integration behind a safe fakeable
-  interface. Creating it and its narrow unsafe policy requires the owner
-  approval recorded in the milestone overview.
+  interface. Its creation and narrow unsafe policy were approved in the
+  milestone overview; M7 must not broaden that boundary.
 
 The TUI has no filesystem, SQLite, source-reader, helper, or assistant adapter.
 A missing P1-M7 operation in the completed server contract is a
@@ -104,8 +104,8 @@ missing route.
 | Attach and determine whether actions are available | `GET /v1/health`, then authenticated `GET /v1/capabilities` and `GET /v1/setup-check` | Compare runtime-file and health instance IDs and contract version before bearer use. Keep setup results informational; a failed setup check never turns into a client-side configuration probe. |
 | Choose defaults and remembered entry settings | `GET`/`PUT /v1/preferences` | Render only server-accepted values. A rejected preference edit remains local presentation input until the person changes or discards it. |
 | Start, resume, list, or discard a workflow | `GET`/`POST /v1/workflows`, `GET`/`DELETE /v1/workflows/{id}` | Consume bounded pagination in server order so unfinished drafts remain first. Send no diary day for the server-owned Mac-local “today” default. Use the current workflow ETag for discard and refetch after a stale precondition or domain conflict. Completed workflows are read-only in M7. |
-| Find and inspect candidates or confirmed snapshots | `POST /v1/workflows/{id}/discoveries`, `GET /v1/workflows/{id}/sources`, `GET /v1/workflows/{id}/sources/{source_id}` | Render the server-supplied `source_note_name`, date evidence, availability, and warnings. Consume bounded source pagination. Discovery summaries contain no body. Before confirmation, source detail carries the active preparation handle in its `X-ND-Preparation-Handle` response header and returns one prepared sanitized body; afterward it returns only a persisted confirmed snapshot. It performs no new source read. |
-| Prepare selected sources and confirm selection | `POST /v1/workflows/{id}/sources/prepare`, `PUT /v1/workflows/{id}/selection`, `POST /v1/workflows/{id}/empty-selection-confirmations`, `GET`/`DELETE /v1/jobs/{id}` | Track accepted work as a job and review its expiring (10-minute) server-owned preparation result. The Resources Sidebar's active source is presentation state separate from the prospective included IDs. Confirm by handle, never by echoing a body or stamp; read the handle from the `X-ND-Preparation-Handle` response header on the preceding source-detail read. If the job expires or the server restarts, prepare again. The separate empty-selection command is the only zero-note continuation. |
+| Find and inspect candidates or confirmed snapshots | `POST /v1/workflows/{id}/discoveries`, `GET /v1/workflows/{id}/sources`, `GET /v1/workflows/{id}/sources/{source_id}` | Render the server-supplied `source_note_name`, date evidence, availability, and warnings. Consume bounded source pagination. Discovery summaries contain no body. Before confirmation, send the completed preparation job's `result_handle` in the `X-ND-Preparation-Handle` request header; a successful detail response returns one prepared sanitized body and proves that binding was accepted. Afterward, detail without that header returns only a persisted confirmed snapshot. It performs no new source read. |
+| Prepare selected sources and confirm selection | `POST /v1/workflows/{id}/sources/prepare`, `PUT /v1/workflows/{id}/selection`, `POST /v1/workflows/{id}/empty-selection-confirmations`, `GET`/`DELETE /v1/jobs/{id}` | Track accepted work as a job and review its expiring (10-minute) server-owned preparation result. The Resources Sidebar's active source is presentation state separate from the prospective included IDs. Take the handle only from the succeeded job's typed `result_handle`; use it to authorize each included source-detail read and then to confirm the exact source-ID set, never echoing a body or stamp. If the job expires or the server restarts, prepare again. The separate empty-selection command is the only zero-note continuation. |
 | Choose current entry settings and open the Draft editor | `PUT /v1/workflows/{id}/writing-settings`, `POST /v1/workflows/{id}/manual-compositions` | Use the workflow ETag, send no assistant backend ID in M7, and treat the server as authoritative for language, style, selected backend/path, and invalidation. Manual editing is not a backend or composition path. Changing language, style, or backend after the entry was confirmed reverts the workflow to `Composing` with `composition-choice-changed`, exactly as if the text had been edited. |
 | Save and confirm the complete manual entry | `PUT /v1/workflows/{id}/entry`, `POST /v1/workflows/{id}/entry-confirmations` | Autosave uses only the entry-buffer ETag. Confirmation supplies both current versions: the workflow ETag as `If-Match` and the entry-buffer ETag in the request body. There is no separate entry-read route; current text and the buffer version always come from the same workflow response (`ETag` plus `X-Entry-Buffer-Etag` headers, `entry_text`/`buffer_version` fields) used for every other canonical refetch. Confirmation is disabled for blank text or unresolved inferred-reflection delimiters. |
 | Notice committed changes | `GET /v1/events?workflow_id={id}` plus canonical workflow/job reads | Treat every event as a prompt to reload, never as the full state or a confirmation receipt. |
@@ -129,7 +129,7 @@ advertised numeric host/port, instance ID, API version, and contract version.
 Do not inspect the lock file. A vanished file is “not running”; an unsafe or
 malformed file is a distinct safe attachment error.
 
-The proposed blocking HTTP agent accepts only a constructed
+The blocking HTTP agent accepts only a constructed
 `http://127.0.0.1:<validated-port>` base. It disables proxy discovery,
 redirects, TLS, cookies, compression, and automatic retries; supplies the exact
 numeric Host and absent Origin policy expected by P1-M6; and never accepts an
@@ -145,7 +145,7 @@ only typed problems; map transport/library failures to fixed content-free UI
 codes rather than displaying arbitrary error strings.
 
 Use separate long-lived bounded workers for ordinary request/response traffic
-and the single SSE stream. The proposed limits are one ordinary worker with a
+and the single SSE stream. The approved limits are one ordinary worker with a
 16-command queue, one event worker with one active stream, and a 32-result
 channel; duplicate UI intents are disabled while pending. The owner approves
 these limits with the dependency packet. Connect, send, and header phases use
@@ -178,7 +178,7 @@ the process ends before a flush.
 
 | Condition | Required client behavior |
 |---|---|
-| Initial attach cannot find or validate the runtime file, health instance, or supported version | Show the appropriate not-running, unsafe-attachment, or version-mismatch screen without sending the token or creating a workflow. Retry only when the person requests it. |
+| Initial attach cannot find or validate the runtime file, health instance, or supported version | Show the appropriate not-running, unsafe-attachment, or version-mismatch screen without sending the token or creating a workflow. Retry automatically with the approved 250 ms to 4-second bounded backoff; Retry requests the same guarded attempt immediately. |
 | Transport loss, server restart, SSE gap, unknown event, or worker overflow | Mark mutations disabled, retain readable canonical content and unsent editor text, reconnect with bounded backoff, then refetch the workflow and relevant job before enabling a new mutation. |
 | `412 Precondition Failed` for workflow or entry buffer | Preserve the attempted selection or editor text in presentation state, fetch canonical state, identify the changed version, and require deliberate resolution. Do not replay the request. |
 | Typed `409` job/domain conflict, job cancellation, or freshness invalidation | Show the safe server problem and impact notice, retain local text as unconfirmed, and direct the person to the current Sources or Compose stage. Do not convert it to a retry. |
@@ -205,7 +205,10 @@ Work Status is a full-width, bordered pane directly above the three-column
 Workflow Sidebar, Resources Sidebar, and Main Pane region. Its visible title is
 `Work Status`, and its body is always exactly four text rows; the title and top
 and bottom borders do not count toward those four rows. The pane does not take
-focus or own actions.
+focus or own actions. The Workflow Sidebar uses a fixed 24-column width both
+inline and as a focused overlay: 22 columns fit its longest focused canonical
+stage/progress row and two columns hold the border. Remaining width belongs to
+Resources and Main according to the active width band.
 
 The four rows prioritize: current or most recent work and its outcome; pending
 or blocked work; connection and draft-save safety; and the newest useful safe
@@ -258,13 +261,17 @@ for every grammar token (for example `help`, `retry`, `day`, `stage`, `save`,
 individually, not only one representative shape. Every command has the same
 guards and effect as its focused/chord path.
 
-`help` opens the on-screen action reference; `retry` performs the same guarded
+The Command Line occupies its own one-row zone above the Status Line. It may be
+empty while closed, but input and parse feedback never replace any of Work
+Status's four semantic rows. `help` opens the on-screen action reference;
+`retry` performs the same guarded
 attachment/refetch as Retry; `day` edits the Start day field but does not start
 a workflow; `stage` only navigates to an accessible stage; `save` requests the
 same conditional flush as Ctrl-S; and `quit` uses the same dirty-buffer warning
-as Ctrl-D. There are no function-key aliases (see AGENTS.md "Keybindings"): if
-Apple Terminal cannot distinguish a chord in the real-terminal check, the gate
-fails until the owner explicitly revises the binding, as happened twice —
+as Ctrl-D. There are no function-key aliases (see AGENTS.md "Keybindings"). If
+Wave Terminal cannot distinguish a chord in the primary real-terminal check,
+the gate fails until the owner explicitly revises the binding. That happened
+twice during the earlier Apple Terminal checks —
 Ctrl-Enter and Ctrl-Left/Ctrl-Right (replaced with Ctrl-S and Ctrl-P/Ctrl-N)
 and, separately, F10 never arriving as Ctrl-D's planned alias, after which the
 owner decided (2026-10-29) to drop function-key aliases from the design
@@ -282,80 +289,73 @@ Color may reinforce these states but never carries them; rendering honors
 The TIS boundary performs all Carbon/Core Foundation calls on the verified
 run-loop/thread arrangement and sends only `EN`, `KO`, or unknown state to the
 ViewModel. First run a production-shape notification probe on the supported
-macOS/Apple Terminal baseline; any registration or delivery failure selects the
+macOS baseline; any registration or delivery failure selects the
 500 ms query fallback without disabling editing. CF ownership, callback removal,
 shutdown, duplicate notifications, missing/other language properties, and no
 privacy prompt are acceptance cases.
 
-## Approach and sequence
+Wave Terminal is the primary M7 real-terminal target. Run every interactive
+probe there first: chord delivery, Korean Command Line normalization, Draft
+editor input and bracketed paste, terminal restoration, adaptive sidebar
+overlays, and IME indicator changes. Apple Terminal is secondary evidence and
+retains value as a regression check for the previously observed mixed Korean
+delivery and unavailable chords, but it cannot qualify Wave Terminal behavior.
 
-1. Verify P1-M12 is `Done`, inspect its runtime-attachment and contract
-   fixtures, and record owner approval for the exact
-   dependency, worker-limit, workspace, and unsafe-FFI packet. Stop if the
-   implemented surface still cannot express the manual flow.
-2. Build a terminal guard that restores terminal state on normal return,
-   handled error, and panic unwind. Read the owner-only runtime advertisement,
-   match its instance ID against unauthenticated health, and verify API/contract
-   versions before attaching the control token to a request. Keep only the safe
-   build/version fields for diagnostics, and do not print any runtime-file field.
-   In the same step, run a throwaway real-Apple-Terminal probe of the exact
-   decided chords before the dependency and layout work in steps 3–7, not only
-   at the acceptance gate in step 8. A 2026-10-29 run of this probe found Apple
-   Terminal does not deliver Ctrl-Enter or Ctrl-Left/Ctrl-Right as distinct
-   chords — Ctrl-Enter opened a context menu, and Ctrl-Left/Ctrl-Right
-   triggered macOS Mission Control Spaces switching before reaching the app —
-   so the owner revised AGENTS.md's primary binding to Ctrl-S (save/flush) and
-   Ctrl-P/Ctrl-N (previous/next stage). Re-running the probe for Ctrl-G,
-   Ctrl-D, Ctrl-S, Ctrl-P, and Ctrl-N on 2026-10-29 found all five arrive
-   directly as chords, but F10 (then the planned Ctrl-D alias) never arrives.
-   The owner subsequently decided to drop function-key aliases from the
-   design entirely rather than confirm the rest (F2, F3, F6, F7) one at a
-   time; every action is reachable only by its Ctrl chord or by focus and
-   Enter. A further chord failure stops and returns to the owner the same
-   way.
-3. Implement the typed bounded HTTP/SSE client and fake boundary, including
-   route-specific body caps, timeouts, paging, conditional headers, instance
-   replacement, event cursors, canonical refetch, and fixed safe errors.
-4. Implement the Standard Layout shell with a full-width four-content-row Work
-   Status pane above a left Workflow Sidebar, middle Resources Sidebar, and
-   right Main Pane, then add connection states, the compact Status Line, focus
-   model, the 80-by-30 terminal-size fallback, and bounded API/event workers.
-   The Workflow Sidebar renders the six canonical stages, server-derived
-   progress, and the presentation-only current marker. The Resources Sidebar
-   renders the active stage's source/input/output resources and their explicit
-   state, using indented trees where a server resource has a hierarchy. The
-   terminal owner polls worker completions and renders; reconnect and an SSE gap
-   trigger a canonical workflow refetch before a mutation can be enabled.
-5. Add Start and Sources ViewModels over authoritative workflow DTOs. Keep
-   candidate discovery, the active-resource/included-set distinction,
-   selected-only cloud preparation, prepared-body inspection in the Main Pane,
-   snapshot review, empty-selection confirmation, job progress, and conditional
-   conflicts as explicit screen states. A `412`, `409`, cancelled job, or
-   freshness invalidation never becomes an automatic repeat command.
-6. Add Compose and Review ViewModels with a multiline editor, an in-memory
-   unsent buffer, roughly one-second
-   debounced conditional saves, focus-leave and quit flushes, server-draft
-   recovery, complete-entry review, and confirmation guards. Distinguish the
-   entry-buffer version from the workflow ETag; on either conflict, refetch and
-   retain local unsent text for a person to resolve. Keep the draft and
-   confirmed sources in the Resources Sidebar; opening a source is read-only and
-   returning to the draft restores cursor and selection. Recovered text is
-   editable but is never itself evidence of confirmation.
-7. Represent language/style as server-owned workflow state, remembering only
-   the last language and optional assistant backend ID while retaining the concise new-workflow
-   style default. Render any reserved inferred-reflection delimiter defensively
-   and block entry
-   confirmation until it is resolved, while leaving extraction and drafting for
-   P1-M8. Implement accessible focus actions, safe Ctrl chords, Hangul-to-ASCII
-   Command Line mapping, grapheme-aware display width, and the TIS run-loop /
-   500 ms polling adapter. Use Ctrl-G for Command Line, Ctrl-S to save/flush,
-   Ctrl-D to quit, and Ctrl-P/Ctrl-N for previous/next workflow stage, with no
-   function-key aliases for any of them. Leave assistant selection, draft
-   generation,
-   and paragraph review to P1-M8; their later controls extend Compose rather
-   than changing the stage model or layout.
-8. Test ViewModels and rendering with fakes, then record the required real
-   Terminal and Korean IME acceptance evidence.
+## Completion checkpoint and implemented sequence
+
+The running client integrates session authority and recovery, operable Start,
+end-to-end Sources, end-to-end manual Compose/Review, the adaptive accessible
+presentation shell, and Increment 6's notification-first TIS implementation.
+The SSE worker does not announce a usable connection until body bytes arrive,
+the Command Line has its own row, and the focus-driven width bands keep both
+sidebars reachable. The full dated gate passed and the owner confirmed the Wave
+Terminal primary qualification and secondary Apple Terminal regression set on
+2026-10-29. Implementation followed this vertical sequence:
+
+1. **Finish session authority and recovery.** Add typed capabilities,
+   setup-check, preference read/write, and paged-list operations that are still
+   missing from the worker surface. Complete HTTP header/body-bound tests. Add
+   the dedicated SSE worker with heartbeat handling, `Last-Event-ID`, instance
+   replacement, reset/gap/unknown-event handling, bounded-result overflow, and
+   a single mutation gate. Re-enable mutation only after the active workflow
+   and relevant job have been canonically reloaded.
+2. **Make Start fully operable.** Introduce one focus model shared by Tab,
+   arrows, Enter, Ctrl-P/Ctrl-N, and Command Line stage navigation. Wire default
+   day, explicit day, start/resume, workflow pagination, selection, and guarded
+   discard through the ordinary worker. Render Setup check and connection
+   states without blocking the event loop. Prove this slice against a real
+   `nd serve` process before moving on.
+3. **Make Sources end to end.** Wire discovery and job polling, paged candidates,
+   explicit-date discovery, independent active/included state, selected-only
+   preparation, prepared-body inspection, preparation-handle capture, selection
+   confirmation, and explicit continue-without-notes. Treat `409`, `412`, job
+   expiry/cancellation, and freshness invalidation as visible resolution states,
+   never automatic mutation retries.
+4. **Make Compose and Review end to end.** Wire server-owned language/style and
+   remembered-language preferences, manual composition, the live Draft editor,
+   confirmed-source inspection with cursor restoration, roughly one-second
+   debounced autosave, Ctrl-S/focus-leave flush, and unsafe-quit confirmation.
+   On uncertain save or `412`, reload canonically and present local unsent and
+   server text separately. Wire full-entry review, first-delimiter navigation,
+   blank/reflection guards, and conditional confirmation.
+5. **Complete adaptive and accessible presentation.** Give Command Line its own
+   row. At 120 columns or wider show both sidebars; at 100–119 overlay Resources;
+   at 80–99 overlay either sidebar. Add scrolling, focus/current/included
+   markers, grapheme-aware wrapping/cursor/hit testing, date weekday formatting
+   in every applicable view, `NO_COLOR`, 16-color, and terminal-control
+   sanitization tests. Every command and mutation remains reachable through a
+   focused control and Enter.
+6. **Complete IME and terminal qualification.** Add the TIS notification
+   run-loop path with deterministic fallback and shutdown tests. Run
+   `chord_probe`, `command_line_probe`, `editor_probe`, and `restoration_probe`
+   in Wave Terminal first, using test text, then repeat the secondary regression
+   set in Apple Terminal. Exercise the integrated manual flow in Wave, including
+   disconnect/restart, stale preconditions, Korean input, bracketed paste,
+   overlays, autosave, dirty quit, and recovery.
+7. **Close evidence and documentation.** Add real-process integration tests for
+   the Start→Sources→Compose→Review confirmation slice, reconcile user-facing
+   docs with the observed behavior, run the full Rust/Swift gate, and check a
+   completion item only when its focused and integrated evidence is recorded.
 
 The event/render loop never performs HTTP, filesystem, SQLite, helper, or
 assistant work. On reconnect it reloads server state before re-enabling

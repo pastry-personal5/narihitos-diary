@@ -197,9 +197,11 @@ Status Line.
   assistant suggestion, complete-entry review, output preview, or publication
   status. A Banner at its top holds any condition that needs a decision, with
   the explanation.
-- **Command Line** accepts typed commands (for example: jump to a diary day or
-  confirm). Approval and publication are on-screen actions
-  at the output preview; a typed command cannot bypass that screen.
+- **Command Line** accepts only the bounded application grammar `help`, `retry`,
+  `day YYYY-MM-DD`, `stage <stage>`, `save`, and `quit`; it is not a shell.
+  Selection confirmation, complete-entry confirmation, approval, and
+  publication are focused on-screen actions, so a typed command cannot bypass
+  their review screens.
 - **Status Line** is the compact realization of the "App status" and
   "Action/status area" content named in the Standard Layout tree above: diary
   day, workflow state, connection, a short error summary, progress, IME

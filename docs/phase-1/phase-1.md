@@ -168,13 +168,18 @@ readiness work, and complete Rust/Swift gate passed on 2026-10-29.
 
 ### P1-M7: TUI and manual workflow
 
-Status: Active
+Status: Done
 
 Goal: Let a person reach a confirmed, recoverable entry through the `nd`
 terminal client and the always-available Draft editor.
 
 Plan: [overview](milestone-07-tui-manual-workflow-overview.md),
 [architecture plan](milestone-07-tui-manual-workflow-architecture.md).
+
+Notes: The automated manual slice, restart/recovery acceptance, documentation,
+and full Rust/Swift gate passed on 2026-10-29. The owner then confirmed the
+primary Wave Terminal qualification and secondary Apple Terminal regression
+run recorded in the overview, completing P1-M7.
 
 ### P1-M8: Draft assistants
 

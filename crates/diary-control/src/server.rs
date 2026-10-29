@@ -576,12 +576,22 @@ async fn start_workflow(
         .map_err(|_| ApiError::new(StatusCode::BAD_REQUEST, "invalid-diary-day"))?;
     let service = state.0.config.commands.clone();
     let outcome = blocking(move || service.start_workflow(day)).await?;
-    let (status, workflow) = match outcome {
-        StartOutcome::Created(workflow) => (StatusCode::CREATED, workflow),
+    let (status, workflow, created) = match outcome {
+        StartOutcome::Created(workflow) => (StatusCode::CREATED, workflow, true),
         StartOutcome::Resumed(workflow) | StartOutcome::Completed(workflow) => {
-            (StatusCode::OK, workflow)
+            (StatusCode::OK, workflow, false)
         }
     };
+    if created {
+        publish_event(
+            &state,
+            "workflow.changed",
+            Some(workflow_id(workflow.day().as_str()).expect("validated diary day")),
+            Some(workflow.revision()),
+            None,
+            None,
+        );
+    }
     workflow_response(status, &workflow)
 }
 
@@ -1053,6 +1063,11 @@ async fn events(
         });
         subscriber_id
     };
+    // Put one body frame on every newly established stream immediately.
+    // Besides giving HTTP intermediaries something to flush, this means the
+    // client can prove the SSE body is flowing before the first mutation;
+    // comments consume no event ID and are ignored by the typed parser.
+    let _ = tx.try_send(Ok(Bytes::from_static(b": connected\n\n")));
     let count = Arc::clone(&state.0.subscriber_count);
     let timer_state = state.clone();
     tokio::spawn(async move {

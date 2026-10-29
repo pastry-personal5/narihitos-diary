@@ -34,14 +34,19 @@ Build both language workspaces from the repository root:
 ```sh
 cargo build --workspace
 swift build --package-path helpers/apple-bridge
+# Equivalent convenience wrapper:
+make build
 ```
 
 Inspect the command boundary and start the server from the repository root.
 `nd serve` validates the owner-only configuration, private state and diagnostic
 directories, binds only numeric IPv4 loopback using the documented bounded
 port sequence, and publishes an ephemeral attachment file only after its
-health check succeeds. The default `nd` TUI mode still exits with the explicit
-not-implemented diagnostic until P1-M7.
+health check succeeds. Run it in one terminal, then open the TUI from a second
+terminal. The implemented P1-M7 slice supports Start, Sources, manual Compose,
+and complete-entry Review; Preview and Publish are visible but locked until
+their later milestones. The TUI needs at least 80 columns by 30 rows and never
+starts the server itself.
 
 ```sh
 cargo run -p nd -- --help
@@ -49,8 +54,19 @@ cargo run -p nd
 cargo run -p nd -- serve
 cargo test -p nd --test command_shells
 cargo test -p nd --test p1_m6_process
+cargo test -p nd --test p1_m7_tui_attach --test p1_m7_worker
 printf '%s\n' '{"protocol_version":1,"request_id":"smoke-1","command":"ping","payload":{}}' | swift run --package-path helpers/apple-bridge apple-bridge
 ```
+
+P1-M7 uses Tab/arrows plus Enter and the Ctrl-G, Ctrl-S, Ctrl-D, Ctrl-P, and
+Ctrl-N chords, with no function-key aliases. Its bounded Command Line grammar
+is `help`, `retry`, `day YYYY-MM-DD`, `stage <stage>`, `save`, and `quit`.
+Confirming a selection or entry is deliberately available only through focused
+controls and Enter. Wave Terminal is the primary interactive target and Apple
+Terminal is the secondary regression target; both completed P1-M7
+qualification on 2026-10-29. The probe commands and acceptance evidence are
+recorded in the [P1-M7
+overview](phase-1/milestone-07-tui-manual-workflow-overview.md).
 
 The helper must emit exactly one JSON response line on standard output. The
 Rust helper client uses `ND_APPLE_BRIDGE_PATH` when set; otherwise it checks the
@@ -92,6 +108,11 @@ cargo test --all-features
 swift build --package-path helpers/apple-bridge
 swift test --package-path helpers/apple-bridge
 ```
+
+`make check` runs those five commands in the same order. Other phony aliases
+include `make run`, `make serve`, `make fmt`, `make fmt-check`, `make clippy`,
+`make test`, `make rust-test`, `make swift-build`, and `make swift-test`; run
+plain `make` to list them.
 
 ## Commit messages
 

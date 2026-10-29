@@ -1,6 +1,7 @@
 //! Interactive real-terminal probe for the Command Line's raw-jamo-to-ASCII
-//! mapping (`crate::command_line`). Run with Apple Terminal's 2-Set Korean
-//! IME active and type one of the grammar tokens (`help`, `retry`,
+//! mapping (`crate::command_line`). Run in Wave Terminal for primary
+//! qualification or Apple Terminal for the secondary regression check, with
+//! the 2-Set Korean IME active, and type one of the grammar tokens (`help`, `retry`,
 //! `day 2026-10-29`, `stage sources`, `save`, `quit`) using the Korean
 //! keyboard layout, then press Enter to see exactly what the real terminal
 //! delivered, how it normalized, and what command it parsed to.

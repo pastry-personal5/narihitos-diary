@@ -1,6 +1,6 @@
 # Terminal UX
 
-Status: Proposal
+Status: Active
 
 This document separates approved terminal behavior from proposed presentation
 details. Product scope is in [product-behavior.md](product-behavior.md), and
@@ -8,8 +8,20 @@ component vocabulary is in [ux-terms.md](ux-terms.md).
 
 ## Current interface
 
-There is no production TUI yet. This document describes the intended client
-experience; it does not claim an implemented screen or keybinding.
+P1-M7 now implements the manual Start → Sources → Compose → Review slice in the
+`nd` terminal client; Preview and Publish remain locked for later milestones.
+The adaptive shell keeps both sidebars inline at 120 columns or wider, overlays
+Resources from 100 through 119, and opens either focused sidebar over the Main
+Pane from 80 through 99. Work Status keeps its four content rows, while Command
+Line and Status Line have separate rows beneath the body. Wave Terminal
+qualification and the Apple Terminal secondary regression run passed on
+2026-10-29.
+The Status Line now consumes notification-based TIS language updates and
+permanently selects the bounded 500 ms query fallback if notification
+registration or delivery is unavailable. The Command Line accepts only
+`help`, `retry`, `day YYYY-MM-DD`, `stage <stage>`, `save`, and `quit`;
+selection and entry confirmation remain focused controls and cannot be typed to
+bypass review.
 
 ## Approved behavior to represent
 
@@ -96,7 +108,7 @@ the 2-Set Korean layout back to the key that produced it, so commands work
 under either IME; every command is also reachable by focus and Enter.
 Real-terminal acceptance checks this with the Korean IME active.
 
-## Proposed presentation details
+## Current and planned presentation details
 
 Work Status is a non-focusable pane above all three columns. Its four fixed
 content rows prioritize current or recent work, pending or blocked work,

@@ -6,11 +6,12 @@
 
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
-use ratatui::text::Line;
 use ratatui::widgets::Widget;
 
 use crate::date_display::format_diary_day;
+use crate::display::{truncate, width};
 use crate::ime::ImeState;
+use crate::theme::Palette;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct StatusLineModel {
@@ -28,18 +29,18 @@ impl StatusLineModel {
     /// diary day renders with its abbreviated weekday only where that
     /// still leaves room for the rest of the line.
     #[must_use]
-    pub fn render(&self, width: u16) -> String {
+    pub fn render(&self, area_width: u16) -> String {
         let mut segments = Vec::new();
         if let Some(day) = &self.diary_day {
             let plain_rest: Vec<&str> = std::iter::once(self.connection_label)
                 .chain(std::iter::once(self.ime.status_label()))
                 .chain(self.action_hint.as_deref())
                 .collect();
-            let rest_width = Line::from(plain_rest.join(" | ").as_str()).width();
+            let rest_width = width(&plain_rest.join(" | "));
             // Separators: one after the day, one between each remaining
             // segment.
             let separator_width = 3 * plain_rest.len().max(1);
-            let budget = usize::from(width).saturating_sub(rest_width + separator_width);
+            let budget = usize::from(area_width).saturating_sub(rest_width + separator_width);
             segments.push(format_diary_day(day, budget as u16));
         }
         segments.push(self.connection_label.to_owned());
@@ -47,32 +48,28 @@ impl StatusLineModel {
         if let Some(hint) = &self.action_hint {
             segments.push(hint.clone());
         }
-        truncate_to_width(&segments.join(" | "), width)
+        truncate(&segments.join(" | "), area_width)
     }
-}
-
-fn truncate_to_width(text: &str, max_width: u16) -> String {
-    let max_width = usize::from(max_width);
-    let mut result = String::new();
-    for ch in text.chars() {
-        let mut candidate = result.clone();
-        candidate.push(ch);
-        if Line::from(candidate.as_str()).width() > max_width {
-            break;
-        }
-        result = candidate;
-    }
-    result
 }
 
 pub struct StatusLineWidget<'a> {
     model: &'a StatusLineModel,
+    palette: Palette,
 }
 
 impl<'a> StatusLineWidget<'a> {
     #[must_use]
     pub const fn new(model: &'a StatusLineModel) -> Self {
-        Self { model }
+        Self {
+            model,
+            palette: Palette::new(true),
+        }
+    }
+
+    #[must_use]
+    pub const fn palette(mut self, palette: Palette) -> Self {
+        self.palette = palette;
+        self
     }
 }
 
@@ -82,13 +79,15 @@ impl Widget for StatusLineWidget<'_> {
             area.x,
             area.y,
             self.model.render(area.width),
-            ratatui::style::Style::default(),
+            self.palette.safe(),
         );
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use ratatui::text::Line;
+
     use super::*;
 
     #[test]

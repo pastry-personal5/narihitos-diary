@@ -6,6 +6,105 @@ This changelog records owner decisions and material plan changes for Phase 1.
 
 ## Entries
 
+- 2026-10-29 — P1-M7 completed — The owner confirmed that the required Wave
+  Terminal primary qualification and Apple Terminal secondary regression set
+  passed, including the four interactive probes and integrated manual-flow
+  cases in the milestone checklist. Together with the already-passed automated
+  acceptance, documentation, and full Rust/Swift gate, this completes P1-M7.
+
+- 2026-10-29 — Root Make aliases — Added a dependency-free root `Makefile`
+  with phony targets for help, Rust/Swift build and tests, client/server runs,
+  Rust formatting and Clippy, and the complete ordered milestone gate. The
+  underlying Cargo and Swift commands remain explicit in agent and contributor
+  documentation.
+
+- 2026-10-29 — P1-M7 increment 7 integration evidence — Extended the
+  real-process acceptance path through explicit empty-source confirmation,
+  manual composition, complete-entry confirmation, server restart with a new
+  runtime attachment, and canonical recovery of the confirmed synthetic text.
+  Reconciled README, contributor, product, and UX docs with the live manual
+  slice, exact bounded Command Line, focused-only confirmations, locked later
+  stages, and still-pending terminal qualification. The complete Rust and Swift
+  gate passed (`diary-tui` 165 tests, `diary-control` 23, `nd` unit 5 plus all
+  integration targets, and 10 Swift XCTest cases). Wave Terminal qualification
+  and the secondary Apple Terminal regression run remain the only P1-M7 work.
+
+- 2026-10-29 — P1-M7 increment 6 IME implementation — Added the
+  notification-first TIS language path: the narrow macOS boundary now reads the
+  supported language property, registers and removes its observer on the main
+  run loop, coalesces bounded updates, and feeds `EN`/`KO`/unknown state to the
+  live TUI. Registration or delivery failure permanently selects the existing
+  500 ms query fallback without disabling editing. Focused macOS/TUI/control
+  tests, the read-only main-thread smoke probe, the real REST+SSE worker test,
+  and targeted warning-denied Clippy pass. Validation also fixed a missing
+  `workflow.changed` event for newly created workflows without changing the
+  event schema or routes. Wave and secondary Apple Terminal qualification
+  remain pending, so Increment 6 is not yet fully accepted.
+
+- 2026-10-29 — P1-M7 increment 5 implementation — Completed the adaptive,
+  accessible presentation shell: a dedicated Command Line row, the approved
+  120+/100–119/80–99 sidebar bands and focus overlays, bounded resource/Main
+  scrolling, text state markers, display-width wrapping and clipping,
+  space-aware weekday dates, a `NO_COLOR`-aware basic palette, and a 512 KiB
+  complete-entry input limit. Updated user-facing TUI status. The real-process
+  check also tightened SSE readiness so Connected requires body bytes and small
+  event frames are fed incrementally from Ureq's buffered reader; the complete
+  `nd` package suite then passed three consecutive runs. Focused
+  `diary-tui` (161) and `diary-control` (23) tests and targeted
+  warning-denied Clippy pass. No dependency or API contract changed.
+
+- 2026-10-29 — P1-M7 increment 4 implementation — Completed live manual
+  Compose and Review: server-owned language/style settings with language-only
+  preference retention, manual editor entry, confirmed-source inspection,
+  generation-bound debounced and explicit saves, canonical reconciliation of
+  uncertain writes, deliberate two-version conflict resolution, guarded quit,
+  full-entry review, reflection/blank guards, and conditional confirmation.
+  The empty-source path now opens manual composition automatically. Focused
+  tests and Clippy with warnings denied pass; no dependency or server contract
+  changed.
+
+- 2026-10-29 — P1-M7 increment 3 implementation — Completed the live Sources
+  slice: bounded discovery/preparation jobs, progress polling, explicit-date
+  discovery, source pagination, independent focus/active/included state,
+  warning and dual-date evidence, selected-only preparation, prepared-body
+  inspection, review gating, exact conditional confirmation, and two-step
+  continue-without-notes. Corrected a prior M7 client/evidence error: the
+  preparation handle comes from the succeeded job's `result_handle` and must be
+  sent on source-detail requests; it is not a source-detail response header.
+  Focused tests and Clippy with warnings denied pass, with no dependency or
+  server-contract change.
+
+- 2026-10-29 — P1-M7 increment 2 implementation — Made Start operable in the
+  live TUI with a shared focus model, complete non-editor key classification,
+  visible pane/item focus, Setup and capability status, Mac-local-today or
+  explicit day choice, workflow pagination, start/resume, guarded two-step
+  discard, retry/help/save-state/quit controls, and accessible stage
+  navigation. All stateful actions use the bounded worker and session mutation
+  gate. Focused tests and Clippy with warnings denied pass; no dependency or
+  lower-layer contract changed.
+
+- 2026-10-29 — P1-M7 increment 1 implementation — Completed the session
+  authority and recovery foundation: typed capabilities/setup/preferences and
+  workflow pagination, stricter HTTP bounds, a dedicated bounded SSE worker,
+  heartbeat and event validation, `Last-Event-ID` reconnect, instance
+  reattachment, and a fail-closed mutation gate that requires canonical reload
+  after reset, unknown/decode/overflow, or transport loss. Integrated it into
+  the live `nd` loop without adding dependencies. The increment also fixed an
+  existing bounded-worker test race that could hang during failure unwinding.
+  Focused Clippy and tests plus `cargo test --all-features` pass; no private
+  diary source or live external service was accessed.
+
+- 2026-10-29 — P1-M7 ongoing-plan review — Distinguished isolated component
+  tests from the still-missing human-usable vertical slice and replaced the
+  stale build-from-zero sequence with seven acceptance-sized integration
+  increments. The plan now calls out missing session/SSE recovery, focused
+  Start actions, end-to-end Sources/Compose/Review, a dedicated Command Line
+  row, the decided 100/120-column sidebar overlays, TIS notifications, and
+  real-process acceptance. Wave Terminal is the primary qualification target;
+  Apple Terminal evidence is secondary. The already-evidenced M12 and
+  dependency/FFI entry gate is checked complete. No production code,
+  dependency, build tool, private source tree, or live service changed.
+
 - 2026-10-29 — Owner decision — P1-M7 keybindings drop function-key aliases
   entirely. A real-terminal check had already found F10 never arrives as a
   distinct chord at all; rather than confirm the remaining aliases (F2, F3,

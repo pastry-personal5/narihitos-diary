@@ -34,20 +34,26 @@ impl SseParser {
     /// be reconnected rather than resynchronized byte-by-byte.
     pub fn feed(&mut self, chunk: &[u8]) -> Result<Vec<EventDto>, SseError> {
         self.buffer.extend_from_slice(chunk);
-        if self.buffer.len() > self.max_event_bytes {
-            self.buffer.clear();
-            return Err(SseError::OversizedEvent);
-        }
 
         let mut events = Vec::new();
         while let Some(boundary) = find_double_newline(&self.buffer) {
+            if boundary > self.max_event_bytes {
+                self.buffer.clear();
+                return Err(SseError::OversizedEvent);
+            }
             let frame = self.buffer[..boundary].to_vec();
             let rest_start = boundary + 2;
             self.buffer.drain(..rest_start);
             if frame.is_empty() {
                 continue;
             }
-            events.push(parse_frame(&frame)?);
+            if let Some(event) = parse_frame(&frame)? {
+                events.push(event);
+            }
+        }
+        if self.buffer.len() > self.max_event_bytes {
+            self.buffer.clear();
+            return Err(SseError::OversizedEvent);
         }
         Ok(events)
     }
@@ -57,16 +63,29 @@ fn find_double_newline(buffer: &[u8]) -> Option<usize> {
     buffer.windows(2).position(|window| window == b"\n\n")
 }
 
-fn parse_frame(frame: &[u8]) -> Result<EventDto, SseError> {
+fn parse_frame(frame: &[u8]) -> Result<Option<EventDto>, SseError> {
     let text = std::str::from_utf8(frame).map_err(|_| SseError::MalformedEvent)?;
+    if text.lines().all(|line| line.starts_with(':')) {
+        return Ok(None);
+    }
+    let mut wire_id = None;
+    let mut wire_type = None;
     let mut data_line = None;
     for line in text.split('\n') {
-        if let Some(data) = line.strip_prefix("data: ") {
+        if let Some(id) = line.strip_prefix("id: ") {
+            wire_id = id.parse::<u64>().ok();
+        } else if let Some(event_type) = line.strip_prefix("event: ") {
+            wire_type = Some(event_type);
+        } else if let Some(data) = line.strip_prefix("data: ") {
             data_line = Some(data);
         }
     }
     let data = data_line.ok_or(SseError::MalformedEvent)?;
-    serde_json::from_str(data).map_err(|_| SseError::MalformedEvent)
+    let event: EventDto = serde_json::from_str(data).map_err(|_| SseError::MalformedEvent)?;
+    if wire_id != Some(event.id) || wire_type != Some(event.event_type.as_str()) {
+        return Err(SseError::MalformedEvent);
+    }
+    Ok(Some(event))
 }
 
 #[cfg(test)]
@@ -119,6 +138,18 @@ mod tests {
     }
 
     #[test]
+    fn a_chunk_may_exceed_the_bound_when_each_complete_frame_does_not() {
+        let first = frame(3, "workflow.changed");
+        let second = frame(4, "job.changed");
+        let frame_bound = first.len().max(second.len());
+        let mut combined = first;
+        combined.extend(second);
+        assert!(combined.len() > frame_bound);
+        let mut parser = SseParser::new(frame_bound);
+        assert_eq!(parser.feed(&combined).unwrap().len(), 2);
+    }
+
+    #[test]
     fn an_oversized_event_is_rejected_and_clears_the_buffer() {
         let one_frame = frame(5, "workflow-changed");
         let mut parser = SseParser::new(one_frame.len() + 10);
@@ -140,5 +171,22 @@ mod tests {
         let mut parser = SseParser::new(4096);
         let bad = b"id: 7\nevent: workflow-changed\ndata: not json\n\n";
         assert_eq!(parser.feed(bad).unwrap_err(), SseError::MalformedEvent);
+    }
+
+    #[test]
+    fn a_heartbeat_comment_is_ignored() {
+        let mut parser = SseParser::new(4096);
+        assert!(parser.feed(b": keep-alive\n\n").unwrap().is_empty());
+    }
+
+    #[test]
+    fn wire_id_and_type_must_match_the_typed_payload() {
+        let mut parser = SseParser::new(4096);
+        let mut mismatched = frame(8, "workflow.changed");
+        mismatched[4] = b'9';
+        assert_eq!(
+            parser.feed(&mismatched).unwrap_err(),
+            SseError::MalformedEvent
+        );
     }
 }

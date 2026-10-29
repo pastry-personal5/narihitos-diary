@@ -259,6 +259,8 @@ pub struct CommandLineState {
     raw: String,
 }
 
+pub const MAX_COMMAND_BYTES: usize = 256;
+
 impl CommandLineState {
     #[must_use]
     pub fn raw(&self) -> &str {
@@ -266,7 +268,9 @@ impl CommandLineState {
     }
 
     pub fn push_char(&mut self, ch: char) {
-        self.raw.push(ch);
+        if self.raw.len().saturating_add(ch.len_utf8()) <= MAX_COMMAND_BYTES {
+            self.raw.push(ch);
+        }
     }
 
     /// Removes the last raw character. Note this removes one `char`
@@ -290,7 +294,7 @@ impl CommandLineState {
     }
 }
 
-fn is_valid_day(value: &str) -> bool {
+pub fn is_valid_day(value: &str) -> bool {
     value.len() == 10
         && value.as_bytes()[4] == b'-'
         && value.as_bytes()[7] == b'-'
@@ -312,6 +316,16 @@ mod tests {
         }
         assert_eq!(state.submit(), Ok(Command::Quit));
         assert_eq!(state.raw(), "");
+    }
+
+    #[test]
+    fn raw_input_is_bounded_without_splitting_utf8() {
+        let mut state = CommandLineState::default();
+        for _ in 0..MAX_COMMAND_BYTES {
+            state.push_char('한');
+        }
+        assert!(state.raw().len() <= MAX_COMMAND_BYTES);
+        assert!(state.raw().is_char_boundary(state.raw().len()));
     }
 
     #[test]

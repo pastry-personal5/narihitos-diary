@@ -35,6 +35,17 @@ pub struct ComposeViewModel {
     /// The generation that was last successfully saved.
     saved_generation: u64,
     pub last_error: Option<ComposeError>,
+    /// Canonical text observed while unsaved local text exists. The UI
+    /// must ask the person which version to keep; it must never merge or
+    /// replace either version implicitly.
+    pub conflicting_server_text: Option<String>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SaveSnapshot {
+    pub generation: u64,
+    pub buffer_version: u64,
+    pub text: String,
 }
 
 impl ComposeViewModel {
@@ -45,11 +56,22 @@ impl ComposeViewModel {
     pub fn load_from_canonical(&mut self, workflow: &WorkflowDto) {
         self.buffer_version = workflow.buffer_version;
         if self.is_dirty() {
+            if workflow.entry_text == self.text {
+                // A refetch after an uncertain write proves that the exact
+                // local bytes are canonical, even if the write response was
+                // lost.
+                self.saved_generation = self.local_generation;
+                self.last_error = None;
+                self.conflicting_server_text = None;
+            } else {
+                self.conflicting_server_text = Some(workflow.entry_text.clone());
+            }
             return;
         }
         self.text = workflow.entry_text.clone();
         self.local_generation = 0;
         self.saved_generation = 0;
+        self.conflicting_server_text = None;
     }
 
     #[must_use]
@@ -65,6 +87,36 @@ impl ComposeViewModel {
         }
         self.text = text;
         self.local_generation += 1;
+    }
+
+    /// Captures the exact conditional write an async worker should make.
+    /// The caller owns the one-in-flight guard.
+    #[must_use]
+    pub fn save_snapshot(&self) -> Option<SaveSnapshot> {
+        self.is_dirty().then(|| SaveSnapshot {
+            generation: self.local_generation,
+            buffer_version: self.buffer_version,
+            text: self.text.clone(),
+        })
+    }
+
+    /// Explicitly keeps local text after a canonical conflict. The next
+    /// snapshot uses the freshly loaded server buffer version.
+    pub fn keep_local_after_conflict(&mut self) {
+        self.conflicting_server_text = None;
+        self.last_error = None;
+    }
+
+    /// Explicitly discards local edits in favor of the separately shown
+    /// canonical version.
+    pub fn use_server_after_conflict(&mut self) {
+        let Some(server_text) = self.conflicting_server_text.take() else {
+            return;
+        };
+        self.text = server_text;
+        self.local_generation = 0;
+        self.saved_generation = 0;
+        self.last_error = None;
     }
 
     /// Attempts a conditional save if the buffer is dirty. No-op if
@@ -94,7 +146,11 @@ impl ComposeViewModel {
     /// has no seam to honestly simulate an edit landing between send and
     /// response, so tests pass `generation_at_send` explicitly instead of
     /// relying on real timing.
-    fn apply_save_outcome(&mut self, generation_at_send: u64, outcome: ClientOutcome<WorkflowDto>) {
+    pub fn apply_save_outcome(
+        &mut self,
+        generation_at_send: u64,
+        outcome: ClientOutcome<WorkflowDto>,
+    ) -> Option<WorkflowDto> {
         match outcome {
             ClientOutcome::Ok(workflow) => {
                 self.buffer_version = workflow.buffer_version;
@@ -108,14 +164,17 @@ impl ComposeViewModel {
                     // next autosave call sends it, rather than being
                     // treated as already saved.
                 }
+                Some(workflow)
             }
             ClientOutcome::Problem(problem) => {
                 // A 412/409 requires canonical refetch and deliberate
                 // resolution, never a blind replay with the same version.
                 self.last_error = Some(ComposeError::Problem(problem));
+                None
             }
             ClientOutcome::Transport(error) => {
                 self.last_error = Some(ComposeError::Transport(error));
+                None
             }
         }
     }
@@ -319,5 +378,45 @@ mod tests {
             view.buffer_version, 3,
             "the canonical buffer version still updates for the next save attempt"
         );
+    }
+
+    #[test]
+    fn save_snapshot_binds_generation_version_and_exact_text() {
+        let mut view = ComposeViewModel::default();
+        view.load_from_canonical(&workflow_from(7, "old"));
+        view.edit("local".to_owned());
+        assert_eq!(
+            view.save_snapshot(),
+            Some(SaveSnapshot {
+                generation: 1,
+                buffer_version: 7,
+                text: "local".to_owned(),
+            })
+        );
+    }
+
+    #[test]
+    fn canonical_reload_keeps_both_sides_of_a_conflict_until_resolution() {
+        let mut view = ComposeViewModel::default();
+        view.load_from_canonical(&workflow_from(2, "old"));
+        view.edit("local".to_owned());
+        view.load_from_canonical(&workflow_from(3, "server"));
+        assert_eq!(view.text, "local");
+        assert_eq!(view.conflicting_server_text.as_deref(), Some("server"));
+
+        view.use_server_after_conflict();
+        assert_eq!(view.text, "server");
+        assert!(!view.is_dirty());
+    }
+
+    #[test]
+    fn canonical_reload_proves_an_uncertain_save_when_text_matches() {
+        let mut view = ComposeViewModel::default();
+        view.load_from_canonical(&workflow_from(2, "old"));
+        view.edit("possibly saved".to_owned());
+        view.load_from_canonical(&workflow_from(3, "possibly saved"));
+        assert!(!view.is_dirty());
+        assert_eq!(view.buffer_version, 3);
+        assert_eq!(view.conflicting_server_text, None);
     }
 }

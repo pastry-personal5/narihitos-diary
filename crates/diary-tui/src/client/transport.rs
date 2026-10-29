@@ -78,6 +78,7 @@ pub struct RawRequest {
     pub authenticated: bool,
     pub body: Option<Vec<u8>>,
     pub if_match: Option<String>,
+    pub preparation_handle: Option<String>,
     pub max_response_bytes: usize,
 }
 
@@ -86,7 +87,6 @@ pub struct RawResponse {
     pub status: u16,
     pub etag: Option<String>,
     pub buffer_etag: Option<String>,
-    pub preparation_handle: Option<String>,
     pub body: Vec<u8>,
 }
 
@@ -152,26 +152,44 @@ impl Transport for UreqTransport {
         attachment: &Attachment,
         request: &RawRequest,
     ) -> Result<RawResponse, TransportError> {
+        if !request.path.starts_with('/')
+            || request.path.starts_with("//")
+            || request.path.contains("://")
+        {
+            return Err(TransportError::MalformedResponse);
+        }
         let url = format!("{}{}", attachment.base_url(), request.path);
         let auth = request
             .authenticated
             .then(|| format!("Bearer {}", attachment.control_token()));
         let send_result = match request.method {
-            "GET" => {
-                with_common_headers(self.agent.get(&url), auth.as_deref(), &request.if_match).call()
-            }
-            "DELETE" => {
-                with_common_headers(self.agent.delete(&url), auth.as_deref(), &request.if_match)
-                    .call()
-            }
+            "GET" => with_common_headers(
+                self.agent.get(&url),
+                auth.as_deref(),
+                &request.if_match,
+                &request.preparation_handle,
+            )
+            .call(),
+            "DELETE" => with_common_headers(
+                self.agent.delete(&url),
+                auth.as_deref(),
+                &request.if_match,
+                &request.preparation_handle,
+            )
+            .call(),
             "POST" | "PUT" => {
                 let builder = if request.method == "POST" {
                     self.agent.post(&url)
                 } else {
                     self.agent.put(&url)
                 };
-                let builder = with_common_headers(builder, auth.as_deref(), &request.if_match)
-                    .header("Content-Type", "application/json");
+                let builder = with_common_headers(
+                    builder,
+                    auth.as_deref(),
+                    &request.if_match,
+                    &request.preparation_handle,
+                )
+                .header("Content-Type", "application/json");
                 match &request.body {
                     Some(bytes) => builder.send(bytes.as_slice()),
                     None => builder.send_empty(),
@@ -181,19 +199,14 @@ impl Transport for UreqTransport {
         };
         let mut response = send_result.map_err(classify_send_error)?;
 
-        if let Some(length) = response
-            .headers()
-            .get("content-length")
-            .and_then(|value| value.to_str().ok())
-            .and_then(|value| value.parse::<usize>().ok())
-            && length > request.max_response_bytes
-        {
+        let content_length =
+            validate_content_length(response.headers().get_all("content-length").iter())?;
+        if content_length.is_some_and(|length| length > request.max_response_bytes) {
             return Err(TransportError::OversizedResponse);
         }
 
         let etag = header_value(&response, "etag");
         let buffer_etag = header_value(&response, "x-entry-buffer-etag");
-        let preparation_handle = header_value(&response, "x-nd-preparation-handle");
         let status = response.status().as_u16();
 
         let body = response
@@ -210,7 +223,6 @@ impl Transport for UreqTransport {
             status,
             etag,
             buffer_etag,
-            preparation_handle,
             body,
         })
     }
@@ -220,12 +232,16 @@ fn with_common_headers<State>(
     mut builder: ureq::RequestBuilder<State>,
     auth: Option<&str>,
     if_match: &Option<String>,
+    preparation_handle: &Option<String>,
 ) -> ureq::RequestBuilder<State> {
     if let Some(auth) = auth {
         builder = builder.header("Authorization", auth);
     }
     if let Some(if_match) = if_match {
         builder = builder.header("If-Match", if_match);
+    }
+    if let Some(preparation_handle) = preparation_handle {
+        builder = builder.header("X-ND-Preparation-Handle", preparation_handle);
     }
     builder
 }
@@ -243,5 +259,54 @@ fn classify_send_error(error: ureq::Error) -> TransportError {
         ureq::Error::Timeout(_) => TransportError::Timeout,
         ureq::Error::ConnectionFailed | ureq::Error::Io(_) => TransportError::ConnectFailed,
         _ => TransportError::MalformedResponse,
+    }
+}
+
+fn validate_content_length<'a>(
+    values: impl Iterator<Item = &'a ureq::http::HeaderValue>,
+) -> Result<Option<usize>, TransportError> {
+    let mut expected = None;
+    for value in values {
+        let parsed = value
+            .to_str()
+            .ok()
+            .and_then(|value| value.parse::<usize>().ok())
+            .ok_or(TransportError::MalformedResponse)?;
+        if expected.is_some_and(|expected| expected != parsed) {
+            return Err(TransportError::MalformedResponse);
+        }
+        expected = Some(parsed);
+    }
+    Ok(expected)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn identical_content_lengths_are_accepted() {
+        let values = [
+            ureq::http::HeaderValue::from_static("12"),
+            ureq::http::HeaderValue::from_static("12"),
+        ];
+        assert_eq!(validate_content_length(values.iter()), Ok(Some(12)));
+    }
+
+    #[test]
+    fn conflicting_or_malformed_content_lengths_fail_closed() {
+        let conflicting = [
+            ureq::http::HeaderValue::from_static("12"),
+            ureq::http::HeaderValue::from_static("13"),
+        ];
+        assert_eq!(
+            validate_content_length(conflicting.iter()),
+            Err(TransportError::MalformedResponse)
+        );
+        let malformed = [ureq::http::HeaderValue::from_static("twelve")];
+        assert_eq!(
+            validate_content_length(malformed.iter()),
+            Err(TransportError::MalformedResponse)
+        );
     }
 }

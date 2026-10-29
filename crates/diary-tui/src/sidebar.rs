@@ -8,6 +8,10 @@ use ratatui::layout::Rect;
 use ratatui::widgets::{Block, Widget};
 
 use crate::stage::{ALL_STAGES, Progress, Stage, StageModel};
+use crate::theme::Palette;
+
+/// Two border columns plus the longest focused stage/progress row.
+pub const MINIMUM_WORKFLOW_SIDEBAR_WIDTH: u16 = 24;
 
 #[must_use]
 pub const fn stage_label(stage: Stage) -> &'static str {
@@ -34,12 +38,39 @@ pub const fn progress_label(progress: Progress) -> &'static str {
 pub struct WorkflowSidebarWidget<'a> {
     model: &'a StageModel,
     current: Stage,
+    focused: bool,
+    focused_stage: Option<Stage>,
+    palette: Palette,
 }
 
 impl<'a> WorkflowSidebarWidget<'a> {
     #[must_use]
     pub const fn new(model: &'a StageModel, current: Stage) -> Self {
-        Self { model, current }
+        Self {
+            model,
+            current,
+            focused: false,
+            focused_stage: None,
+            palette: Palette::new(true),
+        }
+    }
+
+    #[must_use]
+    pub const fn focused(mut self, focused: bool) -> Self {
+        self.focused = focused;
+        self
+    }
+
+    #[must_use]
+    pub const fn focused_stage(mut self, stage: Option<Stage>) -> Self {
+        self.focused_stage = stage;
+        self
+    }
+
+    #[must_use]
+    pub const fn palette(mut self, palette: Palette) -> Self {
+        self.palette = palette;
+        self
     }
 
     /// One line per canonical stage, in fixed order: `"> Sources (available)"`
@@ -50,11 +81,16 @@ impl<'a> WorkflowSidebarWidget<'a> {
         let mut lines: [String; 6] = Default::default();
         for (index, stage) in ALL_STAGES.into_iter().enumerate() {
             let marker = if stage == self.current { ">" } else { " " };
-            lines[index] = format!(
+            let line = format!(
                 "{marker} {} ({})",
                 stage_label(stage),
                 progress_label(self.model.progress_of(stage))
             );
+            lines[index] = if self.focused_stage == Some(stage) {
+                format!("*{line}")
+            } else {
+                line
+            };
         }
         lines
     }
@@ -62,7 +98,14 @@ impl<'a> WorkflowSidebarWidget<'a> {
 
 impl Widget for WorkflowSidebarWidget<'_> {
     fn render(self, area: Rect, buf: &mut Buffer) {
-        let block = Block::bordered().title("Workflow");
+        let title = if self.focused {
+            "Workflow [focus]"
+        } else {
+            "Workflow"
+        };
+        let block = Block::bordered()
+            .title(title)
+            .border_style(self.palette.border(self.focused));
         let inner = block.inner(area);
         block.render(area, buf);
         for (row_index, line) in self.lines().into_iter().enumerate() {
@@ -72,7 +115,14 @@ impl Widget for WorkflowSidebarWidget<'_> {
             if y >= inner.y + inner.height {
                 break;
             }
-            buf.set_string(inner.x, y, line, ratatui::style::Style::default());
+            let style = if self.focused_stage == Some(ALL_STAGES[row_index])
+                || self.current == ALL_STAGES[row_index]
+            {
+                self.palette.current()
+            } else {
+                self.palette.plain()
+            };
+            buf.set_string(inner.x, y, line, style);
         }
     }
 }
@@ -123,5 +173,35 @@ mod tests {
             .map(|x| buffer[(x, 1)].symbol())
             .collect();
         assert!(row.contains("Start"));
+    }
+
+    #[test]
+    fn the_minimum_width_fits_the_longest_focused_row_exactly() {
+        let model = StageModel {
+            progress: [Progress::Available; 6],
+            default_current: Stage::Sources,
+        };
+        let widget = WorkflowSidebarWidget::new(&model, Stage::Sources)
+            .focused(true)
+            .focused_stage(Some(Stage::Sources));
+        let longest_row = widget
+            .lines()
+            .into_iter()
+            .map(|line| line.len())
+            .max()
+            .unwrap();
+
+        assert_eq!(longest_row + 2, usize::from(MINIMUM_WORKFLOW_SIDEBAR_WIDTH));
+
+        let backend = TestBackend::new(MINIMUM_WORKFLOW_SIDEBAR_WIDTH, 10);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal
+            .draw(|frame| frame.render_widget(widget, frame.area()))
+            .unwrap();
+        let buffer = terminal.backend().buffer();
+        let row: String = (1..buffer.area.width - 1)
+            .map(|x| buffer[(x, 2)].symbol())
+            .collect();
+        assert_eq!(row, "*> Sources (available)");
     }
 }

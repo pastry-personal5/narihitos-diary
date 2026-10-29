@@ -1,6 +1,7 @@
 #![forbid(unsafe_code)]
 
 use std::fs;
+use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
 use std::process::{Command, Output};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -38,7 +39,48 @@ fn serve_rejects_missing_configuration_before_creating_state() {
     assert!(output.stdout.is_empty());
     assert_eq!(
         String::from_utf8(output.stderr).expect("diagnostic must be UTF-8"),
-        "nd serve: configuration-invalid\n"
+        "nd serve: configuration file is missing\n  Create the file selected by ND_CONFIG_PATH (default: config/global_config.yaml) from config/global_config.example.yaml.\n  Then restrict it to the current user (default file: chmod 600 config/global_config.yaml).\n"
+    );
+}
+
+#[test]
+fn serve_explains_unsafe_configuration_permissions_without_creating_state() {
+    let (output, created_state) =
+        run_with_config("sources:\n  ayumi_directory_name: \"Ayumi\"\n", 0o644);
+
+    assert_eq!(output.status.code(), Some(1));
+    assert!(output.stdout.is_empty());
+    assert_eq!(
+        String::from_utf8(output.stderr).expect("diagnostic must be UTF-8"),
+        "nd serve: configuration file is unsafe\n  It must be a UTF-8 regular file owned by the current user, have exactly one hard link, be no larger than 256 KiB, and grant no group or world permissions.\n  For the default file, run: chmod 600 config/global_config.yaml\n"
+    );
+    assert!(!created_state);
+}
+
+#[test]
+fn serve_explains_invalid_configuration_contents() {
+    let (output, _) = run_with_config("unknown:\n  value: 1\n", 0o600);
+
+    assert_eq!(output.status.code(), Some(1));
+    assert!(output.stdout.is_empty());
+    assert_eq!(
+        String::from_utf8(output.stderr).expect("diagnostic must be UTF-8"),
+        "nd serve: configuration file contents are invalid\n  Compare the file with config/global_config.example.yaml; unknown, duplicate, missing, and malformed fields are rejected.\n  sources.ayumi_directory_name must be one directory name, and server.port_fallback_count must be an integer from 0 through 16.\n"
+    );
+}
+
+#[test]
+fn serve_explains_invalid_source_directory_name() {
+    let (output, _) = run_with_config(
+        "sources:\n  ayumi_directory_name: \"/nested/Ayumi\"\n",
+        0o600,
+    );
+
+    assert_eq!(output.status.code(), Some(1));
+    assert!(output.stdout.is_empty());
+    assert_eq!(
+        String::from_utf8(output.stderr).expect("diagnostic must be UTF-8"),
+        "nd serve: source configuration is invalid\n  Set sources.ayumi_directory_name to one directory name directly beneath iCloud Drive (for example, \"Ayumi\"), not an absolute or nested path.\n"
     );
 }
 
@@ -77,6 +119,30 @@ fn run_in_empty_home(arguments: &[&str]) -> Output {
     );
 
     output
+}
+
+fn run_with_config(contents: &str, mode: u32) -> (Output, bool) {
+    let scratch = ScratchDirectory::create();
+    let config = scratch.path().join("global_config.yaml");
+    fs::write(&config, contents).expect("configuration fixture should be written");
+    fs::set_permissions(&config, fs::Permissions::from_mode(mode))
+        .expect("configuration fixture permissions should be set");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_nd"))
+        .arg("serve")
+        .current_dir(scratch.path())
+        .env("HOME", scratch.path())
+        .env("ND_CONFIG_PATH", &config)
+        .env("ND_STATE_DIR", scratch.path().join("state"))
+        .env(
+            "ND_APPLE_BRIDGE_PATH",
+            scratch.path().join("missing-apple-bridge"),
+        )
+        .output()
+        .expect("nd serve command shell should run");
+    let created_state =
+        scratch.path().join("state").exists() || scratch.path().join(".local").exists();
+    (output, created_state)
 }
 
 struct ScratchDirectory(PathBuf);

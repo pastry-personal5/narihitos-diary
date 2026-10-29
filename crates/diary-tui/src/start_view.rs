@@ -58,6 +58,28 @@ impl StartViewModel {
         }
     }
 
+    pub fn apply_more(&mut self, outcome: ClientOutcome<diary_control_contract::WorkflowListDto>) {
+        match outcome {
+            ClientOutcome::Ok(list) => {
+                for workflow in list.workflows {
+                    if let Some(existing) = self
+                        .workflows
+                        .iter_mut()
+                        .find(|existing| existing.id == workflow.id)
+                    {
+                        *existing = workflow;
+                    } else {
+                        self.workflows.push(workflow);
+                    }
+                }
+                self.next_cursor = list.next_cursor;
+                self.last_error = None;
+            }
+            ClientOutcome::Problem(problem) => self.last_error = Some(StartError::Problem(problem)),
+            ClientOutcome::Transport(error) => self.last_error = Some(StartError::Transport(error)),
+        }
+    }
+
     /// Starts a fresh workflow, or resumes the server-chosen one, for
     /// `diary_day`. `None` lets the server apply its own Mac-local "today"
     /// default; this ViewModel never computes "today" itself.
@@ -266,6 +288,27 @@ mod tests {
         assert_eq!(view.workflows.len(), 1);
         assert_eq!(view.workflows[0].id, "wf_20261029");
         assert_eq!(view.last_error, None);
+    }
+
+    #[test]
+    fn a_later_page_appends_new_workflows_and_refreshes_duplicates() {
+        let mut view = StartViewModel {
+            workflows: vec![summary("wf_20261029", "2026-10-29", "started", 1, false)],
+            next_cursor: Some("next".to_owned()),
+            last_error: None,
+        };
+        view.apply_more(ClientOutcome::Ok(WorkflowListDto {
+            workflows: vec![
+                summary("wf_20261029", "2026-10-29", "composing", 2, false),
+                summary("wf_20261028", "2026-10-28", "started", 1, false),
+            ],
+            next_cursor: None,
+        }));
+        assert_eq!(view.workflows.len(), 2);
+        assert_eq!(view.workflows[0].revision, 2);
+        assert_eq!(view.workflows[0].state, "composing");
+        assert_eq!(view.workflows[1].id, "wf_20261028");
+        assert_eq!(view.next_cursor, None);
     }
 
     #[test]

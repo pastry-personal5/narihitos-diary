@@ -127,6 +127,17 @@ pub enum InputEvent {
     Enter,
     Backspace,
     Esc,
+    Tab,
+    BackTab,
+    Up,
+    Down,
+    Left,
+    Right,
+    Home,
+    End,
+    PageUp,
+    PageDown,
+    Delete,
     /// A bracketed-paste payload, delivered as one event. The editor's
     /// own `paste` enforces the 512 KiB limit; this does not pre-filter
     /// so the caller can always see the real payload size.
@@ -164,6 +175,17 @@ pub fn poll_input_event(timeout: Duration) -> InputPoll {
                     KeyCode::Enter => InputPoll::Event(InputEvent::Enter),
                     KeyCode::Backspace => InputPoll::Event(InputEvent::Backspace),
                     KeyCode::Esc => InputPoll::Event(InputEvent::Esc),
+                    KeyCode::Tab => InputPoll::Event(InputEvent::Tab),
+                    KeyCode::BackTab => InputPoll::Event(InputEvent::BackTab),
+                    KeyCode::Up => InputPoll::Event(InputEvent::Up),
+                    KeyCode::Down => InputPoll::Event(InputEvent::Down),
+                    KeyCode::Left => InputPoll::Event(InputEvent::Left),
+                    KeyCode::Right => InputPoll::Event(InputEvent::Right),
+                    KeyCode::Home => InputPoll::Event(InputEvent::Home),
+                    KeyCode::End => InputPoll::Event(InputEvent::End),
+                    KeyCode::PageUp => InputPoll::Event(InputEvent::PageUp),
+                    KeyCode::PageDown => InputPoll::Event(InputEvent::PageDown),
+                    KeyCode::Delete => InputPoll::Event(InputEvent::Delete),
                     _ => InputPoll::Ignored,
                 }
             }

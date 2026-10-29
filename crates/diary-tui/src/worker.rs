@@ -11,7 +11,10 @@
 use std::sync::mpsc::{Receiver, SyncSender, TrySendError, sync_channel};
 use std::thread::{self, JoinHandle};
 
-use diary_control_contract::{JobAcceptedDto, JobDto, SourceListDto, WorkflowDto, WorkflowListDto};
+use diary_control_contract::{
+    CapabilitiesDto, JobAcceptedDto, JobDto, PreferencesDto, SetupCheckDto, SourceListDto,
+    WorkflowDto, WorkflowListDto,
+};
 
 use crate::client::{ApiClient, Attachment, ClientOutcome, SourceDetailResponse, Transport};
 
@@ -23,7 +26,17 @@ const RESULT_QUEUE_CAPACITY: usize = 32;
 /// that knows the route/header details, same as `ApiClient`.
 #[derive(Clone, Debug)]
 pub enum Intent {
+    GetCapabilities,
+    GetSetupCheck,
+    GetPreferences,
+    SavePreferences {
+        last_language: Option<String>,
+        last_assistant_backend_id: Option<String>,
+    },
     RefreshWorkflows,
+    LoadMoreWorkflows {
+        cursor: String,
+    },
     StartOrResumeWorkflow {
         diary_day: Option<String>,
     },
@@ -41,7 +54,7 @@ pub enum Intent {
     },
     ListSources {
         workflow_id: String,
-        cursor: Option<usize>,
+        cursor: Option<String>,
     },
     PollJob {
         job_id: String,
@@ -52,6 +65,11 @@ pub enum Intent {
         source_ids: Vec<String>,
     },
     SourceDetail {
+        workflow_id: String,
+        source_id: String,
+        preparation_handle: String,
+    },
+    ConfirmedSourceDetail {
         workflow_id: String,
         source_id: String,
     },
@@ -90,7 +108,12 @@ pub enum Intent {
 /// The worker's reply, paired with the intent that produced it so the
 /// render loop can tell which pending action just completed.
 pub enum WorkerResult {
+    Capabilities(ClientOutcome<CapabilitiesDto>),
+    SetupCheck(ClientOutcome<SetupCheckDto>),
+    Preferences(ClientOutcome<PreferencesDto>),
+    PreferencesSaved(ClientOutcome<PreferencesDto>),
     Workflows(ClientOutcome<WorkflowListDto>),
+    MoreWorkflows(ClientOutcome<WorkflowListDto>),
     StartedWorkflow(Box<ClientOutcome<WorkflowDto>>),
     Discarded(ClientOutcome<()>),
     WorkflowFetched(Box<ClientOutcome<WorkflowDto>>),
@@ -167,8 +190,24 @@ impl Worker {
         intent: Intent,
     ) -> WorkerResult {
         match intent {
+            Intent::GetCapabilities => WorkerResult::Capabilities(client.capabilities(attachment)),
+            Intent::GetSetupCheck => WorkerResult::SetupCheck(client.setup_check(attachment)),
+            Intent::GetPreferences => WorkerResult::Preferences(client.preferences(attachment)),
+            Intent::SavePreferences {
+                last_language,
+                last_assistant_backend_id,
+            } => WorkerResult::PreferencesSaved(client.save_preferences(
+                attachment,
+                &PreferencesDto {
+                    last_language,
+                    last_assistant_backend_id,
+                },
+            )),
             Intent::RefreshWorkflows => {
                 WorkerResult::Workflows(client.list_workflows(attachment, None))
+            }
+            Intent::LoadMoreWorkflows { cursor } => {
+                WorkerResult::MoreWorkflows(client.list_workflows(attachment, Some(&cursor)))
             }
             Intent::StartOrResumeWorkflow { diary_day } => WorkerResult::StartedWorkflow(Box::new(
                 client.start_workflow(attachment, diary_day.as_deref()),
@@ -192,7 +231,11 @@ impl Worker {
             Intent::ListSources {
                 workflow_id,
                 cursor,
-            } => WorkerResult::Sources(client.list_sources(attachment, &workflow_id, cursor)),
+            } => WorkerResult::Sources(client.list_sources(
+                attachment,
+                &workflow_id,
+                cursor.as_deref(),
+            )),
             Intent::PollJob { job_id } => WorkerResult::JobStatus(client.job(attachment, &job_id)),
             Intent::PrepareSources {
                 workflow_id,
@@ -207,11 +250,26 @@ impl Worker {
             Intent::SourceDetail {
                 workflow_id,
                 source_id,
+                preparation_handle,
             } => WorkerResult::SourceDetail(Box::new(client.source_detail_with_handle(
                 attachment,
                 &workflow_id,
                 &source_id,
+                &preparation_handle,
             ))),
+            Intent::ConfirmedSourceDetail {
+                workflow_id,
+                source_id,
+            } => WorkerResult::SourceDetail(Box::new(
+                match client.source_detail(attachment, &workflow_id, &source_id) {
+                    ClientOutcome::Ok(detail) => ClientOutcome::Ok(SourceDetailResponse {
+                        detail,
+                        preparation_handle: None,
+                    }),
+                    ClientOutcome::Problem(problem) => ClientOutcome::Problem(problem),
+                    ClientOutcome::Transport(error) => ClientOutcome::Transport(error),
+                },
+            )),
             Intent::ConfirmSelection {
                 workflow_id,
                 revision,
@@ -394,6 +452,112 @@ mod tests {
     }
 
     #[test]
+    fn session_metadata_and_workflow_pagination_round_trip_through_the_worker() {
+        let preferences_body = serde_json::to_vec(&PreferencesDto {
+            last_language: Some("ko-KR".to_owned()),
+            last_assistant_backend_id: None,
+        })
+        .unwrap();
+        let transport = FakeTransport::new(vec![
+            (
+                "GET",
+                "/v1/capabilities".to_owned(),
+                RawResponse {
+                    status: 200,
+                    body: serde_json::json!({
+                        "capabilities": ["read", "workflow:write"],
+                        "manual_workflow_available": true,
+                        "assistant_backends": [],
+                        "disabled_routes": []
+                    })
+                    .to_string()
+                    .into_bytes(),
+                    ..RawResponse::default()
+                },
+            ),
+            (
+                "GET",
+                "/v1/setup-check".to_owned(),
+                RawResponse {
+                    status: 200,
+                    body: serde_json::json!({
+                        "config_safe": true,
+                        "database_ready": true,
+                        "apple_helper_available": false,
+                        "notion_configured": false,
+                        "manual_workflow_available": true
+                    })
+                    .to_string()
+                    .into_bytes(),
+                    ..RawResponse::default()
+                },
+            ),
+            (
+                "GET",
+                "/v1/preferences".to_owned(),
+                RawResponse {
+                    status: 200,
+                    body: preferences_body.clone(),
+                    ..RawResponse::default()
+                },
+            ),
+            (
+                "PUT",
+                "/v1/preferences".to_owned(),
+                RawResponse {
+                    status: 200,
+                    body: preferences_body,
+                    ..RawResponse::default()
+                },
+            ),
+            (
+                "GET",
+                "/v1/workflows?cursor=next".to_owned(),
+                RawResponse {
+                    status: 200,
+                    body: br#"{"workflows":[],"next_cursor":null}"#.to_vec(),
+                    ..RawResponse::default()
+                },
+            ),
+        ]);
+        let worker = Worker::spawn(transport, attachment());
+        worker.try_send(Intent::GetCapabilities).unwrap();
+        assert!(matches!(
+            recv_with_timeout(&worker),
+            WorkerResult::Capabilities(ClientOutcome::Ok(_))
+        ));
+        worker.try_send(Intent::GetSetupCheck).unwrap();
+        assert!(matches!(
+            recv_with_timeout(&worker),
+            WorkerResult::SetupCheck(ClientOutcome::Ok(_))
+        ));
+        worker.try_send(Intent::GetPreferences).unwrap();
+        assert!(matches!(
+            recv_with_timeout(&worker),
+            WorkerResult::Preferences(ClientOutcome::Ok(_))
+        ));
+        worker
+            .try_send(Intent::SavePreferences {
+                last_language: Some("ko-KR".to_owned()),
+                last_assistant_backend_id: None,
+            })
+            .unwrap();
+        assert!(matches!(
+            recv_with_timeout(&worker),
+            WorkerResult::PreferencesSaved(ClientOutcome::Ok(_))
+        ));
+        worker
+            .try_send(Intent::LoadMoreWorkflows {
+                cursor: "next".to_owned(),
+            })
+            .unwrap();
+        assert!(matches!(
+            recv_with_timeout(&worker),
+            WorkerResult::MoreWorkflows(ClientOutcome::Ok(_))
+        ));
+    }
+
+    #[test]
     fn discard_workflow_sends_the_given_revision_and_reports_success() {
         let transport = FakeTransport::new(vec![(
             "DELETE",
@@ -499,7 +663,8 @@ mod tests {
     /// behind it — unlike a fake that answers instantly, where whether the
     /// queue is actually full when `try_send` runs is a race.
     struct BlockingFakeTransport {
-        release: Receiver<()>,
+        first_release: Mutex<Option<Receiver<()>>>,
+        first_started: Mutex<Option<SyncSender<()>>>,
     }
 
     impl Transport for BlockingFakeTransport {
@@ -508,7 +673,12 @@ mod tests {
             _attachment: &Attachment,
             _request: &RawRequest,
         ) -> Result<RawResponse, TransportError> {
-            self.release.recv().unwrap();
+            if let Some(release) = self.first_release.lock().unwrap().take() {
+                if let Some(started) = self.first_started.lock().unwrap().take() {
+                    let _ = started.send(());
+                }
+                release.recv().unwrap();
+            }
             Ok(RawResponse {
                 status: 200,
                 body: workflow_dto_body(),
@@ -520,9 +690,11 @@ mod tests {
     #[test]
     fn a_full_queue_is_reported_rather_than_blocking_the_caller() {
         let (release_tx, release_rx) = sync_channel::<()>(0);
+        let (started_tx, started_rx) = sync_channel::<()>(0);
         let worker = Worker::spawn(
             BlockingFakeTransport {
-                release: release_rx,
+                first_release: Mutex::new(Some(release_rx)),
+                first_started: Mutex::new(Some(started_tx)),
             },
             attachment(),
         );
@@ -536,6 +708,7 @@ mod tests {
                 workflow_id: "wf_pinned".to_owned(),
             })
             .unwrap();
+        started_rx.recv_timeout(Duration::from_secs(5)).unwrap();
         for _ in 0..COMMAND_QUEUE_CAPACITY {
             worker
                 .try_send(Intent::PollJob {
@@ -584,11 +757,22 @@ mod tests {
         }
         let worker = Worker::spawn(FakeTransport::new(responses), attachment());
         for index in 0..(RESULT_QUEUE_CAPACITY + 1) {
-            worker
-                .try_send(Intent::PollJob {
-                    job_id: format!("job_{index}"),
-                })
-                .unwrap();
+            let deadline = Instant::now() + Duration::from_secs(5);
+            let mut intent = Intent::PollJob {
+                job_id: format!("job_{index}"),
+            };
+            loop {
+                match worker.try_send(intent) {
+                    Ok(()) => break,
+                    Err(SendError::QueueFull) if Instant::now() < deadline => {
+                        thread::yield_now();
+                        intent = Intent::PollJob {
+                            job_id: format!("job_{index}"),
+                        };
+                    }
+                    error => panic!("failed to queue result-saturation intent: {error:?}"),
+                }
+            }
         }
         // Deliberately never drain `try_recv`: drop the `Worker` with
         // results still backed up, on a helper thread, and fail fast

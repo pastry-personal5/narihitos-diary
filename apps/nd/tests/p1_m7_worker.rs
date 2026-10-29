@@ -17,12 +17,13 @@ use std::time::{Duration, Instant};
 use diary_control::load_runtime_attachment;
 use diary_tui::client::Attachment as ClientAttachment;
 use diary_tui::client::{ClientOutcome, UreqTransport};
+use diary_tui::events::{EventWorker, EventWorkerResult, UreqEventSource};
 use diary_tui::worker::{Intent, Worker, WorkerResult};
 
 static SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
 #[test]
-fn the_worker_thread_completes_a_real_request_against_a_real_server() {
+fn the_workers_complete_real_rest_and_event_requests_against_a_real_server() {
     match TcpListener::bind(("127.0.0.1", 0)) {
         Ok(listener) => drop(listener),
         Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => return,
@@ -49,6 +50,7 @@ fn the_worker_thread_completes_a_real_request_against_a_real_server() {
     let expected_uid = fs::metadata(scratch.path()).unwrap().uid();
     let control_attachment =
         load_runtime_attachment(&state_dir.join("runtime"), expected_uid).unwrap();
+    let first_instance_id = control_attachment.instance_id().to_owned();
     let client_attachment = ClientAttachment::new(
         control_attachment.instance_id().to_owned(),
         control_attachment.host().to_owned(),
@@ -56,6 +58,21 @@ fn the_worker_thread_completes_a_real_request_against_a_real_server() {
         control_attachment.control_token().to_owned(),
         control_attachment.contract_version(),
     );
+
+    let event_worker = EventWorker::spawn(UreqEventSource::new(), client_attachment.clone(), None);
+    let event_deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        match event_worker.try_recv() {
+            Some(EventWorkerResult::Connected) => break,
+            Some(EventWorkerResult::Disconnected(error)) => {
+                panic!("event worker did not attach: {error:?}")
+            }
+            Some(_) | None if Instant::now() < event_deadline => {
+                std::thread::sleep(Duration::from_millis(20));
+            }
+            _ => panic!("event worker did not connect within the timeout"),
+        }
+    }
 
     let worker = Worker::spawn(UreqTransport::new(), client_attachment);
     worker.try_send(Intent::RefreshWorkflows).unwrap();
@@ -79,7 +96,162 @@ fn the_worker_thread_completes_a_real_request_against_a_real_server() {
         Some(_) => panic!("expected a successful Workflows result from the worker thread"),
         None => panic!("worker thread did not reply within the timeout"),
     }
+
+    worker
+        .try_send(Intent::StartOrResumeWorkflow {
+            diary_day: Some("2026-10-29".to_owned()),
+        })
+        .unwrap();
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let started_workflow = loop {
+        match worker.try_recv() {
+            Some(WorkerResult::StartedWorkflow(outcome)) => match *outcome {
+                ClientOutcome::Ok(workflow) => break workflow,
+                _ => panic!("start request did not return a workflow"),
+            },
+            Some(_) | None if Instant::now() < deadline => {
+                std::thread::sleep(Duration::from_millis(20));
+            }
+            _ => panic!("ordinary worker did not start a workflow within the timeout"),
+        }
+    };
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        match event_worker.try_recv() {
+            Some(EventWorkerResult::Event(event)) => {
+                assert_eq!(event.event_type, "workflow.changed");
+                assert_eq!(
+                    event.workflow_id.as_deref(),
+                    Some(started_workflow.id.as_str())
+                );
+                break;
+            }
+            Some(EventWorkerResult::Disconnected(error)) => {
+                panic!("event worker disconnected before the mutation event: {error:?}")
+            }
+            Some(_) | None if Instant::now() < deadline => {
+                std::thread::sleep(Duration::from_millis(20));
+            }
+            _ => panic!("event worker did not receive the mutation within the timeout"),
+        }
+    }
+
+    worker
+        .try_send(Intent::ConfirmEmptySelection {
+            workflow_id: started_workflow.id.clone(),
+            revision: started_workflow.revision,
+        })
+        .unwrap();
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let empty_workflow = loop {
+        match worker.try_recv() {
+            Some(WorkerResult::EmptySelectionConfirmed(outcome)) => match *outcome {
+                ClientOutcome::Ok(workflow) => {
+                    assert_eq!(workflow.state, "sources-confirmed");
+                    assert!(workflow.explicit_empty_selection);
+                    break workflow;
+                }
+                _ => panic!("explicit empty selection did not succeed"),
+            },
+            Some(_) | None if Instant::now() < deadline => {
+                std::thread::sleep(Duration::from_millis(20));
+            }
+            _ => panic!("empty-selection confirmation did not finish within the timeout"),
+        }
+    };
+
+    worker
+        .try_send(Intent::SetWritingSettings {
+            workflow_id: empty_workflow.id.clone(),
+            revision: empty_workflow.revision,
+            language: "en-US".to_owned(),
+            style: "concise".to_owned(),
+        })
+        .unwrap();
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let settings_workflow = loop {
+        match worker.try_recv() {
+            Some(WorkerResult::WritingSettingsSet(outcome)) => match *outcome {
+                ClientOutcome::Ok(workflow) => break workflow,
+                _ => panic!("writing settings did not succeed"),
+            },
+            Some(_) | None if Instant::now() < deadline => {
+                std::thread::sleep(Duration::from_millis(20));
+            }
+            _ => panic!("writing settings did not finish within the timeout"),
+        }
+    };
+    worker
+        .try_send(Intent::BeginManualComposition {
+            workflow_id: settings_workflow.id.clone(),
+            revision: settings_workflow.revision,
+        })
+        .unwrap();
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let composing_workflow = loop {
+        match worker.try_recv() {
+            Some(WorkerResult::ManualCompositionBegun(outcome)) => match *outcome {
+                ClientOutcome::Ok(workflow) => {
+                    assert_eq!(workflow.state, "composing");
+                    break workflow;
+                }
+                _ => panic!("manual composition did not succeed"),
+            },
+            Some(_) | None if Instant::now() < deadline => {
+                std::thread::sleep(Duration::from_millis(20));
+            }
+            _ => panic!("manual composition did not finish within the timeout"),
+        }
+    };
+    worker
+        .try_send(Intent::SaveEntry {
+            workflow_id: composing_workflow.id.clone(),
+            buffer_version: composing_workflow.buffer_version,
+            text: "A synthetic, non-private test entry.".to_owned(),
+        })
+        .unwrap();
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let saved_workflow = loop {
+        match worker.try_recv() {
+            Some(WorkerResult::EntrySaved(outcome)) => match *outcome {
+                ClientOutcome::Ok(workflow) => {
+                    assert_eq!(workflow.entry_text, "A synthetic, non-private test entry.");
+                    break workflow;
+                }
+                _ => panic!("entry save did not succeed"),
+            },
+            Some(_) | None if Instant::now() < deadline => {
+                std::thread::sleep(Duration::from_millis(20));
+            }
+            _ => panic!("entry save did not finish within the timeout"),
+        }
+    };
+    worker
+        .try_send(Intent::ConfirmEntry {
+            workflow_id: saved_workflow.id.clone(),
+            revision: saved_workflow.revision,
+            buffer_version: saved_workflow.buffer_version,
+        })
+        .unwrap();
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let confirmed_workflow = loop {
+        match worker.try_recv() {
+            Some(WorkerResult::EntryConfirmed(outcome)) => match *outcome {
+                ClientOutcome::Ok(workflow) => {
+                    assert_eq!(workflow.state, "entry-confirmed");
+                    assert!(workflow.entry_confirmed);
+                    break workflow;
+                }
+                _ => panic!("entry confirmation did not succeed"),
+            },
+            Some(_) | None if Instant::now() < deadline => {
+                std::thread::sleep(Duration::from_millis(20));
+            }
+            _ => panic!("entry confirmation did not finish within the timeout"),
+        }
+    };
     drop(worker);
+    drop(event_worker);
 
     let status = Command::new("/bin/kill")
         .args(["-TERM", &server.id().to_string()])
@@ -87,6 +259,65 @@ fn the_worker_thread_completes_a_real_request_against_a_real_server() {
         .unwrap();
     assert!(status.success());
     wait_for_exit(&mut server, Duration::from_secs(12));
+    wait_for_absence(&runtime_file, Duration::from_secs(2));
+
+    let mut restarted_server = serve_command(&scratch, &config)
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    wait_for_path(
+        &runtime_file,
+        Duration::from_secs(10),
+        &mut restarted_server,
+    );
+    let restarted_control_attachment =
+        load_runtime_attachment(&state_dir.join("runtime"), expected_uid).unwrap();
+    assert_ne!(
+        restarted_control_attachment.instance_id(),
+        first_instance_id,
+        "a restarted server must publish a new attachment instance"
+    );
+    let restarted_client_attachment = ClientAttachment::new(
+        restarted_control_attachment.instance_id().to_owned(),
+        restarted_control_attachment.host().to_owned(),
+        restarted_control_attachment.port(),
+        restarted_control_attachment.control_token().to_owned(),
+        restarted_control_attachment.contract_version(),
+    );
+    let recovery_worker = Worker::spawn(UreqTransport::new(), restarted_client_attachment);
+    recovery_worker
+        .try_send(Intent::GetWorkflow {
+            workflow_id: confirmed_workflow.id.clone(),
+        })
+        .unwrap();
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        match recovery_worker.try_recv() {
+            Some(WorkerResult::WorkflowFetched(outcome)) => match *outcome {
+                ClientOutcome::Ok(workflow) => {
+                    assert_eq!(workflow.id, confirmed_workflow.id);
+                    assert_eq!(workflow.state, "entry-confirmed");
+                    assert!(workflow.entry_confirmed);
+                    assert_eq!(workflow.entry_text, "A synthetic, non-private test entry.");
+                    break;
+                }
+                _ => panic!("restarted server did not recover the confirmed workflow"),
+            },
+            Some(_) | None if Instant::now() < deadline => {
+                std::thread::sleep(Duration::from_millis(20));
+            }
+            _ => panic!("workflow recovery did not finish within the timeout"),
+        }
+    }
+    drop(recovery_worker);
+
+    let status = Command::new("/bin/kill")
+        .args(["-TERM", &restarted_server.id().to_string()])
+        .status()
+        .unwrap();
+    assert!(status.success());
+    wait_for_exit(&mut restarted_server, Duration::from_secs(12));
 }
 
 fn serve_command(scratch: &Scratch, config: &Path) -> Command {
@@ -129,6 +360,17 @@ fn wait_for_exit(child: &mut Child, timeout: Duration) {
     }
     let _ = child.kill();
     panic!("server did not stop before timeout");
+}
+
+fn wait_for_absence(path: &Path, timeout: Duration) {
+    let deadline = Instant::now() + timeout;
+    while Instant::now() < deadline {
+        if !path.exists() {
+            return;
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    panic!("server did not remove runtime state before timeout");
 }
 
 struct Scratch(PathBuf);

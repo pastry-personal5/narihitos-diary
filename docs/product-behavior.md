@@ -6,6 +6,11 @@ This document summarizes the intended user-visible diary workflow. The
 [architecture](planned-mvp-architecture.md) describes where the behavior lives;
 the [terminal UX](ux-gui.md) describes how it appears to a person.
 
+P1-M7 currently implements the manual journey through complete-entry Review.
+Preview, Publish, assistant actions, and amendments remain planned for their
+later milestones. The implemented client keeps those later stages visible but
+locked, so the stage model below remains stable as they arrive.
+
 ## Core journey
 
 The left Workflow Sidebar always shows the six stages `Start`, `Sources`,

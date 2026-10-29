@@ -6,9 +6,14 @@
 
 use std::collections::BTreeSet;
 
-use diary_control_contract::{SourceCandidateDto, WorkflowDto};
+use diary_control_contract::{
+    JobAcceptedDto, JobDto, SourceCandidateDto, SourceDetailDto, SourceListDto, WorkflowDto,
+};
 
-use crate::client::{ApiClient, Attachment, ClientOutcome, ProblemView, Transport, TransportError};
+use crate::client::{
+    ApiClient, Attachment, ClientOutcome, ProblemView, SourceDetailResponse, Transport,
+    TransportError,
+};
 use crate::resources::{ResourceRow, ResourcesSidebarModel};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -40,12 +45,16 @@ pub struct SourcesViewModel {
     /// The prospective included source IDs. Independent of which source is
     /// the active (inspected) resource.
     pub included: BTreeSet<String>,
+    pub reviewed: BTreeSet<String>,
+    pub next_cursor: Option<String>,
+    pub active_detail: Option<SourceDetailDto>,
     pub pending_discovery_job: Option<String>,
     pub pending_preparation_job: Option<String>,
-    /// The handle from the most recent `source_detail` read's
-    /// `X-ND-Preparation-Handle` response header. `confirm_selection`
-    /// takes a handle explicitly rather than reading this directly, so a
-    /// caller can never confirm with a stale handle by accident.
+    pub job_progress_percent: Option<u8>,
+    /// The completed preparation job's result handle, retained after a
+    /// source-detail read succeeds with it in `X-ND-Preparation-Handle`.
+    /// `confirm_selection` still takes a handle explicitly so its caller must
+    /// bind confirmation to the currently reviewed preparation.
     pub latest_preparation_handle: Option<String>,
     pub last_error: Option<SourcesError>,
 }
@@ -113,6 +122,7 @@ impl SourcesViewModel {
         match client.job(attachment, job_id) {
             ClientOutcome::Ok(job) => {
                 self.last_error = None;
+                self.job_progress_percent = Some(job.progress_percent);
                 match job.status.as_str() {
                     "succeeded" => Some(JobPhase::Succeeded),
                     "failed" | "cancelled" | "expired" => Some(JobPhase::Failed),
@@ -134,9 +144,33 @@ impl SourcesViewModel {
     /// discovery must call this with the newly confirmed workflow, never
     /// merge local guesses into the candidate list.
     pub fn load_candidates_from(&mut self, workflow: &WorkflowDto) {
+        if matches!(
+            workflow.invalidation_code.as_deref(),
+            Some("selection-changed" | "source-changed" | "freshness-unverifiable")
+        ) {
+            self.reviewed.clear();
+            self.latest_preparation_handle = None;
+            self.active_detail = None;
+        }
         self.candidates = workflow.candidates.clone();
+        self.included.extend(
+            self.candidates
+                .iter()
+                .filter(|candidate| candidate.selected)
+                .map(|candidate| candidate.id.clone()),
+        );
         self.included
             .retain(|id| self.candidates.iter().any(|candidate| &candidate.id == id));
+        self.reviewed.retain(|id| self.included.contains(id));
+    }
+
+    pub fn accept_fresh_discovery(&mut self) {
+        self.candidates.clear();
+        self.included.clear();
+        self.reviewed.clear();
+        self.next_cursor = None;
+        self.active_detail = None;
+        self.latest_preparation_handle = None;
     }
 
     /// Toggles a candidate's prospective inclusion. Returns `false` (and
@@ -149,11 +183,127 @@ impl SourcesViewModel {
         if !self.included.remove(source_id) {
             self.included.insert(source_id.to_owned());
         }
+        self.invalidate_preparation();
         true
     }
 
-    /// Reads a prepared source body and records its preparation handle
-    /// from the response header for a later `confirm_selection` call.
+    pub fn invalidate_preparation(&mut self) {
+        self.reviewed.clear();
+        self.latest_preparation_handle = None;
+        self.active_detail = None;
+    }
+
+    pub fn apply_job_accepted(
+        &mut self,
+        preparation: bool,
+        outcome: ClientOutcome<JobAcceptedDto>,
+    ) {
+        match outcome {
+            ClientOutcome::Ok(job) => {
+                if preparation {
+                    self.pending_preparation_job = Some(job.job_id);
+                } else {
+                    self.pending_discovery_job = Some(job.job_id);
+                }
+                self.last_error = None;
+            }
+            ClientOutcome::Problem(problem) => {
+                self.last_error = Some(SourcesError::Problem(problem));
+            }
+            ClientOutcome::Transport(error) => {
+                self.last_error = Some(SourcesError::Transport(error));
+            }
+        }
+    }
+
+    pub fn apply_job_status(&mut self, outcome: ClientOutcome<JobDto>) -> Option<JobPhase> {
+        match outcome {
+            ClientOutcome::Ok(job) => {
+                self.last_error = None;
+                let phase = match job.status.as_str() {
+                    "succeeded" => JobPhase::Succeeded,
+                    "failed" | "cancelled" | "expired" => JobPhase::Failed,
+                    _ => JobPhase::Running,
+                };
+                if phase != JobPhase::Running {
+                    self.job_progress_percent = None;
+                    if self.pending_preparation_job.as_deref() == Some(job.id.as_str()) {
+                        self.pending_preparation_job = None;
+                        if phase == JobPhase::Succeeded {
+                            self.latest_preparation_handle = job.result_handle;
+                            self.reviewed.clear();
+                        }
+                    }
+                    if self.pending_discovery_job.as_deref() == Some(job.id.as_str()) {
+                        self.pending_discovery_job = None;
+                    }
+                }
+                Some(phase)
+            }
+            ClientOutcome::Problem(problem) => {
+                self.last_error = Some(SourcesError::Problem(problem));
+                None
+            }
+            ClientOutcome::Transport(error) => {
+                self.last_error = Some(SourcesError::Transport(error));
+                None
+            }
+        }
+    }
+
+    pub fn apply_source_page(&mut self, append: bool, outcome: ClientOutcome<SourceListDto>) {
+        match outcome {
+            ClientOutcome::Ok(page) => {
+                if !append {
+                    self.candidates.clear();
+                }
+                for candidate in page.sources {
+                    if let Some(existing) = self
+                        .candidates
+                        .iter_mut()
+                        .find(|existing| existing.id == candidate.id)
+                    {
+                        *existing = candidate;
+                    } else {
+                        self.candidates.push(candidate);
+                    }
+                }
+                self.next_cursor = page.next_cursor;
+                self.last_error = None;
+            }
+            ClientOutcome::Problem(problem) => {
+                self.last_error = Some(SourcesError::Problem(problem));
+            }
+            ClientOutcome::Transport(error) => {
+                self.last_error = Some(SourcesError::Transport(error));
+            }
+        }
+    }
+
+    pub fn apply_source_detail(&mut self, outcome: ClientOutcome<SourceDetailResponse>) {
+        match outcome {
+            ClientOutcome::Ok(response) => {
+                self.latest_preparation_handle = response.preparation_handle;
+                self.reviewed.insert(response.detail.id.clone());
+                self.active_detail = Some(response.detail);
+                self.last_error = None;
+            }
+            ClientOutcome::Problem(problem) => {
+                self.last_error = Some(SourcesError::Problem(problem));
+            }
+            ClientOutcome::Transport(error) => {
+                self.last_error = Some(SourcesError::Transport(error));
+            }
+        }
+    }
+
+    #[must_use]
+    pub fn all_included_reviewed(&self) -> bool {
+        !self.included.is_empty() && self.included.is_subset(&self.reviewed)
+    }
+
+    /// Reads a prepared source body with the completed job's result handle and
+    /// records that handle after the server accepts the bound read.
     /// Before confirmation this returns the prepared sanitized body;
     /// afterward it returns only the persisted confirmed snapshot (per
     /// the architecture doc) and the handle is absent.
@@ -163,8 +313,14 @@ impl SourcesViewModel {
         attachment: &Attachment,
         workflow_id: &str,
         source_id: &str,
+        preparation_handle: &str,
     ) -> Option<String> {
-        match client.source_detail_with_handle(attachment, workflow_id, source_id) {
+        match client.source_detail_with_handle(
+            attachment,
+            workflow_id,
+            source_id,
+            preparation_handle,
+        ) {
             ClientOutcome::Ok(response) => {
                 self.last_error = None;
                 self.latest_preparation_handle = response.preparation_handle.clone();
@@ -252,16 +408,27 @@ impl SourcesViewModel {
                 .iter()
                 .map(|candidate| ResourceRow {
                     label: candidate.source_note_name.clone(),
-                    state: if self.included.contains(&candidate.id) {
-                        "included".to_owned()
-                    } else {
-                        "excluded".to_owned()
-                    },
+                    state: source_state(candidate, self.included.contains(&candidate.id)),
                     indent: 0,
                 })
                 .collect(),
         }
     }
+}
+
+fn source_state(candidate: &SourceCandidateDto, included: bool) -> String {
+    let selection = if included { "included" } else { "excluded" };
+    let mut state = format!("{selection} · {}", candidate.availability);
+    if candidate.directory_day.is_some()
+        && candidate.header_day.is_some()
+        && candidate.directory_day != candidate.header_day
+    {
+        state.push_str(" · date disagreement");
+    }
+    if candidate.warning_code.is_some() {
+        state.push_str(" · warning");
+    }
+    state
 }
 
 #[cfg(test)]
@@ -390,8 +557,57 @@ mod tests {
         };
         view.toggle_included("src_1");
         let rows = view.resources();
-        assert_eq!(rows.rows[0].state, "included");
-        assert_eq!(rows.rows[1].state, "excluded");
+        assert_eq!(rows.rows[0].state, "included · local");
+        assert_eq!(rows.rows[1].state, "excluded · local");
+    }
+
+    #[test]
+    fn changing_inclusion_invalidates_preparation_and_review_state() {
+        let mut view = SourcesViewModel {
+            candidates: vec![candidate("src_1", "note a")],
+            reviewed: BTreeSet::from(["src_1".to_owned()]),
+            latest_preparation_handle: Some("prep_1".to_owned()),
+            ..SourcesViewModel::default()
+        };
+        view.toggle_included("src_1");
+        assert!(view.reviewed.is_empty());
+        assert_eq!(view.latest_preparation_handle, None);
+        assert!(!view.all_included_reviewed());
+    }
+
+    #[test]
+    fn succeeded_preparation_uses_only_the_jobs_typed_result_handle() {
+        let mut view = SourcesViewModel {
+            pending_preparation_job: Some("job_1".to_owned()),
+            included: BTreeSet::from(["src_1".to_owned()]),
+            ..SourcesViewModel::default()
+        };
+        let phase = view.apply_job_status(ClientOutcome::Ok(JobDto {
+            id: "job_1".to_owned(),
+            kind: "source-preparation".to_owned(),
+            status: "succeeded".to_owned(),
+            workflow_id: "wf_20261029".to_owned(),
+            progress_percent: 100,
+            result_handle: Some("prep_1".to_owned()),
+            error_code: None,
+            expires_at_unix_ms: 0,
+        }));
+        assert_eq!(phase, Some(JobPhase::Succeeded));
+        assert_eq!(view.latest_preparation_handle.as_deref(), Some("prep_1"));
+        assert_eq!(view.pending_preparation_job, None);
+        assert!(!view.all_included_reviewed());
+    }
+
+    #[test]
+    fn every_included_source_must_be_reviewed_before_confirmation() {
+        let mut view = SourcesViewModel {
+            included: BTreeSet::from(["src_1".to_owned(), "src_2".to_owned()]),
+            reviewed: BTreeSet::from(["src_1".to_owned()]),
+            ..SourcesViewModel::default()
+        };
+        assert!(!view.all_included_reviewed());
+        view.reviewed.insert("src_2".to_owned());
+        assert!(view.all_included_reviewed());
     }
 
     #[test]
@@ -453,7 +669,7 @@ mod tests {
     }
 
     #[test]
-    fn fetch_preparation_handle_records_the_header_from_source_detail() {
+    fn prepared_detail_retains_the_server_accepted_job_handle() {
         let transport = FakeTransport::new();
         transport.push(
             "GET",
@@ -471,13 +687,18 @@ mod tests {
                 })
                 .to_string()
                 .into_bytes(),
-                preparation_handle: Some("handle_abc".to_owned()),
                 ..RawResponse::default()
             },
         );
         let client = ApiClient::new(transport);
         let mut view = SourcesViewModel::default();
-        let handle = view.fetch_preparation_handle(&client, &attachment(), "wf_20261029", "src_1");
+        let handle = view.fetch_preparation_handle(
+            &client,
+            &attachment(),
+            "wf_20261029",
+            "src_1",
+            "handle_abc",
+        );
         assert_eq!(handle.as_deref(), Some("handle_abc"));
         assert_eq!(
             view.latest_preparation_handle.as_deref(),

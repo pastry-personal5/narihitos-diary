@@ -47,6 +47,26 @@ impl StageModel {
     }
 }
 
+#[must_use]
+pub fn adjacent_accessible_stage(model: &StageModel, current: Stage, forward: bool) -> Stage {
+    let current_index = stage_index(current);
+    if forward {
+        ALL_STAGES
+            .iter()
+            .copied()
+            .skip(current_index + 1)
+            .find(|stage| model.progress_of(*stage) != Progress::Locked)
+            .unwrap_or(current)
+    } else {
+        ALL_STAGES[..current_index]
+            .iter()
+            .rev()
+            .copied()
+            .find(|stage| model.progress_of(*stage) != Progress::Locked)
+            .unwrap_or(current)
+    }
+}
+
 const fn stage_index(stage: Stage) -> usize {
     match stage {
         Stage::Start => 0,
@@ -161,6 +181,33 @@ pub fn map_workflow(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn stage_navigation_skips_locked_stages_and_stops_at_the_edge() {
+        let model = StageModel {
+            progress: [
+                Progress::Done,
+                Progress::Available,
+                Progress::Locked,
+                Progress::Locked,
+                Progress::Locked,
+                Progress::Locked,
+            ],
+            default_current: Stage::Sources,
+        };
+        assert_eq!(
+            adjacent_accessible_stage(&model, Stage::Start, true),
+            Stage::Sources
+        );
+        assert_eq!(
+            adjacent_accessible_stage(&model, Stage::Sources, true),
+            Stage::Sources
+        );
+        assert_eq!(
+            adjacent_accessible_stage(&model, Stage::Sources, false),
+            Stage::Start
+        );
+    }
 
     fn workflow(state: &str, invalidation_code: Option<&str>) -> WorkflowDto {
         serde_json::from_value(serde_json::json!({

@@ -6,9 +6,10 @@
 use ratatui::Frame;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
-use ratatui::text::Line;
 use ratatui::widgets::{Block, Widget};
 
+use crate::display::truncate;
+use crate::theme::Palette;
 /// The four fixed priorities, in render order. An empty priority renders as
 /// a blank row; it never causes the other rows to shift or the pane to
 /// shrink.
@@ -26,42 +27,35 @@ impl WorkStatusModel {
     #[must_use]
     pub fn rows(&self, width: u16) -> [String; 4] {
         [
-            truncate_to_width(self.current_work.as_deref().unwrap_or(""), width),
-            truncate_to_width(self.pending_or_blocked.as_deref().unwrap_or(""), width),
-            truncate_to_width(
+            truncate(self.current_work.as_deref().unwrap_or(""), width),
+            truncate(self.pending_or_blocked.as_deref().unwrap_or(""), width),
+            truncate(
                 self.connection_and_save_safety.as_deref().unwrap_or(""),
                 width,
             ),
-            truncate_to_width(self.notice.as_deref().unwrap_or(""), width),
+            truncate(self.notice.as_deref().unwrap_or(""), width),
         ]
     }
 }
 
-/// Truncates `text` to at most `max_width` display columns, measuring with
-/// ratatui's own width calculation (so Korean syllables and other wide
-/// characters are measured correctly) rather than byte or `char` count.
-fn truncate_to_width(text: &str, max_width: u16) -> String {
-    let max_width = usize::from(max_width);
-    let mut result = String::new();
-    for ch in text.chars() {
-        let mut candidate = result.clone();
-        candidate.push(ch);
-        if Line::from(candidate.as_str()).width() > max_width {
-            break;
-        }
-        result = candidate;
-    }
-    result
-}
-
 pub struct WorkStatusWidget<'a> {
     model: &'a WorkStatusModel,
+    palette: Palette,
 }
 
 impl<'a> WorkStatusWidget<'a> {
     #[must_use]
     pub const fn new(model: &'a WorkStatusModel) -> Self {
-        Self { model }
+        Self {
+            model,
+            palette: Palette::new(true),
+        }
+    }
+
+    #[must_use]
+    pub const fn palette(mut self, palette: Palette) -> Self {
+        self.palette = palette;
+        self
     }
 
     /// Renders into `frame` at `area`. A convenience over the `Widget`
@@ -73,7 +67,9 @@ impl<'a> WorkStatusWidget<'a> {
 
 impl Widget for WorkStatusWidget<'_> {
     fn render(self, area: Rect, buf: &mut Buffer) {
-        let block = Block::bordered().title("Work Status");
+        let block = Block::bordered()
+            .title("Work Status")
+            .border_style(self.palette.border(false));
         let inner = block.inner(area);
         block.render(area, buf);
         for (row_index, row) in self.model.rows(inner.width).into_iter().enumerate() {
@@ -83,7 +79,7 @@ impl Widget for WorkStatusWidget<'_> {
             if y >= inner.y + inner.height {
                 break;
             }
-            buf.set_string(inner.x, y, row, ratatui::style::Style::default());
+            buf.set_string(inner.x, y, row, self.palette.plain());
         }
     }
 }
@@ -93,8 +89,11 @@ mod tests {
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
     use ratatui::buffer::Buffer;
+    use ratatui::text::Line;
 
     use super::*;
+    use crate::ime::ImeState;
+    use crate::status_line::StatusLineModel;
 
     #[test]
     fn four_rows_render_in_fixed_priority_order_inside_the_border() {
@@ -167,6 +166,22 @@ mod tests {
             "truncated row must respect the display-width budget, got {:?}",
             rows[0]
         );
+    }
+
+    #[test]
+    fn connection_safety_may_intentionally_repeat_in_the_status_line() {
+        let work = WorkStatusModel {
+            connection_and_save_safety: Some("Connected; Draft saved".to_owned()),
+            ..WorkStatusModel::default()
+        };
+        let status = StatusLineModel {
+            diary_day: None,
+            connection_label: "Connected",
+            ime: ImeState::Unknown,
+            action_hint: None,
+        };
+        assert!(work.rows(80)[2].contains("Connected"));
+        assert!(status.render(80).contains("Connected"));
     }
 
     /// Reads only the inner columns of a row (excluding the left/right

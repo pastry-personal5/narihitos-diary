@@ -1,6 +1,7 @@
 //! Real-terminal restoration probe for P1-M7's `TerminalGuard`.
 //!
-//! Run each of the three modes in a real Apple Terminal window and
+//! Run each mode in Wave Terminal for primary qualification and Apple Terminal
+//! for the secondary regression check, and
 //! confirm the shell prompt looks sane afterward (no leftover raw mode,
 //! alternate screen, or bracketed-paste state):
 //!

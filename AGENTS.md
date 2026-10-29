@@ -210,14 +210,14 @@ See [README.md](README.md) for the overview. Setup and contribution rules are in
 - **Target terminal (2026-10-29, owner decision):** Wave Terminal
   (waveterm.dev) is the first target terminal for real-terminal
   acceptance checks; Apple Terminal remains a secondary check. Every
-  real-terminal finding recorded so far in this file and in the P1-M7 docs
+  real-terminal finding initially recorded in this file and in the P1-M7 docs
   (the Ctrl-Enter/Ctrl-Left/Ctrl-Right failure, F10 never arriving, the
   mixed bare-jamo/precomposed-syllable Korean IME delivery shape) was
-  observed in Apple Terminal specifically and has not yet been re-checked
-  in Wave Terminal; Wave may behave differently on any of these, and the
-  existing probes (`chord_probe`, `command_line_probe`, `editor_probe`,
-  `restoration_probe`) must be re-run there before treating their results
-  as settled for Wave.
+  observed in Apple Terminal specifically. On 2026-10-29 the owner confirmed
+  the required `chord_probe`, `command_line_probe`, `editor_probe`, and
+  `restoration_probe` qualification in Wave Terminal and the secondary Apple
+  Terminal regression set; the P1-M7 overview records the completed
+  acceptance evidence.
 
 ## Undecided — ask before inventing
 
@@ -253,6 +253,20 @@ cargo fmt --all                                           # format Rust code
 cargo clippy --all-targets --all-features -- -D warnings  # lint with warnings denied
 swift build --package-path helpers/apple-bridge           # build the Apple helper
 swift test --package-path helpers/apple-bridge            # test the Apple helper with fakes
+```
+
+The root `Makefile` provides phony convenience aliases without replacing the
+explicit gate commands above:
+
+```sh
+make build       # build the Rust workspace and Swift helper
+make run         # run the TUI client
+make serve       # run the Control API Server
+make fmt         # format Rust code
+make fmt-check   # check Rust formatting
+make clippy      # lint all Rust targets and features
+make test        # run Rust and Swift tests
+make check       # run the complete Rust and Swift gate
 ```
 
 ## Control API diagnostics

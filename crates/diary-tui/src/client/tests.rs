@@ -1,6 +1,6 @@
 use std::cell::RefCell;
 
-use diary_control_contract::PreferencesDto;
+use diary_control_contract::{CapabilitiesDto, PreferencesDto, SetupCheckDto};
 
 use super::{
     ApiClient, Attachment, ClientOutcome, RawRequest, RawResponse, Transport, TransportError,
@@ -11,6 +11,8 @@ struct SeenRequest {
     path: String,
     authenticated: bool,
     if_match: Option<String>,
+    body: Option<Vec<u8>>,
+    preparation_handle: Option<String>,
 }
 
 struct FakeTransport {
@@ -42,6 +44,8 @@ impl Transport for FakeTransport {
             path: request.path.clone(),
             authenticated: request.authenticated,
             if_match: request.if_match.clone(),
+            body: request.body.clone(),
+            preparation_handle: request.preparation_handle.clone(),
         });
         let mut responses = self.responses.borrow_mut();
         let index = responses
@@ -115,6 +119,105 @@ fn preferences_request_is_authenticated_with_no_body() {
 }
 
 #[test]
+fn capabilities_and_setup_check_use_their_typed_authenticated_routes() {
+    let transport = FakeTransport::new();
+    transport.push(
+        "GET",
+        "/v1/capabilities",
+        RawResponse {
+            status: 200,
+            body: serde_json::to_vec(&CapabilitiesDto {
+                capabilities: vec!["read".to_owned()],
+                manual_workflow_available: true,
+                assistant_backends: Vec::new(),
+                disabled_routes: Vec::new(),
+            })
+            .unwrap(),
+            ..RawResponse::default()
+        },
+    );
+    transport.push(
+        "GET",
+        "/v1/setup-check",
+        RawResponse {
+            status: 200,
+            body: serde_json::to_vec(&SetupCheckDto {
+                config_safe: true,
+                database_ready: true,
+                apple_helper_available: false,
+                notion_configured: false,
+                manual_workflow_available: true,
+            })
+            .unwrap(),
+            ..RawResponse::default()
+        },
+    );
+    let client = ApiClient::new(transport);
+    assert!(matches!(
+        client.capabilities(&attachment()),
+        ClientOutcome::Ok(_)
+    ));
+    assert!(matches!(
+        client.setup_check(&attachment()),
+        ClientOutcome::Ok(_)
+    ));
+    let seen = client.transport.seen.borrow();
+    assert_eq!(seen[0].path, "/v1/capabilities");
+    assert_eq!(seen[1].path, "/v1/setup-check");
+    assert!(seen.iter().all(|request| request.authenticated));
+}
+
+#[test]
+fn saving_preferences_sends_the_complete_typed_document_without_an_etag() {
+    let preferences = PreferencesDto {
+        last_language: Some("ko-KR".to_owned()),
+        last_assistant_backend_id: None,
+    };
+    let transport = FakeTransport::new();
+    transport.push(
+        "PUT",
+        "/v1/preferences",
+        RawResponse {
+            status: 200,
+            body: serde_json::to_vec(&preferences).unwrap(),
+            ..RawResponse::default()
+        },
+    );
+    let client = ApiClient::new(transport);
+    match client.save_preferences(&attachment(), &preferences) {
+        ClientOutcome::Ok(saved) => assert_eq!(saved, preferences),
+        _ => panic!("expected saved preferences"),
+    }
+    let seen = client.transport.seen.borrow();
+    assert_eq!(seen[0].method, "PUT");
+    assert_eq!(seen[0].path, "/v1/preferences");
+    assert_eq!(seen[0].if_match, None);
+    assert_eq!(
+        serde_json::from_slice::<PreferencesDto>(seen[0].body.as_ref().unwrap()).unwrap(),
+        preferences
+    );
+}
+
+#[test]
+fn workflow_pagination_percent_encodes_the_server_cursor() {
+    let transport = FakeTransport::new();
+    transport.push(
+        "GET",
+        "/v1/workflows?cursor=page%2F2",
+        RawResponse {
+            status: 200,
+            body: br#"{"workflows":[],"next_cursor":null}"#.to_vec(),
+            ..RawResponse::default()
+        },
+    );
+    let client = ApiClient::new(transport);
+    assert!(matches!(
+        client.list_workflows(&attachment(), Some("page/2")),
+        ClientOutcome::Ok(_)
+    ));
+}
+
+#[test]
 fn a_typed_problem_response_never_becomes_ok() {
     let transport = FakeTransport::new();
     transport.push(
@@ -185,7 +288,7 @@ fn a_malformed_body_never_panics_and_never_claims_ok() {
 }
 
 #[test]
-fn source_detail_with_handle_carries_the_preparation_handle_header_through() {
+fn source_detail_with_handle_sends_and_retains_the_job_result_handle() {
     let transport = FakeTransport::new();
     transport.push(
         "GET",
@@ -203,12 +306,11 @@ fn source_detail_with_handle_carries_the_preparation_handle_header_through() {
             })
             .to_string()
             .into_bytes(),
-            preparation_handle: Some("handle_abc".to_owned()),
             ..RawResponse::default()
         },
     );
     let client = ApiClient::new(transport);
-    match client.source_detail_with_handle(&attachment(), "wf_20261029", "src_1") {
+    match client.source_detail_with_handle(&attachment(), "wf_20261029", "src_1", "handle_abc") {
         ClientOutcome::Ok(response) => {
             assert_eq!(response.preparation_handle.as_deref(), Some("handle_abc"));
             assert_eq!(response.detail.id, "src_1");
@@ -218,4 +320,10 @@ fn source_detail_with_handle_carries_the_preparation_handle_header_through() {
             matches!(other, ClientOutcome::Ok(_))
         ),
     }
+    assert_eq!(
+        client.transport.seen.borrow()[0]
+            .preparation_handle
+            .as_deref(),
+        Some("handle_abc")
+    );
 }

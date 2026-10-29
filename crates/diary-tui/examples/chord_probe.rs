@@ -1,7 +1,8 @@
 //! Throwaway real-terminal chord probe for P1-M7 step 2.
 //!
-//! Run in a real Apple Terminal window (not over SSH, tmux, or an IDE
-//! terminal) with `cargo run -p diary-tui --example chord_probe`. It prints
+//! Run in a real Wave Terminal window for primary qualification, or Apple
+//! Terminal for the secondary regression check (not over SSH, tmux, or an IDE
+//! terminal), with `cargo run -p diary-tui --example chord_probe`. It prints
 //! every key event it receives, decoded as the exact chords P1-M7 depends
 //! on, so the owner can confirm each one arrives as a distinct event before
 //! any editor/Command Line code relies on it. There are no function-key

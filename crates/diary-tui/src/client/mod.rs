@@ -17,16 +17,18 @@ pub use transport::{
 };
 
 use diary_control_contract::{
-    ConfirmEntryRequest, ConfirmSelectionRequest, DiscoveryRequest, HealthDto, JobAcceptedDto,
-    JobDto, MAX_RESPONSE_BYTES, MAX_SOURCE_BYTES, PreferencesDto, PrepareSourcesRequest,
-    SaveEntryRequest, SourceDetailDto, SourceListDto, WorkflowDto, WorkflowListDto,
-    WritingSettingsRequest, buffer_etag, workflow_etag,
+    CapabilitiesDto, ConfirmEntryRequest, ConfirmSelectionRequest, DiscoveryRequest, HealthDto,
+    JobAcceptedDto, JobDto, MAX_RESPONSE_BYTES, MAX_SOURCE_BYTES, PreferencesDto,
+    PrepareSourcesRequest, SaveEntryRequest, SetupCheckDto, SourceDetailDto, SourceListDto,
+    WorkflowDto, WorkflowListDto, WritingSettingsRequest, buffer_etag, workflow_etag,
 };
 
-/// A source-detail body plus the preparation handle carried in its
-/// `X-ND-Preparation-Handle` response header, when present (before
-/// confirmation). Confirming a selection reads the handle from here, not
-/// from the body.
+const SOURCE_DETAIL_RESPONSE_BYTES: usize = MAX_SOURCE_BYTES + 64 * 1024;
+
+/// A source-detail body plus the server-issued preparation handle that
+/// authorized its read. The handle originates in the completed preparation
+/// job's `result_handle`, is sent as `X-ND-Preparation-Handle`, and is retained
+/// only after the server accepts that bound detail read.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SourceDetailResponse {
     pub detail: SourceDetailDto,
@@ -53,6 +55,7 @@ impl<T: Transport> ApiClient<T> {
             authenticated: false,
             body: None,
             if_match: None,
+            preparation_handle: None,
             max_response_bytes: MAX_RESPONSE_BYTES,
         };
         self.dispatch(attachment, raw)
@@ -60,6 +63,30 @@ impl<T: Transport> ApiClient<T> {
 
     pub fn preferences(&self, attachment: &Attachment) -> ClientOutcome<PreferencesDto> {
         self.get_json("/v1/preferences", MAX_RESPONSE_BYTES, attachment)
+    }
+
+    pub fn capabilities(&self, attachment: &Attachment) -> ClientOutcome<CapabilitiesDto> {
+        self.get_json("/v1/capabilities", MAX_RESPONSE_BYTES, attachment)
+    }
+
+    pub fn setup_check(&self, attachment: &Attachment) -> ClientOutcome<SetupCheckDto> {
+        self.get_json("/v1/setup-check", MAX_RESPONSE_BYTES, attachment)
+    }
+
+    pub fn save_preferences(
+        &self,
+        attachment: &Attachment,
+        preferences: &PreferencesDto,
+    ) -> ClientOutcome<PreferencesDto> {
+        let body = serde_json::to_vec(preferences).unwrap_or_default();
+        self.send_json(
+            "PUT",
+            "/v1/preferences",
+            Some(body),
+            None,
+            MAX_RESPONSE_BYTES,
+            attachment,
+        )
     }
 
     pub fn list_workflows(
@@ -125,6 +152,7 @@ impl<T: Transport> ApiClient<T> {
         attachment: &Attachment,
         workflow_id: &str,
         source_id: &str,
+        preparation_handle: &str,
     ) -> ClientOutcome<SourceDetailResponse> {
         let raw = RawRequest {
             method: "GET",
@@ -132,14 +160,15 @@ impl<T: Transport> ApiClient<T> {
             authenticated: true,
             body: None,
             if_match: None,
-            max_response_bytes: MAX_SOURCE_BYTES,
+            preparation_handle: Some(preparation_handle.to_owned()),
+            max_response_bytes: SOURCE_DETAIL_RESPONSE_BYTES,
         };
         match self.transport.execute(attachment, &raw) {
             Ok(response) if (200..300).contains(&response.status) => {
                 match serde_json::from_slice(&response.body) {
                     Ok(detail) => ClientOutcome::Ok(SourceDetailResponse {
                         detail,
-                        preparation_handle: response.preparation_handle.clone(),
+                        preparation_handle: Some(preparation_handle.to_owned()),
                     }),
                     Err(_) => ClientOutcome::Transport(TransportError::MalformedResponse),
                 }
@@ -157,7 +186,7 @@ impl<T: Transport> ApiClient<T> {
     ) -> ClientOutcome<SourceDetailDto> {
         self.get_json(
             &format!("/v1/workflows/{workflow_id}/sources/{source_id}"),
-            MAX_SOURCE_BYTES,
+            SOURCE_DETAIL_RESPONSE_BYTES,
             attachment,
         )
     }
@@ -280,10 +309,13 @@ impl<T: Transport> ApiClient<T> {
         &self,
         attachment: &Attachment,
         workflow_id: &str,
-        cursor: Option<usize>,
+        cursor: Option<&str>,
     ) -> ClientOutcome<SourceListDto> {
         let path = match cursor {
-            Some(cursor) => format!("/v1/workflows/{workflow_id}/sources?cursor={cursor}"),
+            Some(cursor) => format!(
+                "/v1/workflows/{workflow_id}/sources?cursor={}",
+                urlencode(cursor)
+            ),
             None => format!("/v1/workflows/{workflow_id}/sources"),
         };
         self.get_json(&path, MAX_RESPONSE_BYTES, attachment)
@@ -376,6 +408,7 @@ impl<T: Transport> ApiClient<T> {
             authenticated: true,
             body: None,
             if_match: None,
+            preparation_handle: None,
             max_response_bytes,
         };
         self.dispatch(attachment, raw)
@@ -396,6 +429,7 @@ impl<T: Transport> ApiClient<T> {
             authenticated: true,
             body,
             if_match,
+            preparation_handle: None,
             max_response_bytes,
         };
         self.dispatch(attachment, raw)
@@ -414,6 +448,7 @@ impl<T: Transport> ApiClient<T> {
             authenticated: true,
             body: None,
             if_match,
+            preparation_handle: None,
             max_response_bytes: MAX_RESPONSE_BYTES,
         };
         match self.transport.execute(attachment, &raw) {
@@ -441,7 +476,7 @@ impl<T: Transport> ApiClient<T> {
     }
 }
 
-fn urlencode(value: &str) -> String {
+pub(crate) fn urlencode(value: &str) -> String {
     let mut out = String::with_capacity(value.len());
     for byte in value.bytes() {
         if byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.' | b'~') {
