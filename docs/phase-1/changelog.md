@@ -6,6 +6,61 @@ This changelog records owner decisions and material plan changes for Phase 1.
 
 ## Entries
 
+- 2026-10-29 — Owner decision — M8 hosted-default provider, Codex adapter
+  merge, and packet scope — The owner approved OpenAI's Codex as the Phase 1
+  hosted-default assistant provider, reached exclusively through the
+  `codex app-server` JSON-RPC surface over stdio — not the Codex SDK (which
+  is TypeScript and unreachable from Rust) and not raw `codex exec` CLI
+  flags (`--sandbox read-only`/`--cd` set a working directory but do not
+  restrict which paths a command may read). This merges the previously
+  separate "hosted-default" and "conditional Codex" packets in the M8
+  overview into one required packet: the Codex runtime checklist items
+  become required, not "not applicable," and every configured
+  `assistants.codex_profiles` entry becomes a registry member once this
+  packet lands, with the first-listed profile as the default when more than
+  one exists. Confinement comes from Codex's own permission-profile /
+  app-server `sandboxPolicy` enforcement (OS-level: Seatbelt on macOS),
+  verified against current Codex documentation: a `turn/start` call sets
+  `sandboxPolicy` to `readOnly` with `access: { type: "restricted",
+  readableRoots: [] }` (no readable paths at all; diary content rides in the
+  prompt, not the filesystem) and `networkAccess: false`; disables all MCP
+  servers (`[mcp_servers]` empty) and web search (`web_search = "disabled"`);
+  sets the approval policy so the child never blocks waiting for a human;
+  and disables local transcript persistence (`history.persistence = "none"`,
+  or an `ephemeral` thread) so no diary text lands inside `codex_home`. A
+  fresh `codex app-server` process is spawned per assistant job and its
+  process group is killed on completion, cancellation, timeout, or server
+  restart — not a persistent server per profile — so `CODEX_HOME` isolation
+  and "no partial mutation survives a restart" stay process-scoped. The
+  installed `codex-cli` is version 0.165.0, above the 0.138.0 floor this
+  restricted-read mechanism requires; the adapter's readiness check pins
+  that floor against the resolved binary. Structured results use
+  `turn/start`'s per-turn `outputSchema` (a JSON Schema), matching the
+  action-specific result shapes already required by the contract/migration
+  packet. The Notion PAT's existing storage location and format
+  (`config/global_config.yaml`, plaintext, owner-only, git-ignored) is
+  unchanged by this decision; it is a separate credential from the Codex
+  account and is never read by or sent to an assistant adapter. This
+  resolves the "hosted provider" item removed from `AGENTS.md` "Undecided."
+
+- 2026-10-29 — Owner decision — M8 contract/migration and configuration
+  packets resolved — The owner approved the contract/migration packet
+  (native-client contract version 3, SQLite schema version 5; the
+  `/v1/assistant-backends`, `/v1/workflows/{id}/assistant-selection`,
+  `/memory-extractions`, `/memory-review`, `/draft-requests`,
+  `/draft-result`, `/paragraph-review-requests`, and `/paragraph-suggestions`
+  routes; new `diary-control-contract` bounds sized from the existing
+  `MAX_ENTRY_BYTES`/`MAX_STRING_BYTES`/`MAX_CANDIDATES`/
+  `MAX_SELECTED_SOURCES` constants; and `assistant_*`-prefixed snake_case
+  problem codes) and the configuration packet (extend the existing
+  hand-rolled line-based parser in `crates/diary-control/src/lifecycle.rs`
+  with one more indentation level scoped only to `assistants:` /
+  `codex_profiles:`, rather than adding a YAML dependency) exactly as
+  recorded in the M8 overview's "Required contract and migration packet"
+  and "Required configuration packet" sections. This unblocks
+  implementation sequence steps 2-5 and 8 in the M8 architecture plan. The
+  Apple on-device packet remains pending.
+
 - 2026-10-29 — Owner decision — Codex profile configuration shape revised to
   structured fields — The owner approved replacing the shell-lookalike
   `run_command` string (`alias`/`run_command`, e.g. `CODEX_HOME=/Users/user1/.codex-pp7 codex`)
