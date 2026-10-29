@@ -27,6 +27,8 @@ impl ComposeError {
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct ComposeViewModel {
+    /// The workflow whose entry `text` belongs to.
+    workflow_id: Option<String>,
     pub text: String,
     pub buffer_version: u64,
     /// Bumped on every local edit. The only durable text is the server
@@ -54,6 +56,26 @@ impl ComposeViewModel {
     /// when nothing is locally dirty; a reload while dirty must not
     /// silently discard unsent edits.
     pub fn load_from_canonical(&mut self, workflow: &WorkflowDto) {
+        if self.workflow_id.as_deref() != Some(workflow.id.as_str()) {
+            // Another workflow (day): local text belongs to the previous
+            // one, so it must never be kept, let alone autosaved, here.
+            *self = Self {
+                workflow_id: Some(workflow.id.clone()),
+                text: workflow.entry_text.clone(),
+                buffer_version: workflow.buffer_version,
+                ..Self::default()
+            };
+            return;
+        }
+        if workflow.buffer_version < self.buffer_version {
+            // A read that raced a newer save we already applied.
+            return;
+        }
+        // Only a buffer newer than our last acknowledged save is someone
+        // else's text. At the same version it is our own previous save (e.g.
+        // the reload its `entry.changed` triggers, while newer typing is
+        // still unsent), which is no conflict.
+        let advanced = workflow.buffer_version > self.buffer_version;
         self.buffer_version = workflow.buffer_version;
         if self.is_dirty() {
             if workflow.entry_text == self.text {
@@ -63,7 +85,7 @@ impl ComposeViewModel {
                 self.saved_generation = self.local_generation;
                 self.last_error = None;
                 self.conflicting_server_text = None;
-            } else {
+            } else if advanced {
                 self.conflicting_server_text = Some(workflow.entry_text.clone());
             }
             return;
@@ -416,6 +438,48 @@ mod tests {
         view.use_server_after_conflict();
         assert_eq!(view.text, "server");
         assert!(!view.is_dirty());
+    }
+
+    #[test]
+    fn the_reload_echoing_our_own_save_is_no_conflict_while_typing_continues() {
+        let mut view = ComposeViewModel::default();
+        view.load_from_canonical(&workflow_from(2, "old"));
+        view.edit("a".to_owned());
+        let sent = view.save_snapshot().unwrap();
+        view.edit("ab".to_owned());
+        assert!(
+            view.apply_save_outcome(sent.generation, ClientOutcome::Ok(workflow_from(3, "a")))
+                .is_some()
+        );
+        // The save's own `entry.changed` reload arrives after more typing.
+        view.load_from_canonical(&workflow_from(3, "a"));
+        assert_eq!(view.conflicting_server_text, None);
+        assert_eq!(
+            view.save_snapshot(),
+            Some(SaveSnapshot {
+                generation: 2,
+                buffer_version: 3,
+                text: "ab".to_owned(),
+            })
+        );
+        // A read that raced that save never rolls the version back.
+        view.load_from_canonical(&workflow_from(2, "old"));
+        assert_eq!(view.buffer_version, 3);
+        assert_eq!(view.text, "ab");
+    }
+
+    #[test]
+    fn loading_another_workflow_never_carries_this_ones_text_into_it() {
+        let mut view = ComposeViewModel::default();
+        view.load_from_canonical(&workflow_from(2, "day one"));
+        view.edit("unsent day one".to_owned());
+        let mut other_day = workflow_from(5, "day two");
+        other_day.id = "wf_20261030".to_owned();
+        view.load_from_canonical(&other_day);
+        assert_eq!(view.text, "day two");
+        assert_eq!(view.buffer_version, 5);
+        assert!(!view.is_dirty());
+        assert_eq!(view.conflicting_server_text, None);
     }
 
     #[test]

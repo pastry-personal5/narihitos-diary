@@ -760,6 +760,7 @@ fn run_connected_session(
     let mut day_editing = false;
     let mut main_scroll = 0u16;
     let mut shown_source_detail_id: Option<String> = None;
+    let mut focused_stage = current_stage;
     let palette = Palette::new(env::var_os("NO_COLOR").is_some());
 
     loop {
@@ -1308,7 +1309,16 @@ fn run_connected_session(
                 }
                 WorkerResult::EntrySaved(outcome) => {
                     let generation = save_in_flight.take();
-                    if let Some(generation) = generation {
+                    // A save for a day the person has since left already
+                    // landed there; applying it would bring that workflow
+                    // back as current and mix its versions into this draft.
+                    let other_workflow = matches!(
+                        &*outcome,
+                        ClientOutcome::Ok(saved) if current_workflow
+                            .as_ref()
+                            .is_none_or(|current| current.id != saved.id)
+                    );
+                    if let Some(generation) = generation.filter(|_| !other_workflow) {
                         let failed = !matches!(&*outcome, ClientOutcome::Ok(_));
                         if let Some(workflow) =
                             compose_view.apply_save_outcome(generation, *outcome)
@@ -1556,6 +1566,13 @@ fn run_connected_session(
         }
         if stage_model.progress_of(current_stage) == Progress::Locked {
             current_stage = stage_model.default_current;
+        }
+        if current_stage != focused_stage {
+            // Each stage lists different resources, so the previous stage's
+            // row index would point at an unrelated row here.
+            focused_stage = current_stage;
+            focus.resource_index =
+                stage_entry_resource_index(current_stage, &sources_view, compose_active_resource);
         }
         let (compose_resources, assistant_resources) =
             assistant_view.resources(current_workflow.as_ref(), compose_view.is_dirty());
@@ -2971,6 +2988,20 @@ fn focused_source_id(
         .map(|candidate| candidate.id.clone())
 }
 
+/// The Resources row focused on entering `stage`: the source being shown in
+/// Sources, the active draft resource in Compose, and the top row otherwise.
+fn stage_entry_resource_index(
+    stage: Stage,
+    sources: &SourcesViewModel,
+    compose_active_resource: usize,
+) -> usize {
+    match stage {
+        Stage::Sources => sources.active_candidate_index().unwrap_or(0),
+        Stage::Compose => compose_active_resource,
+        _ => 0,
+    }
+}
+
 /// Picks the one job to poll next. Recovery reads come first because
 /// mutations stay disabled until they land; source and assistant jobs then
 /// alternate so one long-running job cannot starve the other's polling.
@@ -3440,6 +3471,31 @@ mod start_screen_tests {
 
         assert_eq!(focus.resource_index, 1);
         assert_eq!(sources.candidates[focus.resource_index].id, "src_1");
+    }
+
+    #[test]
+    fn entering_a_stage_focuses_its_own_resource_not_the_previous_stages_row() {
+        let shown = sources_view_with_detail("src_2");
+        let mut sources = SourcesViewModel {
+            candidates: ["src_1", "src_2"]
+                .into_iter()
+                .map(|id| diary_control_contract::SourceCandidateDto {
+                    id: id.to_owned(),
+                    source_note_name: id.to_owned(),
+                    directory_day: None,
+                    header_day: None,
+                    warning_code: None,
+                    availability: "local".to_owned(),
+                    selected: false,
+                })
+                .collect(),
+            ..SourcesViewModel::default()
+        };
+        assert_eq!(stage_entry_resource_index(Stage::Sources, &sources, 4), 0);
+        sources.active_detail = shown.active_detail;
+        assert_eq!(stage_entry_resource_index(Stage::Sources, &sources, 4), 1);
+        assert_eq!(stage_entry_resource_index(Stage::Compose, &sources, 4), 4);
+        assert_eq!(stage_entry_resource_index(Stage::Start, &sources, 4), 0);
     }
 
     #[test]
