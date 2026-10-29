@@ -85,7 +85,8 @@ keeps its receipts and offers the amendment seam implemented in P1-M11.
 A confirmed selection contains immutable snapshots for exactly the included
 sources. Zero selected sources require the separate explicit "continue without
 notes" action. That path enters `SourcesConfirmed` with an empty selection,
-disables extraction and model drafting, and still permits the manual editor.
+disables assistant extraction, drafting, and paragraph review, and still
+permits the manual editor.
 Source `Changed` or `Unverifiable` at a required checkpoint clears
 confirmation, model results, output preview, and approval; retained user edits
 become unconfirmed. Use fake freshness results at the post-read,

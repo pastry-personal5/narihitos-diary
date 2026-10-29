@@ -73,28 +73,47 @@ See [README.md](README.md) for the overview. Setup and contribution rules are in
 - **Cloud-only sources:** request download only for selected cloud-only iCloud
   notes, then coordinate their reads through a macOS adapter.
 - **Composition:** offer reviewed two-pass drafting behind one `DraftAssistant`
-  port and an always-available multiline manual editor, including after model
-  failure. The default adapter is a hosted model (provider undecided); Apple
-  on-device drafting through the Swift helper is an optional adapter. Offer US
-  English or South Korean Korean per entry, remembering the last choice, and
-  concise, standard, or reflective style with concise as the default. Mark
-  model-inferred reflections for user review. Confirm the complete edited entry
-  before output. Recover unfinished drafts from local persistent state. This
-  supersedes the earlier on-device-only rule.
+  port and an always-available multiline manual editor, including after
+  assistant failure. Register assistant adapters by stable ID and allow two or
+  more to be available without provider-specific workflow or TUI branches;
+  each assistant action targets exactly one selected backend. The default
+  adapter is a hosted model (provider undecided); Apple on-device drafting
+  through the Swift helper is an optional adapter. A future Codex-backed
+  adapter uses the same registry but requires its own approved provider/process,
+  credential, dependency, and lifecycle decisions. Sending occurs only when
+  the user invokes an assistant action and includes only confirmed source
+  snapshots. Offer US English or South Korean Korean per entry, remembering the
+  last choice, and concise, standard, or reflective style with concise as the
+  default. Mark model-inferred reflections for user review. A user may ask a
+  selected backend to review a paragraph; its version-bound suggestion must be
+  explicitly accepted or rejected and never confirms the complete entry.
+  Confirm the complete edited entry before output. Recover unfinished drafts
+  from local persistent state. This supersedes the earlier on-device-only rule.
 - **Hosted data egress:** with no extra consent step, readable source-note
-  bodies, extracted memories, drafts, and the edited entry may be sent to a
-  hosted provider. Front matter (location, weather, ids), attachment paths,
-  audio, credentials, and the Notion root never leave. The UI labels the active
-  composition path; the label is not a consent. Logs and errors stay
-  content-free. A later `/mcp` agent client (Codex, Claude Code) may read the
-  same data classes and write draft proposals; confirming a selection or entry,
-  approving a plan, and publishing stay human-only in the TUI.
+  bodies, extracted memories, drafts, the edited entry, and a paragraph focused
+  for review may be sent to one selected hosted provider. Front matter
+  (location, weather, ids), attachment paths, audio, credentials, and the Notion
+  root never leave. The UI labels the selected backend and its composition path;
+  the label is not a consent. Logs and errors stay content-free. A later `/mcp`
+  agent client (Codex, Claude Code) may read the same data classes and write
+  draft proposals; confirming a selection or entry, approving a plan, and
+  publishing stay human-only in the TUI.
 - **Language scope:** Ayumi source notes are en-US only; composition output is
   en-US or ko-KR. Japanese is out of scope for sources and for the IME
   indicator, which covers English and Korean only. The app neither detects
   language from a note body nor blocks on it.
 - **Default diary day:** a new workflow defaults to today in the Mac's local
-  time zone, and the Start screen lists unfinished drafts first.
+  time zone, and the Start stage lists unfinished drafts first.
+- **TUI workflow layout:** use the canonical user-facing stages `Start`,
+  `Sources`, `Compose`, `Review`, `Preview`, and `Publish`, in that order. The
+  standard layout has a left Workflow Sidebar for those stages, a middle
+  Resources Sidebar for sources, drafts, assistant suggestions, or
+  destinations, and a right Main Pane for the active resource. Activating a
+  source displays its readable text without changing whether it is included.
+  Only the confirmed included snapshots can be sent, and only when the user
+  explicitly invokes an assistant action. A completed assistant draft opens as
+  editable text in the Main Pane; paragraph suggestions require explicit accept
+  or reject.
 - **TUI date display:** display dates as `YYYY-MM-DD`, adding the abbreviated
   weekday as `YYYY-MM-DD (Mon)` where the available space and context permit.
 - **Draft retention:** keep receipts and digests. Purge draft and source text 7
@@ -154,12 +173,12 @@ See [README.md](README.md) for the overview. Setup and contribution rules are in
   either IME. Every command is also reachable by focus and Enter. P1-M7 uses
   Ctrl-G (F2) for Command Line, Ctrl-Enter (F3) to save/flush the editor,
   Ctrl-D (F10) to quit, and Ctrl-Left/Ctrl-Right (F6/F7) for previous/next
-  workflow step. These chords must pass a real-terminal check with the Korean
+  workflow stage. These chords must pass a real-terminal check with the Korean
   IME active.
 - **Empty days:** a diary day with no source notes, or none included, may still
   produce an entry through an explicit "continue without notes" confirmation.
-  Extraction and model drafting are disabled; the manual editor works. A blank
-  entry cannot be confirmed.
+  Assistant extraction, drafting, and paragraph review are disabled; the manual
+  editor works. A blank entry cannot be confirmed.
 - **Phase 1 platform:** Apple Silicon, macOS 26.0+, Rust 1.89+; bounded
   background workers; Ratatui/Crossterm with multiline editing; TIS input-
   language notifications with a 500 ms polling fallback; `IME: EN`, `IME: KO`,

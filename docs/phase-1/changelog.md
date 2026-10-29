@@ -6,6 +6,27 @@ This changelog records owner decisions and material plan changes for Phase 1.
 
 ## Entries
 
+- 2026-10-29 — P1-M7 contract-readiness and implementation-plan review —
+  Audited the planned TUI against the completed P1-M6 code and found three
+  pre-implementation corrections: a safe runtime-advertisement reader, a
+  server-supplied local source display identity, and a reachable explicit
+  no-notes transition when source reading is unavailable. Strengthened M7 with
+  bounded HTTP/SSE and autosave recovery, future-state fail-closed behavior,
+  terminal-control rendering, a minimal Command Line grammar, and exact
+  dependency/unsafe-FFI and worker-limit packets pending owner approval. No
+  manifest, production code, dependency, or build tool changed.
+- 2026-10-29 — P1-M7 planning and composition UX review — Canonicalized the
+  user-facing stages as Start, Sources, Compose, Review, Preview, and Publish.
+  Defined the left Workflow Sidebar, middle Resources Sidebar, and right Main Pane
+  interaction, including active-source versus included-source state and
+  prepared source-text inspection. Refined the composition architecture to use
+  one `DraftAssistant` port with a collection-shaped backend registry, route
+  each action to one selected backend, and support version-bound paragraph
+  review suggestions with explicit accept/reject. The chosen hosted default and
+  Apple on-device adapter remain P1-M8 work; a Codex-backed adapter is an
+  extension point, not a provider decision. The hosted provider, credential,
+  and HTTP dependency remain Undecided, and no dependency or production code
+  changed.
 - 2026-10-29 — P1-M6 completion — Marked P1-M6 `Done`. Implemented the
   owner-approved Tokio/Axum loopback server, strict v1 DTO and ETag contract,
   purpose-named command/CAS layer, per-day reconciliation gates, server-owned

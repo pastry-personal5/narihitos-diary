@@ -16,19 +16,33 @@ experience; it does not claim an implemented screen or keybinding.
 - Show directory and header dates together when choosing source notes, visibly
   mark disagreements and malformed metadata, and allow inclusion or exclusion
   regardless of either date.
+- Keep the two-sidebar layout stable: the left Workflow Sidebar shows `Start`,
+  `Sources`, `Compose`, `Review`, `Preview`, and `Publish`; the middle Resources
+  Sidebar shows context resources; and the right Main Pane shows the active
+  resource. Activating a readable source is distinct from including it in the
+  source set.
 - Request downloads only for selected cloud-only notes. Keep unavailable and
   unreadable states distinct from an empty note.
 - Start a new workflow on today's date in the Mac's local time zone, and list
   unfinished drafts first. The person can discard a draft at any time.
 - Offer a multiline manual editor at all times after source confirmation,
-  including when model assistance is unavailable or fails. Optional
+  including when assistant support is unavailable or fails. Optional
   assistance uses a source-linked memory review before drafting.
 - Let a day with no source notes continue through an explicit “continue without
   notes” confirmation. Only the manual editor is offered, and a blank entry
   cannot be confirmed.
-- Label the active composition path (hosted by default, or Apple on-device) in
-  the Setup check, the editor, and the Status Line. The label is information,
-  not a consent step.
+- List assistant backends from server capabilities instead of assuming a fixed
+  two-item choice. Label the selected backend and its composition path (hosted
+  by default, or Apple on-device) in the Setup check, Compose stage, and Status
+  Line. The label is information, not a consent step; manual editing is not an
+  assistant backend.
+- Send only the confirmed included source snapshots to exactly one backend when
+  the person invokes an assistant action. Opening, highlighting, or including a
+  source does not itself call a backend.
+- Let a person focus a paragraph for assistant review and explicitly accept or
+  reject the suggestion. The target is the Markdown paragraph containing the
+  editor cursor, bounded by blank lines and shown before the request. Accept
+  must fail safely if the paragraph changed; reject does not alter the entry.
 - Offer US English and South Korean Korean per entry, remember the last choice,
   and offer concise, standard, and reflective styles with concise as default.
   The choice names the language of the finished entry; source notes are
@@ -72,29 +86,36 @@ unless it is set to act as Meta. Avoid those collisions. On non-editor screens
 Tab and the arrow keys move focus and Enter activates. The Command Line opens
 with Ctrl-G (F2); Ctrl-Enter (F3) saves or flushes the editor; Ctrl-D (F10)
 quits; and Ctrl-Left/Ctrl-Right (F6/F7) move to the previous/next workflow
-step. The Command Line accepts ASCII command tokens and maps Hangul typed on
+stage. The Command Line accepts ASCII command tokens and maps Hangul typed on
 the 2-Set Korean layout back to the key that produced it, so commands work
 under either IME; every command is also reachable by focus and Enter.
 Real-terminal acceptance checks this with the Korean IME active.
 
 ## Proposed presentation details
 
-The candidate table, in the Main Pane, places inclusion state, note identity,
-directory date, header date, availability, and warning status in a stable row.
-Markers are words or symbols, never color alone. A detail area can show the
-readable text without audio links. The chosen diary day stays visible while
-inspecting another date. A selected cloud-only row offers a download action and
-progress state; the person confirms the selection only after its readable
-snapshot has been reviewed.
+The Resources Sidebar lists source notes with separate active and included
+states. Activating a readable note opens its sanitized text in the Main Pane;
+when no body is active, the Main Pane can show a candidate table with inclusion,
+note identity, directory date, header date, availability, and warning status in
+stable columns. Markers are words or symbols, never color alone. The chosen
+diary day stays visible while inspecting another date. An included cloud-only
+row offers a download action and progress state; the person confirms the
+selection only after its readable snapshot has been reviewed.
 
-The editor should keep language and style choices visible and allow paste,
-multiline editing, and review of source-linked memories. When a `ko-KR` entry is
+The editor should keep backend/path, language, and style choices visible and
+allow paste, multiline editing, and review of source-linked memories. The
+Resources Sidebar keeps the draft, confirmed sources, and assistant suggestions
+reachable. Opening a source is read-only; returning to the draft preserves the
+unsent buffer and cursor. When an assistant draft completes, the draft becomes
+active and its full text opens in the editable Main Pane. When a `ko-KR` entry is
 drafted from en-US notes, the editor says it is a translation. An inferred
 reflection appears inline between reserved delimiters, so it survives any
 edit; the person accepts it by removing the delimiters, edits the text, or
 removes the span. Entry review refuses confirmation while any reserved delimiter
-character remains and points to the first one. It shows the entire edited text, not a
-summary. Unsent text is flushed to the server after about a second without
+character remains and points to the first one. A paragraph-review suggestion
+shows the current paragraph, proposed replacement, backend label, and explicit
+Accept and Reject controls; a stale suggestion is read-only and cannot be
+applied. Entry review shows the entire edited text, not a summary. Unsent text is flushed to the server after about a second without
 typing, when focus leaves the editor, and before quitting; if the server is
 unreachable the Status Line says so and quitting asks first. If freshness fails
 or another client changes the workflow, a Banner explains what must be reread
@@ -117,5 +138,5 @@ relative path and the problem, never note content.
 
 Ratatui views render the ViewModel; the client sends actions to the Control
 API Server and receives state changes through REST and events. The screen
-chrome, step states, terminal-size rules, and connection and error states are
+chrome, stage states, terminal-size rules, and connection and error states are
 in the [information architecture](ux-information-architecture.md).

@@ -19,7 +19,9 @@ publishes its body to a Notion daily section.
 - Ignore Ayumi audio attachments; they are not played, copied, uploaded,
   decoded, transcribed, or supplied to diary composition.
 - Compose the entry in a multiline editor, with optional reviewed two-pass
-  drafting: hosted by default (provider undecided) or Apple on-device.
+  drafting and paragraph review through a selectable assistant-backend
+  registry: hosted by default (provider undecided), Apple on-device, and future
+  approved adapters without a workflow-layout change.
 - Produce one final diary entry as a Markdown file on the local filesystem.
 - Amend a completed entry, replacing only content the app itself wrote.
 - Use the configured Notion root page with `YYYY` year and `YYYY-MM` month
@@ -30,8 +32,10 @@ publishes its body to a Notion daily section.
 
 - A user can start the server with `nd serve` and interact with it through the
   `nd` TUI on macOS.
-- A user can draft with a model adapter or write manually; model output is never
-  accepted without review, and a blank entry cannot be confirmed.
+- A user can choose among the available assistant backends or write manually;
+  assistant drafts and paragraph reviews are never accepted automatically, and
+  a blank entry cannot be confirmed. The backend list supports two or more
+  registered implementations without provider-specific workflow stages.
 - A completed entry can be amended without overwriting content the app did not
   write.
 - The application can read Markdown source files from a mounted iCloud
@@ -159,8 +163,9 @@ Plan: [overview](milestone-07-tui-manual-workflow-overview.md),
 
 Status: Planned
 
-Goal: Add hosted-default and Apple on-device two-pass drafting without bypassing
-human review or the data-egress boundary.
+Goal: Add an extensible assistant-backend registry with hosted-default and Apple
+on-device two-pass drafting and paragraph review, without bypassing human review
+or the data-egress boundary.
 
 Plan: [overview](milestone-08-draft-assistants-overview.md),
 [architecture plan](milestone-08-draft-assistants-architecture.md).

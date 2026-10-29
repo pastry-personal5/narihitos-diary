@@ -10,63 +10,109 @@ and server ownership is in the [architecture](planned-mvp-architecture.md).
 
 ```text
 Terminal client
-├── App status: diary day, workflow state, connection, IME indicator
-├── Main screen
-│   ├── Start or resume
-│   │   ├── Server connection and Setup check
-│   │   ├── Unfinished drafts (listed first), with discard; completed days offer Amend
-│   │   └── Diary day choice (default: today, Mac local time)
-│   ├── Source selection
-│   │   ├── Day choice, explicit extra-date choice, and “continue without notes”
-│   │   ├── Candidate table: inclusion, date evidence, availability, warnings
-│   │   └── Source detail and selected-only download state
-│   ├── Memory review (optional)
-│   ├── Draft editor: language, style, source context, inferred reflections
-│   ├── Entry review: complete edited text and confirmation
-│   ├── Output preview: local file and Notion section, paths, planned changes,
-│   │   blocked destinations, and approval
-│   └── Publication status: per-destination result, retry state, Conflict view
-└── Action/status area: available actions, progress, errors
+├── Workflow Sidebar (left)
+│   ├── Start
+│   ├── Sources
+│   ├── Compose
+│   ├── Review
+│   ├── Preview
+│   └── Publish
+├── Resources Sidebar (middle)
+│   └── Contextual source notes, draft, assistant suggestions, or destinations
+├── Main Pane (right)
+│   └── Active stage and active resource: source text, editor, suggestion,
+│       complete-entry review, output preview, or publication result
+├── Command Line
+└── Status Line: diary day, workflow state, connection, IME, progress, errors
 ```
 
-The source selection screen may return to day choice or add one explicitly
-requested date. After a source snapshot is confirmed, the person can proceed
-through memory review or go straight to the draft editor. Every route to
-output passes through entry review and output preview. Source change detection
-returns the workflow to source review and invalidates later previews; recovered
-editor text remains visible but unconfirmed. An amendment skips source review:
-it enters at the Draft editor with the saved text, and the Navigator marks the
-source steps done from the receipt's digests.
+At wide terminal sizes, the Sources stage reads spatially like this. This is a
+containment wireframe, not a final pixel specification:
+
+```text
+┌───────────────────┬──────────────────────┬──────────────────────────────────┐
+│ Workflow          │ Resources            │ Main Pane                        │
+├───────────────────┼──────────────────────┼──────────────────────────────────┤
+│ done Start        │ [x] note-a           │ Source: note-b                   │
+│ > Sources         │ > [x] note-b         │                                  │
+│ available Compose │ [ ] note-c  warning  │ Read-only sanitized source text  │
+│ locked Review     │                      │                                  │
+│ locked Preview    │ Include  Exclude     │                                  │
+│ locked Publish    │ Prepare  Confirm     │                                  │
+├───────────────────┴──────────────────────┴──────────────────────────────────┤
+│ Command Line                                                                │
+├─────────────────────────────────────────────────────────────────────────────┤
+│ Status Line: 2026-10-29 · Sources · connected · IME: EN                     │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+`>` is the active resource shown in the Main Pane; `[x]` is inclusion. They are
+independent. In Compose, the middle sidebar lists `Draft`, the confirmed
+sources, and any assistant suggestions, while the right Main Pane becomes the
+editable draft.
+
+The stage labels and order are canonical in [UX terms](ux-terms.md#canonical-workflow-stages).
+The Sources stage may return to day choice or add one explicitly requested
+date. After a source set is confirmed, the person can use an available assistant
+or go straight to the editor in Compose. Every route to output passes through
+Review and Preview. Source change detection returns the workflow to Sources and
+invalidates later confirmations and previews; recovered editor text remains
+visible but unconfirmed. An amendment skips Sources: it enters Compose with the
+saved text, and the Workflow Sidebar marks Sources done from the receipt's
+digests.
+
+Activating and including a source are separate actions. Activating any readable
+source in the Resources Sidebar shows its text in the Main Pane without changing
+the included set. An explicit include/exclude control changes the prospective
+set. After confirmation, only those confirmed source snapshots are eligible for
+assistant work. Choosing **Create draft** sends the allowed text envelope from
+the Control API Server to exactly one selected assistant backend; merely
+highlighting, opening, or including a source does not call an assistant.
+
+In Compose, the Resources Sidebar keeps the draft and confirmed sources
+reachable. Activating a source temporarily replaces the editor with a read-only
+source view in the Main Pane; returning to the draft restores the editor and its
+cursor without losing unsaved text. When a draft job finishes, the draft becomes
+active and its text opens in the editable Main Pane. Assistant suggestions,
+including paragraph reviews, appear as resources with explicit accept and
+reject actions. Accepting
+a suggestion edits the draft only if it still targets the current buffer;
+rejecting it never changes the entry.
 
 Dates use `YYYY-MM-DD`. Where space and context permit, add the abbreviated
 weekday as `YYYY-MM-DD (Mon)`; the ISO date remains present so date evidence
 and diary-day identity are never ambiguous.
 
-Screens represent one server-owned workflow revision. ViewModels hold only
+Stages represent one server-owned workflow revision. ViewModels hold only
 presentation state and unsent edits; the Control API Server owns confirmed
 selections, drafts, plans, and receipts. A reconnect fetches the latest server
 state before allowing another mutation. The [UX terms](ux-terms.md) name the
 components used above. The server's voiding rules are in the
 [workflow state table](planned-mvp-architecture.md#workflow-states-and-invalidation).
 
-## Navigation and step states
+## Navigation and stage states
 
-The Navigator lists the screens above and marks each with a step state:
+The Workflow Sidebar lists the six canonical stages. Each has one progress
+state, and exactly one accessible stage also has the `current` marker because it
+is open in the Main Pane:
 
-| Step state | Meaning | Can the person open it? |
+| Progress state | Meaning | Can the person open it? |
 |---|---|---|
 | done | Confirmed and still valid. | Yes. |
-| current | Where the workflow is now. | Yes. |
 | available | Its prerequisites are confirmed; not yet done. | Yes. |
 | locked | A prerequisite is unconfirmed, so it cannot be reached. | No; the Status Line names the missing step. |
 | stale | Was confirmed, then voided by a later change. The reason is shown. | Yes, to reconfirm. |
 
-Memory review is marked optional. Opening an earlier screen is navigation and
-changes nothing. The first edit there that would void later confirmations
+`current` is navigation state, not a fifth progress state. It may appear beside
+`done`, `available`, or `stale`; moving it changes only the active Main Pane.
+
+Optional assistant actions do not add or remove sidebar stages. Opening an
+earlier stage is navigation and changes nothing. The first edit there that
+would void later confirmations
 shows an impact notice listing what becomes unconfirmed, and applies only after
 the person continues. Text already typed is kept as unconfirmed.
 
-## Start screen and connection states
+## Start stage and connection states
 
 The server is started by hand, so the client may open before it exists.
 
@@ -74,7 +120,7 @@ The server is started by hand, so the client may open before it exists.
 |---|---|
 | not running | The start command, `nd serve`, and retry while waiting. Nothing else is enabled. |
 | connecting | A progress indicator; no workflow actions. |
-| connected | The Start screen with Setup check and unfinished drafts. |
+| connected | The Start stage with Setup check and unfinished drafts. |
 | reconnecting | Existing screens stay readable; every mutation is disabled until the latest workflow state is fetched. |
 | version mismatch | Which side is older and the command to restart the server. |
 
@@ -91,37 +137,42 @@ These conditions are distinct and are never collapsed into “no entries”.
 | Invalid metadata or front matter | The relative path and the problem, never the content. |
 | Invalid UTF-8 | Warning; the note has no readable body. |
 | No notes in the three-day window | Nothing found for the window, with the explicit extra-date choice and “continue without notes”. |
-| Composition path unavailable (hosted provider unconfigured or unreachable, Apple model unavailable, or locale unsupported) | The manual editor is offered, and the other path if it is available. |
+| Assistant backend unavailable (hosted provider unconfigured or unreachable, Apple model unavailable, unsupported locale, or another adapter-specific safe reason) | The manual editor and every other currently available backend are offered. |
 | Notion unconfigured, unreachable, or failed preflight | Shown as blocked in the preview; the local entry can still be approved. |
 
 ## Chrome layout
 
 The Standard Layout above is content, not pixels. The proposed screen chrome
 maps it onto five zones, named in [UX terms](ux-terms.md#proposed-chrome-terms):
-a left Workflow Sidebar, a central Main Pane, a right Resources Sidebar, a
-bottom Command Line, and a bottom-most Status Line.
+a left Workflow Sidebar, middle Resources Sidebar, right Main Pane, bottom
+Command Line, and bottom-most Status Line.
 
-- **Main Pane** renders the active screen's content: the candidate table and
-  source detail, memory review, draft editor, entry review, output preview, or
-  publication status. A Banner at its top holds any condition that needs a
-  decision, with the explanation.
-- **Workflow Sidebar** is always the Navigator. It lists the Standard Layout's
-  stages with their `done`, `current`, `available`, `locked`, or `stale` state
-  and supports jump-to-step navigation where the state permits it. It does not
-  change mode, so a person can always see where the active screen sits in the
-  workflow.
-- **Resources Sidebar** presents compact, stateful items relevant to the active
-  screen. It is a source list during selection and editing (inclusion mark,
-  short identity, date-evidence disagreement, availability, and warning or
-  download state); a source detail can expose the selected item's metadata.
-  Later screens use the same region for reviewed memories, the entry buffer and
-  review state, and output resources such as the local file and Notion section.
-  A resource can be `ready`, `selected`, `preparing`, `unavailable`, `warning`,
-  `blocked`, `conflict`, or `stale`; words or symbols convey state without
-  relying on color. A hierarchy such as local output `year / month / entry` or
+- **Workflow Sidebar** is the left sidebar and always represents the canonical
+  `Start`, `Sources`, `Compose`, `Review`, `Preview`, and `Publish` sequence. It
+  marks each stage `done`, `available`, `locked`, or `stale`, plus exactly one
+  accessible stage as `current`, and supports jump-to-stage navigation where
+  the state permits it. It does not
+  become a menu of screens or assistant-specific steps.
+- **Resources Sidebar** is the middle sidebar and presents compact, stateful
+  items relevant to the active
+  stage. During Sources it is the source list: active focus and inclusion are
+  distinct, and activating a readable note shows its text in the Main Pane.
+  During Compose it lists the draft, confirmed source notes, memories, and
+  assistant suggestions; the draft remains the editable resource and source
+  text is read-only. Later stages use the same region for entry review state and
+  output resources such as the local file and Notion section.
+  A resource can be `ready`, `active`, `included`, `preparing`, `unavailable`,
+  `warning`, `blocked`, `conflict`, or `stale`; words or symbols convey state
+  without relying on color. A hierarchy such as local output
+  `year / month / entry` or
   the Notion `root / year / month / section` is rendered as an indented tree.
-  The full candidate table remains in the Main Pane so both dates, availability,
-  and warnings have stable columns.
+  The Main Pane may show a full candidate table when no source body is active so
+  both dates, availability, and warnings have stable columns.
+- **Main Pane** is the right pane and renders the active stage and active
+  resource: source text, assistant choice or progress, the draft editor, an
+  assistant suggestion, complete-entry review, output preview, or publication
+  status. A Banner at its top holds any condition that needs a decision, with
+  the explanation.
 - **Command Line** accepts typed commands (for example: jump to a diary day or
   confirm). Approval and publication are on-screen actions
   at the output preview; a typed command cannot bypass that screen.

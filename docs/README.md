@@ -21,21 +21,21 @@ This index lists the design and process docs, one line each. Read only the doc y
 | [phase-1/milestone-05-source-ingestion-apple-bridge-architecture.md](phase-1/milestone-05-source-ingestion-apple-bridge-architecture.md) | P1-M5 source identity, privacy filtering, Swift byte handoff, failure mapping, freshness, and implementation sequence. |
 | [phase-1/milestone-06-control-api-server-overview.md](phase-1/milestone-06-control-api-server-overview.md) | P1-M6 entry gates, implemented-contract audit, manual-flow server scope, security/recovery checklist, and acceptance evidence. |
 | [phase-1/milestone-06-control-api-server-architecture.md](phase-1/milestone-06-control-api-server-architecture.md) | P1-M6 command and DTO boundary, trusted source preparation, conditional writes, loopback lifecycle, diagnostics, bounded jobs, and SSE sequence. |
-| [phase-1/milestone-07-tui-manual-workflow-overview.md](phase-1/milestone-07-tui-manual-workflow-overview.md) | P1-M7 terminal client, source selection, manual editor, and IME checklist. |
-| [phase-1/milestone-07-tui-manual-workflow-architecture.md](phase-1/milestone-07-tui-manual-workflow-architecture.md) | P1-M7 API boundary, client recovery rules, MVVM, editor, Command Line, and IME sequence. |
-| [phase-1/milestone-08-draft-assistants-overview.md](phase-1/milestone-08-draft-assistants-overview.md) | P1-M8 decision gate and hosted/Apple reviewed-drafting checklist. |
-| [phase-1/milestone-08-draft-assistants-architecture.md](phase-1/milestone-08-draft-assistants-architecture.md) | P1-M8 data-bounded assistant adapters and integration sequence. |
+| [phase-1/milestone-07-tui-manual-workflow-overview.md](phase-1/milestone-07-tui-manual-workflow-overview.md) | P1-M7 canonical stages, two-sidebar terminal client, source inspection, manual editor, and IME checklist. |
+| [phase-1/milestone-07-tui-manual-workflow-architecture.md](phase-1/milestone-07-tui-manual-workflow-architecture.md) | P1-M7 canonical-stage mapping, API boundary, source-to-main-pane behavior, recovery rules, MVVM, editor, Command Line, and IME sequence. |
+| [phase-1/milestone-08-draft-assistants-overview.md](phase-1/milestone-08-draft-assistants-overview.md) | P1-M8 decision gate and multi-backend drafting and paragraph-review checklist. |
+| [phase-1/milestone-08-draft-assistants-architecture.md](phase-1/milestone-08-draft-assistants-architecture.md) | P1-M8 extensible backend registry, data boundary, versioned paragraph suggestions, and integration sequence. |
 | [phase-1/milestone-09-local-publication-recovery-overview.md](phase-1/milestone-09-local-publication-recovery-overview.md) | P1-M9 local preview, approval, no-clobber output, conflict, and recovery checklist. |
 | [phase-1/milestone-09-local-publication-recovery-architecture.md](phase-1/milestone-09-local-publication-recovery-architecture.md) | P1-M9 local output intent, receipt, reconciliation, and TUI sequence. |
 | [phase-1/milestone-10-notion-publication-overview.md](phase-1/milestone-10-notion-publication-overview.md) | P1-M10 Notion compatibility gate, publication, partial-success, and retry checklist. |
 | [phase-1/milestone-10-notion-publication-architecture.md](phase-1/milestone-10-notion-publication-architecture.md) | P1-M10 fail-closed hierarchy, append, read-back, and reconciliation sequence. |
 | [phase-1/milestone-11-amendments-release-qualification-overview.md](phase-1/milestone-11-amendments-release-qualification-overview.md) | P1-M11 amendment, end-to-end acceptance, and Phase 1 qualification checklist. |
 | [phase-1/milestone-11-amendments-release-qualification-architecture.md](phase-1/milestone-11-amendments-release-qualification-architecture.md) | P1-M11 guarded replacement and release-evidence sequence. |
-| [planned-mvp-architecture.md](planned-mvp-architecture.md) | Local control server, TUI client, clean-architecture boundaries, connector contracts, workflow states, amendments, hosted drafting and data egress, process lifecycle, files, REST, streaming, and future MCP design including agent-client context cost. |
+| [planned-mvp-architecture.md](planned-mvp-architecture.md) | Local control server, two-sidebar TUI client, clean-architecture boundaries, connectors, multi-backend assistants, paragraph review, workflow states, amendments, data egress, REST, streaming, and future MCP design. |
 | [control-api-v1.md](control-api-v1.md) | P1-M6 native-client attachment, authorization, route/precondition rules, preparation handles, numeric bounds, jobs, and SSE recovery. |
 | [product-behavior.md](product-behavior.md) | Intended user journey, confirmed diary behavior, and product boundaries. |
-| [ux-terms.md](ux-terms.md) | Proposed vocabulary for visible terminal components and code-facing names. |
-| [ux-information-architecture.md](ux-information-architecture.md) | Proposed terminal screen containment, step states, connection and error states, and chrome layout. |
+| [ux-terms.md](ux-terms.md) | Canonical workflow-stage labels and proposed vocabulary for visible terminal components and code-facing names. |
+| [ux-information-architecture.md](ux-information-architecture.md) | Proposed two-sidebar containment, stage/resource behavior, connection and error states, and chrome layout. |
 | [ux-gui.md](ux-gui.md) | Terminal UX: approved behavior, the Korean-IME input constraint, and proposed presentation details, kept separate. |
 | [phase-1/changelog.md](phase-1/changelog.md) | Phase 1 owner decisions and material plan changes. |
 | [research/markdown-input-format.md](research/markdown-input-format.md) | P1-M1 iCloud directory layout, Markdown/YAML format, attachment format, time semantics, and privacy constraints. |
