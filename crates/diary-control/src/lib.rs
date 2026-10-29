@@ -10,6 +10,7 @@ mod server;
 pub use commands::{CommandError, CommandService, ControlStore};
 pub use diagnostics::{DiagnosticEvent, DiagnosticLevel, DiagnosticLog, LogClock};
 pub use lifecycle::{
-    LifecycleConfig, LifecycleError, RuntimeAdvertisement, RuntimeFile, ServerLock, random_id,
+    LifecycleConfig, LifecycleError, RuntimeAdvertisement, RuntimeAttachment, RuntimeFile,
+    ServerLock, load_runtime_attachment, random_id,
 };
 pub use server::{ServerConfig, ServerHandle, bind_loopback, build_router, serve};

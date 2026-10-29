@@ -1,6 +1,6 @@
 # Planned MVP architecture
 
-Status: Proposal
+Status: Active
 
 The application runs a local Control API Server that owns diary workflows and
 exposes them to independent clients. A terminal client is the first interface;
@@ -15,7 +15,7 @@ files, cloud services, and user interfaces.
 | Clean architecture | Domain policy and use cases depend on inward-facing types and ports. HTTP, Ratatui, macOS frameworks, SQLite, and Notion live in adapters that depend on the core. |
 | MVVM | The TUI ViewModel turns API representations and event notifications into screen state; the View renders it and sends user intent back through the API client. The server remains the source of truth. |
 | Pipeline | One explicit, resumable workflow state machine orders discovery, selection, composition, confirmation, and publication. Each step has typed inputs, outputs, and invalidation rules. |
-| Connectors | Registered input and output connectors implement capability-focused ports. Their identifiers and opaque source or destination keys cross the API; vendor objects and filesystem paths do not become core types. |
+| Connectors | Registered input and output connectors implement capability-focused ports. Their identifiers and opaque source or destination keys cross the API; a separate safe local source-note name supports presentation. Vendor objects and absolute filesystem paths do not become core types. |
 | Platform bridge | iCloud downloads and coordinated reads are Foundation APIs, and Apple's Foundation Models API for the optional on-device model is Swift-only. The server reaches both through one Swift helper process that speaks a versioned protocol over standard input and output. The core sees only the `DraftAssistant` and `SourceReader` ports. |
 | Composition and egress | One `DraftAssistant` port supports a registry of backend adapters rather than a fixed two-case branch. Phase 1 supplies the chosen hosted default and an optional Apple on-device backend; another approved adapter, such as a future Codex-backed implementation, can register without changing workflow policy or the TUI layout. Each assistant action targets exactly one backend. Only readable note bodies, memories, drafts, the edited entry, and writing settings can reach a hosted backend; front matter, attachment paths, audio, credentials, and the Notion root cannot be expressed in the port's types. See [Assistant backend registry](#assistant-backend-registry) and [Hosted drafting and data egress](#hosted-drafting-and-data-egress). |
 | Concurrency | The server's HTTP and event layer is async on Tokio. Blocking work (SQLite, file hashing, helper pipes) runs on bounded workers with timeouts and cancellation. The TUI keeps a synchronous event loop with bounded worker threads. |
@@ -74,16 +74,19 @@ server's connectors.
 
 The core owns `DiaryDay`, `WritingLanguage` (`en-US` or `ko-KR`), `WritingStyle`
 (`concise`, `standard`, `reflective`), `SourceRef`, `SourceSnapshot`,
-`SelectionRevision`, `AssistantBackendId`, `AssistantCapability`,
+`SelectionRevision`, `AssistantBackendId`, `AssistantAction`,
 `MemoryCandidate`, `AssistantSuggestion`, `DraftProposal`, `EntryRevision`,
 `ConfirmedEntry`, `OutputPlan`, and `PublicationReceipt`. An
 `AssistantSuggestion` is a memory set, entry draft, or paragraph review produced
 by a registered assistant backend and awaiting human review. A `DraftProposal`
 is memories or entry text from a future agent client and follows the same
 human-acceptance rule, but it is not an assistant-backend identity. A
-`SourceRef` pairs a connector ID with an opaque key. An output target likewise
-has a connector ID and opaque target key. IDs are stable within their registry
-or connector; API clients cannot use them to request arbitrary files or pages.
+`SourceRef` pairs a connector ID with an opaque key. `SourceCandidate` also
+carries a bounded local `source_note_name`, such as an Ayumi-relative path, for
+display; it is absent from diagnostics and assistant request types. An output
+target likewise has a connector ID and opaque target key. IDs are stable within
+their registry or connector; API clients cannot use them to request arbitrary
+files or pages.
 
 `WritingLanguage` is the language of the finished entry. Source notes are
 expected to be en-US; the core neither detects nor blocks on source language,
@@ -122,7 +125,7 @@ and parses text, and the helper reads only the notes it is asked for. It needs
 no network access of its own. Each request is bounded by size and a timeout,
 and cancellation kills it. A crash, timeout, missing helper, unsupported
 locale, or invalid output becomes a typed unavailable or invalid outcome: the
-manual editor stays usable, and a selected note whose read fails is
+Draft editor stays usable, and a selected note whose read fails is
 `Unreadable` or `Unverifiable`, never empty. The helper's standard error is
 redacted like any other log.
 
@@ -142,7 +145,7 @@ hosted backends may share the `hosted` path, while the Apple Foundation Models
 adapter uses `apple-on-device`. The UI remembers the last usable backend ID. If
 it is absent or unavailable, the hosted default is selected only when it is
 available; otherwise no assistant is selected and the UI offers the available
-backends alongside the manual editor. This keeps provider choice extensible
+backends alongside the Draft editor. This keeps provider choice extensible
 without changing the six canonical stages or the workflow state machine.
 
 Each assistant command names one registered backend ID. The server resolves it,
@@ -190,13 +193,13 @@ style. Raw front matter, location, weather, identifiers, attachment paths,
 audio, credentials, and the Notion root are not types the port can carry, so an
 adapter cannot send them. Each call is bounded by size and a timeout and can be
 cancelled. A hosted failure, timeout, or invalid response becomes the same typed
-unavailable or invalid outcome as a helper failure, and the manual editor stays
+unavailable or invalid outcome as a helper failure, and the Draft editor stays
 usable.
 
 No consent step precedes a call. Before the person invokes an assistant action,
-the Setup check, Compose stage, and Status Line label both the selected backend
-and its composition path, so the person knows where text goes. Logs, errors, and
-problem details never contain composition text. The provider's retention and
+the Setup check, Compose stage, Work Status, and Status Line label both the
+selected backend and its composition path, so the person knows where text goes.
+Logs, errors, and problem details never contain composition text. The provider's retention and
 training terms are outside the app's control, and the owner accepted that in
 choosing a hosted default. The same data classes bound what an agent client may
 read over `/mcp`.
@@ -262,7 +265,8 @@ choose day -> discover -> select/prepare/read -> confirm source snapshot
            -> revalidate Notion path/create/append -> read-back/receipt
 ```
 
-The manual editor is available from the confirmed source snapshot and after
+The Draft editor is available for manual editing from the confirmed source
+snapshot and after
 any assistant failure. Assisted drafting keeps two passes separate: extract
 source-linked memories for human review, then draft from confirmed memories.
 The person selects one available backend for an action; the server sends only
@@ -452,7 +456,7 @@ records the API facts.
 | Runtime directory | Owner-only, under the same Application Support directory | Lock file and runtime file (port, control token, instance ID). |
 | Entries | Configurable; default `~/Documents/narihitos-diary/entries/YYYY/MM/YYYY-MM-DD.md` | Written only by the local output adapter. |
 | Logs | Repo-local, Git-ignored `.local/logs/control-api/`, plus limited foreground standard error | Owner-only, content-free typed records. Rotate at UTC-day or 8 MiB boundaries, retain for at most 72 hours, and cap the directory at 24 MiB. Codex and Claude Code may read this directory directly; no log API exists and agents remain barred from the separate runtime-token directory. |
-| Swift helper | `ND_APPLE_BRIDGE_PATH`, then installed `../libexec/apple-bridge` relative to `nd`, then `helpers/apple-bridge/.build/debug/apple-bridge` in a development checkout | If absent, the Apple model is unavailable and cloud-only notes cannot be downloaded or read; hosted drafting and the manual editor continue. One process handles one capped newline-delimited JSON request and response. |
+| Swift helper | `ND_APPLE_BRIDGE_PATH`, then installed `../libexec/apple-bridge` relative to `nd`, then `helpers/apple-bridge/.build/debug/apple-bridge` in a development checkout | If absent, the Apple model is unavailable and cloud-only notes cannot be downloaded or read; hosted drafting and the Draft editor continue. One process handles one capped newline-delimited JSON request and response. |
 
 ## Control API Server module
 
@@ -543,14 +547,14 @@ previous plan and its approval.
 
 | Resource | Intent |
 |---|---|
-| `GET /v1/health`, `GET /v1/capabilities` | `health` is unauthenticated and returns only the instance ID, contract version, and build ID. `capabilities` lists authorized connectors, writing choices, and an array of registered assistant backends with stable IDs, labels, composition paths, availability, languages, supported actions, and safe reason codes. Neither reveals diary content. |
+| `GET /v1/health`, `GET /v1/capabilities` | `health` is unauthenticated and returns only the instance ID, contract version, and build ID. `capabilities` reports manual-workflow availability separately and lists registered assistant backends with stable IDs, labels, composition paths, availability, languages, supported actions, and safe reason codes. Neither reveals diary content. |
 | `GET /v1/setup-check`, `GET /v1/preferences`, `PUT /v1/preferences` | Read-only readiness list (configuration, Ayumi directory, entries root, assistant backends, Notion), and the remembered writing language and last usable backend ID. |
 | `POST /v1/workflows`, `GET /v1/workflows/{id}` | Start or resume a diary workflow and fetch its revisioned state. |
 | `GET /v1/workflows`, `DELETE /v1/workflows/{id}` | List unfinished workflows first, then completed ones, and discard one. |
 | `POST /v1/workflows/{id}/amendments` | Start an amendment of a `Completed` day, seeded from the local file. |
 | `POST /v1/workflows/{id}/discoveries`, `GET /v1/workflows/{id}/sources`, `GET /v1/workflows/{id}/sources/{source_id}` | Discover the bounded default window or a user-requested extra date; inspect candidate summaries and warnings; and read a persisted sanitized body only for a currently confirmed snapshot. |
 | `POST /v1/workflows/{id}/sources/prepare`, `PUT /v1/workflows/{id}/selection`, `POST /v1/workflows/{id}/empty-selection-confirmations` | Request acquisition only for selected cloud-only notes, review an expiring server-owned preparation result, then confirm it by handle. Continue without notes only through the separate explicit command. |
-| `PUT /v1/workflows/{id}/writing-settings`, `POST /v1/workflows/{id}/manual-compositions` | Set current language, style, and optional assistant backend ID conditionally, then enter the always-available manual editor. The server derives and reports the backend's composition path. |
+| `PUT /v1/workflows/{id}/writing-settings`, `POST /v1/workflows/{id}/manual-compositions` | Set current language, style, and optional assistant backend ID conditionally, then open the always-available Draft editor. The server derives and reports a selected backend's composition path; manual editing has neither a backend ID nor a composition path. |
 | `POST /v1/workflows/{id}/extractions`, `PUT /v1/workflows/{id}/memories` | Run optional memory extraction on the command's one backend ID and confirm or edit selected memories. |
 | `POST /v1/workflows/{id}/drafts`, `PUT /v1/workflows/{id}/entry`, `POST /v1/workflows/{id}/entry-confirmations` | Run optional drafting on the command's one backend ID, save manual edits (carrying the entry buffer version), and confirm the complete entry. |
 | `POST /v1/workflows/{id}/paragraph-reviews`, `POST /v1/workflows/{id}/paragraph-reviews/{suggestion_id}/acceptances`, `POST /v1/workflows/{id}/paragraph-reviews/{suggestion_id}/rejections` | Ask one backend to review a versioned paragraph target, then explicitly accept its still-current replacement or reject it without changing the entry. |
@@ -652,11 +656,15 @@ filesystem, or assistant work. Persisted drafts live on the server; the TUI may
 buffer unsubmitted keystrokes but does not become a second durable authority.
 The editor ViewModel flushes unsubmitted text to the server after about a
 second without typing, when focus leaves the editor, and before quitting. While
-the server is unreachable it keeps the text in memory, says so in the Status
-Line, and asks before quitting.
+the server is unreachable it keeps the text in memory, says so in Work Status
+and the compact Status Line, and asks before quitting.
 
-The standard layout orders a left Workflow Sidebar, middle Resources Sidebar,
-and right Main Pane. The Workflow Sidebar always lists the canonical `Start`,
+The Standard Layout places a full-width, four-content-row Work Status pane above
+a left Workflow Sidebar, middle Resources Sidebar, and right Main Pane, while
+retaining the compact bottom Status Line. Work Status explains current/recent
+work, pending or blocked work, connection and draft-save safety, and a useful
+safe notice or next action; important state may intentionally appear in both
+status regions. The Workflow Sidebar always lists the canonical `Start`,
 `Sources`, `Compose`, `Review`, `Preview`, and `Publish` stages with
 canonical-state/capability-derived progress and one presentation-only current
 marker. The Resources Sidebar lists the active stage's sources, draft,

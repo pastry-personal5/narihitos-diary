@@ -47,23 +47,22 @@ advances the buffer version, while reject marks or removes it without mutating
 the entry. Any edit that changes the target makes the suggestion stale. Neither
 operation confirms the complete entry.
 
-P1-M6 contract version 1 represents the manual editor as a `manual`
-composition path and persists that value as the last path. P1-M8 makes a
-versioned, fail-closed contract change: capabilities report
-`manual_workflow_available` separately from `assistant_backends[]`, writing
-settings carry an optional backend ID, and the backend descriptor owns the
-hosted/on-device path. The database migration preserves existing workflows and
-language/style settings, maps the old manual preference to no selected backend,
-and lets normal default selection choose the hosted backend only after it is
-available. Mixed-version client/server pairs stop at version mismatch.
+P1-M12 already makes the breaking pre-client contract change: capabilities
+report `manual_workflow_available` separately from `assistant_backends[]`,
+writing settings carry an optional backend ID, and the backend descriptor owns
+the hosted/on-device path. Its database migration preserves workflows and
+language/style settings while mapping the old path preference to no selected
+backend. P1-M8 populates the descriptor collection and adds assistant action
+resources; it does not reintroduce manual as a path. Mixed-version
+client/server pairs stop at version mismatch.
 
 ## Approach and sequence
 
 1. Resolve and document the provider, credential, and HTTP choices, including
    license and configuration consequences, before dependency changes.
-2. Version the control contract and migrate stored manual/path preferences to
-   the separated manual-availability, optional-backend-ID model. Add old-store
-   and mixed-client/server tests before assistant calls exist.
+2. Verify P1-M12's separated manual-availability and optional-backend-ID model,
+   then version only the new assistant action/result resources that M8 needs.
+   Add mixed-client/server tests before assistant calls exist.
 3. Define backend descriptors and a registry keyed by stable ID. Prove with at
    least three fake adapters that capabilities, selection, persistence, and
    routing are collection-shaped rather than a binary hosted/Apple branch.
@@ -80,7 +79,8 @@ available. Mixed-version client/server pairs stop at version mismatch.
    retain manual text on failure, and refuse stale paragraph acceptance.
 8. Extend the existing Compose ViewModel: show all registered backends, keep
    confirmed sources and the draft in the Resources Sidebar, render suggestions
-   in the Main Pane, and expose explicit accept/reject actions.
+   in the Main Pane, keep the selected backend and path visible in Work Status
+   and the compact Status Line, and expose explicit accept/reject actions.
 9. Prove the production adapter contracts and a three-fake registry through
    synthetic contract tests and fake-backed vertical flows.
 

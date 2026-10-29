@@ -5,7 +5,7 @@
 use serde::{Deserialize, Serialize};
 
 pub const API_VERSION: &str = "v1";
-pub const CONTRACT_VERSION: u32 = 1;
+pub const CONTRACT_VERSION: u32 = 2;
 pub const MAX_REQUEST_BYTES: usize = 1024 * 1024;
 pub const MAX_ENTRY_BYTES: usize = 512 * 1024;
 pub const MAX_STRING_BYTES: usize = 4 * 1024;
@@ -190,16 +190,21 @@ dto!(
 dto!(
     pub struct CapabilitiesDto {
         pub capabilities: Vec<String>,
-        pub composition_paths: Vec<CompositionPathDto>,
+        pub manual_workflow_available: bool,
+        pub assistant_backends: Vec<AssistantBackendDto>,
         pub disabled_routes: Vec<String>,
     }
 );
 
 dto!(
-    pub struct CompositionPathDto {
+    pub struct AssistantBackendDto {
         pub id: String,
+        pub display_label: String,
+        pub composition_path: String,
         pub available: bool,
         pub reason_code: Option<String>,
+        pub supported_languages: Vec<String>,
+        pub supported_actions: Vec<String>,
     }
 );
 
@@ -216,7 +221,7 @@ dto!(
 dto!(
     pub struct PreferencesDto {
         pub last_language: Option<String>,
-        pub last_composition_path: String,
+        pub last_assistant_backend_id: Option<String>,
     }
 );
 
@@ -240,7 +245,7 @@ dto!(
 );
 
 dto!(
-    pub struct WorkflowDto {
+    struct WorkflowDtoWire {
         pub id: String,
         pub diary_day: String,
         pub state: String,
@@ -248,7 +253,8 @@ dto!(
         pub buffer_version: u64,
         pub language: Option<String>,
         pub style: String,
-        pub composition_path: String,
+        pub assistant_backend_id: Option<String>,
+        pub composition_path: Option<String>,
         pub selection_digest: Option<String>,
         pub explicit_empty_selection: bool,
         pub invalidation_code: Option<String>,
@@ -258,9 +264,78 @@ dto!(
     }
 );
 
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct WorkflowDto {
+    pub id: String,
+    pub diary_day: String,
+    pub state: String,
+    pub revision: u64,
+    pub buffer_version: u64,
+    pub language: Option<String>,
+    pub style: String,
+    pub assistant_backend_id: Option<String>,
+    pub composition_path: Option<String>,
+    pub selection_digest: Option<String>,
+    pub explicit_empty_selection: bool,
+    pub invalidation_code: Option<String>,
+    pub entry_text: String,
+    pub entry_confirmed: bool,
+    pub candidates: Vec<SourceCandidateDto>,
+}
+
+impl TryFrom<WorkflowDtoWire> for WorkflowDto {
+    type Error = &'static str;
+
+    fn try_from(value: WorkflowDtoWire) -> Result<Self, Self::Error> {
+        match (&value.assistant_backend_id, &value.composition_path) {
+            (None, None) => {}
+            (Some(backend_id), Some(path))
+                if assistant_backend_id_is_valid(backend_id)
+                    && matches!(path.as_str(), "hosted" | "apple-on-device") => {}
+            _ => return Err("invalid assistant selection"),
+        }
+        Ok(Self {
+            id: value.id,
+            diary_day: value.diary_day,
+            state: value.state,
+            revision: value.revision,
+            buffer_version: value.buffer_version,
+            language: value.language,
+            style: value.style,
+            assistant_backend_id: value.assistant_backend_id,
+            composition_path: value.composition_path,
+            selection_digest: value.selection_digest,
+            explicit_empty_selection: value.explicit_empty_selection,
+            invalidation_code: value.invalidation_code,
+            entry_text: value.entry_text,
+            entry_confirmed: value.entry_confirmed,
+            candidates: value.candidates,
+        })
+    }
+}
+
+impl<'de> Deserialize<'de> for WorkflowDto {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let wire = WorkflowDtoWire::deserialize(deserializer)?;
+        Self::try_from(wire).map_err(serde::de::Error::custom)
+    }
+}
+
+fn assistant_backend_id_is_valid(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 128
+        && value.bytes().all(|byte| {
+            byte.is_ascii_lowercase() || byte.is_ascii_digit() || matches!(byte, b'-' | b'_' | b'.')
+        })
+}
+
 dto!(
     pub struct SourceCandidateDto {
         pub id: String,
+        pub source_note_name: String,
         pub directory_day: Option<String>,
         pub header_day: Option<String>,
         pub warning_code: Option<String>,
@@ -279,6 +354,7 @@ dto!(
 dto!(
     pub struct SourceDetailDto {
         pub id: String,
+        pub source_note_name: String,
         pub body: String,
         pub content_digest: String,
         pub directory_day: Option<String>,
@@ -312,7 +388,7 @@ dto!(
     pub struct WritingSettingsRequest {
         pub language: String,
         pub style: String,
-        pub composition_path: String,
+        pub assistant_backend_id: Option<String>,
     }
 );
 dto!(
@@ -437,6 +513,91 @@ mod tests {
             serde_json::from_str::<SaveEntryRequest>(r#"{"text":"synthetic","unexpected":true}"#)
                 .unwrap_err();
         assert!(error.to_string().contains("unknown field"));
+        let settings: WritingSettingsRequest = serde_json::from_str(
+            r#"{"language":"en-US","style":"concise","assistant_backend_id":null}"#,
+        )
+        .unwrap();
+        assert_eq!(settings.assistant_backend_id, None);
+        let legacy = serde_json::from_str::<WritingSettingsRequest>(
+            r#"{"language":"en-US","style":"concise","composition_path":"manual"}"#,
+        )
+        .unwrap_err();
+        assert!(legacy.to_string().contains("unknown field"));
+        let legacy = serde_json::from_str::<PreferencesDto>(
+            r#"{"last_language":"en-US","last_composition_path":"manual"}"#,
+        )
+        .unwrap_err();
+        assert!(legacy.to_string().contains("unknown field"));
+    }
+
+    #[test]
+    fn assistant_backend_descriptor_has_collection_shaped_action_contract() {
+        let descriptor = AssistantBackendDto {
+            id: "synthetic-hosted".to_owned(),
+            display_label: "Synthetic hosted".to_owned(),
+            composition_path: "hosted".to_owned(),
+            available: true,
+            reason_code: None,
+            supported_languages: vec!["en-US".to_owned(), "ko-KR".to_owned()],
+            supported_actions: vec!["extract-memories".to_owned(), "draft-entry".to_owned()],
+        };
+        assert_eq!(
+            serde_json::to_value(descriptor).unwrap(),
+            serde_json::json!({
+                "id": "synthetic-hosted",
+                "display_label": "Synthetic hosted",
+                "composition_path": "hosted",
+                "available": true,
+                "reason_code": null,
+                "supported_languages": ["en-US", "ko-KR"],
+                "supported_actions": ["extract-memories", "draft-entry"]
+            })
+        );
+    }
+
+    #[test]
+    fn workflow_dto_rejects_partial_or_malformed_assistant_selection() {
+        let base = serde_json::json!({
+            "id": "wf_20261029",
+            "diary_day": "2026-10-29",
+            "state": "composing",
+            "revision": 2,
+            "buffer_version": 0,
+            "language": "en-US",
+            "style": "concise",
+            "assistant_backend_id": null,
+            "composition_path": null,
+            "selection_digest": null,
+            "explicit_empty_selection": true,
+            "invalidation_code": null,
+            "entry_text": "",
+            "entry_confirmed": false,
+            "candidates": []
+        });
+        assert!(serde_json::from_value::<WorkflowDto>(base.clone()).is_ok());
+
+        for (backend_id, path) in [
+            (serde_json::json!("hosted-default"), serde_json::Value::Null),
+            (serde_json::Value::Null, serde_json::json!("hosted")),
+            (
+                serde_json::json!("Hosted Default"),
+                serde_json::json!("hosted"),
+            ),
+            (
+                serde_json::json!("hosted-default"),
+                serde_json::json!("manual"),
+            ),
+        ] {
+            let mut invalid = base.clone();
+            invalid["assistant_backend_id"] = backend_id;
+            invalid["composition_path"] = path;
+            assert!(serde_json::from_value::<WorkflowDto>(invalid).is_err());
+        }
+
+        let mut valid = base;
+        valid["assistant_backend_id"] = serde_json::json!("hosted-default");
+        valid["composition_path"] = serde_json::json!("hosted");
+        assert!(serde_json::from_value::<WorkflowDto>(valid).is_ok());
     }
 
     #[test]

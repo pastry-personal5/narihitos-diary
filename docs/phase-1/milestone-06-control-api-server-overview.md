@@ -7,6 +7,11 @@ loopback Control API Server and makes `nd serve` a recoverable foreground
 process. It supplies the transport needed by P1-M7 without moving diary policy
 into HTTP handlers.
 
+P1-M12 later revises the unshipped native-client DTO and preference shape before
+P1-M7. M6's checked evidence remains the historical record for the initial
+server implementation; the current contract is documented in
+[Control API `/v1`](../control-api-v1.md).
+
 ## Goal
 
 Provide the versioned REST, SSE, job, lifecycle, and local authorization

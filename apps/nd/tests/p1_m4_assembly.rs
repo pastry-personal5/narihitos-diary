@@ -29,6 +29,7 @@ fn core_and_sqlite_assemble_without_starting_a_production_service() {
             workflow.revision(),
             vec![SourceCandidate {
                 source: SourceRef::new("fake", "note-1").unwrap(),
+                source_note_name: "note-1.md".to_owned(),
                 date_evidence: DateEvidence {
                     directory_day: Some(day.clone()),
                     header_day: Some(day.clone()),

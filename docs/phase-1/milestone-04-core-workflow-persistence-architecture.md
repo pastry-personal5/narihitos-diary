@@ -34,7 +34,7 @@ remain with P1-M5 and P1-M8 through P1-M11.
 
 | Boundary | P1-M4 responsibility | Later owner |
 |---|---|---|
-| `diary-core` | Values, inward ports, use cases, typed outcomes, transition and invalidation policy, conditional revisions, plan/approval rules, and per-destination publication policy | Real source/model/output behavior in P1-M5 and P1-M8–M11 |
+| `diary-core` | Values, inward ports, use cases, typed outcomes, transition and invalidation policy, conditional revisions, plan/approval rules, and per-destination publication policy | Real source/assistant/output behavior in P1-M5 and P1-M8–M11 |
 | `diary-connectors` | SQLite `WorkflowStore` and `OperationLog` with forward migrations and tests against temporary databases | Ayumi, Apple, local Markdown, and Notion connectors in later milestones |
 | `apps/nd` | Test-only assembly proving core and SQLite work together | Production database path, server lifecycle, and listener in P1-M6 |
 | Control contract and TUI | No new wire DTOs or screens | P1-M6 and P1-M7 |
@@ -86,9 +86,9 @@ A confirmed selection contains immutable snapshots for exactly the included
 sources. Zero selected sources require the separate explicit "continue without
 notes" action. That path enters `SourcesConfirmed` with an empty selection,
 disables assistant extraction, drafting, and paragraph review, and still
-permits the manual editor.
+permits manual editing in the Draft editor.
 Source `Changed` or `Unverifiable` at a required checkpoint clears
-confirmation, model results, output preview, and approval; retained user edits
+confirmation, assistant results, output preview, and approval; retained user edits
 become unconfirmed. Use fake freshness results at the post-read,
 pre-drafting-pass, pre-entry-confirmation, pre-preview, and pre-first-write
 checkpoints. M5 supplies the real metadata/digest checks.
@@ -100,10 +100,12 @@ preview, and approval bindings without turning the edit into a workflow-revision
 conflict. Entry confirmation checks both the workflow revision and buffer
 version in the same atomic update, so a racing autosave cannot confirm an older
 buffer. It refuses blank text and unresolved inferred-reflection delimiters. A
-language/style change stales model material while preserving manual text. Store
-the last language and composition-path choices. Concise and hosted are the
-specified initial defaults; no initial writing-language default has been
-decided, so the core must represent its absence until the person chooses one.
+language/style change stales assistant material while preserving manually
+edited text. At M4 completion the core stored the last language and composition
+path with concise and hosted defaults; P1-M12 supersedes that pre-client shape
+with an optional assistant backend ID and a path derived from its descriptor.
+No initial writing-language default has been decided, so the core represents
+its absence until the person chooses one.
 
 An output plan is immutable once previewed. Bind its approval to the current
 workflow revision, confirmed entry digest, selected source IDs/digests, target
@@ -126,7 +128,7 @@ Design the logical records and their ownership before choosing table names:
 |---|---|
 | Workflow | Day, state, workflow revision, timestamps, selected source references and safe snapshots, invalidation reason, and confirmed digests |
 | Entry buffer | Recoverable edited text, buffer version, and confirmation binding |
-| Preferences | Last writing language and composition path; style defaults to concise for a new entry |
+| Preferences | At M4 completion, last writing language and composition path; P1-M12 migrates this to last language and optional assistant backend ID. Style defaults to concise for a new entry. |
 | Plan and per-target status | Immutable plan/approval bindings and each destination's pending, blocked, conflicting, or verified result |
 | Operation intent | Plan ID, day, destination, payload digest, write attempt identity, and reconciliation status, persisted before an external effect |
 | Receipt | Version, entry/source/payload digests, destination identity and returned IDs, verification status and time, without duplicate prose |

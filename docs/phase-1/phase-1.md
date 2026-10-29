@@ -3,7 +3,7 @@
 Status: Active
 
 Goal: Make remembering a day feel effortless through a macOS terminal user
-interface that turns existing Markdown notes into a final diary entry and
+interface that turns existing Markdown source notes into a finished diary entry and
 publishes its body to a Notion daily section.
 
 ## Scope
@@ -22,7 +22,7 @@ publishes its body to a Notion daily section.
   drafting and paragraph review through a selectable assistant-backend
   registry: hosted by default (provider undecided), Apple on-device, and future
   approved adapters without a workflow-layout change.
-- Produce one final diary entry as a Markdown file on the local filesystem.
+- Produce one finished diary entry as a Markdown file on the local filesystem.
 - Amend a completed entry, replacing only content the app itself wrote.
 - Use the configured Notion root page with `YYYY` year and `YYYY-MM` month
   subpages; append the confirmed Markdown body as a daily section at the
@@ -38,16 +38,16 @@ publishes its body to a Notion daily section.
   registered implementations without provider-specific workflow stages.
 - A completed entry can be amended without overwriting content the app did not
   write.
-- The application can read Markdown source files from a mounted iCloud
+- The application can read Markdown source notes from a mounted iCloud
   directory.
 - Before composition, the TUI shows the source-note selection and any directory
   versus header date disagreement; the user can include or exclude discovered
   notes even when their metadata date does not match the diary day.
-- The final diary entry is composed from exactly the confirmed source-note
+- The finished diary entry is composed from exactly the confirmed source-note
   selection.
 - Ayumi entries remain eligible with or without audio attachments, and neither
   audio bytes nor attachment paths appear in composition input or output.
-- A completed run writes the final diary entry as a local Markdown file.
+- A completed run writes the finished diary entry as a local Markdown file.
 - The completed run creates missing Notion year/month subpages as needed and
   publishes the confirmed entry body under its diary-day heading at the
   bottom of the target month page.
@@ -140,21 +140,38 @@ job, and lifecycle contract.
 Plan: [overview](milestone-06-control-api-server-overview.md),
 [architecture plan](milestone-06-control-api-server-architecture.md).
 
-Notes: The owner-approved Tokio/Axum server, strict v1 DTOs, command/CAS layer,
+Notes: The owner-approved Tokio/Axum server, initial strict `/v1` DTOs, command/CAS layer,
 bounded jobs and SSE, private lifecycle/runtime advertisement, loopback
 authorization, and content-free rotating diagnostics are implemented. Synthetic
 command, real-socket, restart, permission, retention, and privacy tests pass;
 the full Rust and Swift gate passed on 2026-10-29. A post-completion review then
 hardened prepared-source review, job/SSE recovery, request diagnostics,
 filesystem safety, and retention; its focused regressions and the complete gate
-passed again on 2026-10-29.
+passed again on 2026-10-29. P1-M12 revised the unshipped client contract
+before P1-M7 without changing the REST namespace.
+
+### P1-M12: Consistency and contract readiness
+
+Status: Done
+
+Goal: Reconcile every active document and implemented lower-layer contract with
+the canonical UX vocabulary and revised assistant architecture before P1-M7.
+
+Plan: [overview](milestone-12-consistency-contracts-overview.md),
+[architecture plan](milestone-12-consistency-contracts-architecture.md).
+
+Notes: This owner-directed milestone executes after P1-M6 and before P1-M7
+despite its number. It may break the unshipped Control API contract, but it must
+forward-migrate durable workflow and publication state. The documentation and
+codebase consistency review, contract version 2 migration, M7 lower-layer
+readiness work, and complete Rust/Swift gate passed on 2026-10-29.
 
 ### P1-M7: TUI and manual workflow
 
 Status: Planned
 
-Goal: Let a person reach a confirmed, recoverable entry through the `nd` TUI
-and the always-available manual path.
+Goal: Let a person reach a confirmed, recoverable entry through the `nd`
+terminal client and the always-available Draft editor.
 
 Plan: [overview](milestone-07-tui-manual-workflow-overview.md),
 [architecture plan](milestone-07-tui-manual-workflow-architecture.md).

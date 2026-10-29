@@ -16,20 +16,22 @@ experience; it does not claim an implemented screen or keybinding.
 - Show directory and header dates together when choosing source notes, visibly
   mark disagreements and malformed metadata, and allow inclusion or exclusion
   regardless of either date.
-- Keep the two-sidebar layout stable: the left Workflow Sidebar shows `Start`,
-  `Sources`, `Compose`, `Review`, `Preview`, and `Publish`; the middle Resources
-  Sidebar shows context resources; and the right Main Pane shows the active
-  resource. Activating a readable source is distinct from including it in the
-  source set.
+- Keep the two-sidebar layout stable beneath a full-width Work Status pane: the
+  left Workflow Sidebar shows `Start`, `Sources`, `Compose`, `Review`,
+  `Preview`, and `Publish`; the middle Resources Sidebar shows context
+  resources; and the right Main Pane shows the active resource. Work Status has
+  four content rows excluding title and borders and explains current work and
+  useful messages. Activating a readable source is distinct from including it
+  in the source set.
 - Request downloads only for selected cloud-only notes. Keep unavailable and
   unreadable states distinct from an empty note.
 - Start a new workflow on today's date in the Mac's local time zone, and list
   unfinished drafts first. The person can discard a draft at any time.
-- Offer a multiline manual editor at all times after source confirmation,
+- Offer the multiline Draft editor for manual editing at all times after source confirmation,
   including when assistant support is unavailable or fails. Optional
   assistance uses a source-linked memory review before drafting.
 - Let a day with no source notes continue through an explicit “continue without
-  notes” confirmation. Only the manual editor is offered, and a blank entry
+  notes” confirmation. Only manual editing in the Draft editor is offered, and a blank entry
   cannot be confirmed.
 - List assistant backends from server capabilities instead of assuming a fixed
   two-item choice. Label the selected backend and its composition path (hosted
@@ -46,7 +48,7 @@ experience; it does not claim an implemented screen or keybinding.
 - Offer US English and South Korean Korean per entry, remember the last choice,
   and offer concise, standard, and reflective styles with concise as default.
   The choice names the language of the finished entry; source notes are
-  expected to be en-US. Mark model-inferred reflections for human review.
+  expected to be en-US. Mark assistant-inferred reflections for human review.
 - Require confirmation of the complete edited entry and then show the exact
   local and Notion outputs before the first write. Display the root/year/month
   path and any subpages that would be created. Show conflicts and partial
@@ -93,6 +95,13 @@ Real-terminal acceptance checks this with the Korean IME active.
 
 ## Proposed presentation details
 
+Work Status is a non-focusable pane above all three columns. Its four fixed
+content rows prioritize current or recent work, pending or blocked work,
+connection and draft-save safety, and a useful safe notice or next action. The
+bottom Status Line remains the compact diary-day, workflow, connection, IME,
+progress, error, and action-hint summary; repeating an important item in both is
+intentional. A decision and its controls still belong in the Main Pane Banner.
+
 The Resources Sidebar lists source notes with separate active and included
 states. Activating a readable note opens its sanitized text in the Main Pane;
 when no body is active, the Main Pane can show a candidate table with inclusion,
@@ -117,9 +126,10 @@ shows the current paragraph, proposed replacement, backend label, and explicit
 Accept and Reject controls; a stale suggestion is read-only and cannot be
 applied. Entry review shows the entire edited text, not a summary. Unsent text is flushed to the server after about a second without
 typing, when focus leaves the editor, and before quitting; if the server is
-unreachable the Status Line says so and quitting asks first. If freshness fails
-or another client changes the workflow, a Banner explains what must be reread
-and recovered edits stay visible without being treated as confirmed.
+unreachable Work Status and the compact Status Line say so and quitting asks
+first. If freshness fails or another client changes the workflow, a Banner
+explains what must be reread and recovered edits stay visible without being
+treated as confirmed.
 
 The output preview should show the local file path and rendered Markdown,
 followed by the Notion destination, heading, and exact body. It separates

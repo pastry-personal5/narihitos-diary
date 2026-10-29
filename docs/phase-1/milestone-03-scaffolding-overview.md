@@ -78,7 +78,7 @@ tool remains subject to the repository's owner-approval rule.
   `../libexec/apple-bridge` relative to the installed `nd` executable, then
   from `helpers/apple-bridge/.build/debug/apple-bridge` in a development
   checkout. A missing helper marks Apple-backed capabilities unavailable and
-  does not disable hosted drafting or the manual editor.
+  does not disable hosted drafting or the Draft editor.
 - Resolve configuration from `ND_CONFIG_PATH` when set, otherwise from
   `config/global_config.yaml` relative to the server working directory. The
   override has precedence. Once configuration loading is implemented, a

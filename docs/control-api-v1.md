@@ -1,9 +1,11 @@
-# Control API v1
+# Control API `/v1` contract
 
 Status: Active
 
-This document describes how the P1-M7 terminal client attaches to the P1-M6
-loopback server. The checked Rust DTO and route table in
+This document describes how the P1-M7 terminal client attaches to the loopback
+server after P1-M12's pre-client contract revision. The REST namespace remains
+`/v1`; the current native `contract_version` is `2` and rejects incompatible
+clients. The checked Rust DTO and route table in
 `diary-control-contract` remain the executable contract.
 
 ## Attachment and authorization
@@ -11,8 +13,9 @@ loopback server. The checked Rust DTO and route table in
 A human starts `nd serve` in the repository root. After binding and answering
 its own health probe, the process atomically publishes an owner-only runtime
 advertisement in its private Application Support runtime directory. The native
-client reads its numeric `127.0.0.1` port, 256-bit ephemeral bearer token,
-instance ID, and contract version, then verifies that unauthenticated
+client uses the shared read-only attachment loader to validate the existing
+directory, file, and exact contract version before reading its numeric
+`127.0.0.1` port, 256-bit ephemeral bearer token, and instance ID, then verifies that unauthenticated
 `GET /v1/health` returns the same instance and contract.
 
 Every other route requires exactly one `Authorization: Bearer <token>` header.
@@ -24,14 +27,23 @@ RFC 9457 problem JSON and SSE, uses `Cache-Control: no-store`.
 
 ## Resources and preconditions
 
-The route inventory is frozen in `diary_control_contract::ROUTES`. P1-M6
+The route inventory is frozen in `diary_control_contract::ROUTES`. The pre-M7 server
 exposes health/capabilities/setup, preferences, workflows, discovery, source
 preparation and confirmation, explicit no-notes continuation, writing
-settings, manual composition, entry save/confirmation, jobs, and events.
+settings, opening the Draft editor for manual composition, entry save/confirmation, jobs, and events.
 Draft-assistant, output, amendment, publication, and `/mcp` routes do not exist.
 `source:read`, including availability-aware discovery and preparation, is
 advertised and accepted only while the Swift helper is available; its absence
-does not prevent the explicit no-notes manual path.
+does not prevent the explicit continue-without-notes action from a newly
+started workflow.
+
+Capabilities report `manual_workflow_available` separately from
+`assistant_backends[]`. Manual editing has no backend ID or composition path.
+Before P1-M8 the backend array is empty; writing settings therefore accept only
+a null assistant backend ID. A future descriptor binds one stable backend ID to
+its display label, hosted or Apple-on-device path, availability/reason,
+supported languages, and supported actions. Preferences remember an optional
+backend ID, never an independent path.
 
 Workflow IDs use `wf_YYYYMMDD` but are opaque to clients. Workflow mutations
 require strong `If-Match: "wf-<revision>"`; entry autosave instead requires
@@ -48,8 +60,13 @@ prepared body and its post-read date evidence through the existing source-detail
 route using one `X-ND-Preparation-Handle` header; the handle never appears in a
 URL, and the route rejects duplicate, expired, or mismatched handles. Without
 that header, source detail remains limited to a currently confirmed snapshot.
-An empty selection is rejected by the ordinary route and uses the separate
-explicit confirmation route.
+Each candidate and detail representation pairs its opaque command ID with a
+safe local `source_note_name`; for Ayumi this is the relative source-note path. The
+source-note name is not accepted back as an ID and is absent from jobs, events,
+diagnostics, and assistant request envelopes. An empty selection is rejected by
+the ordinary route and uses the separate explicit confirmation route. That
+dedicated route may advance either `Started` or `Discovered` without inventing
+a discovery result.
 
 ## Bounds and recovery
 
@@ -80,4 +97,5 @@ advertised server without diagnostics.
 All diary days are `YYYY-MM-DD`; transport timestamps are signed Unix
 milliseconds. Random instance, job, preparation, and correlation IDs contain
 256 OS-random bits as 64 lowercase hexadecimal digits after their type prefix.
-Unknown JSON fields and unavailable composition paths fail closed.
+Unknown JSON fields, unknown assistant backend IDs, partial backend/path state,
+and incompatible contract versions fail closed.

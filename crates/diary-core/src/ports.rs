@@ -3,10 +3,11 @@
 use std::fmt;
 
 use crate::{
-    CatalogRequest, DiaryDay, FreshnessCheckpoint, FreshnessOutcome, InspectionOutcome,
-    OperationIntent, Preferences, Receipt, ReconciliationGate, SourceAccessError, SourceDiscovery,
-    SourceReadOutcome, SourceSnapshot, Timestamp, Workflow, WorkflowError, WorkflowSummary,
-    WriteOutcome,
+    AssistantAction, AssistantBackendDescriptor, CatalogRequest, DiaryDay, DraftAssistantError,
+    DraftAssistantRequest, DraftAssistantResponse, FreshnessCheckpoint, FreshnessOutcome,
+    InspectionOutcome, OperationIntent, Preferences, Receipt, ReconciliationGate,
+    SourceAccessError, SourceDiscovery, SourceReadOutcome, SourceSnapshot, Timestamp, Workflow,
+    WorkflowError, WorkflowSummary, WriteOutcome,
 };
 
 pub trait Clock {
@@ -64,7 +65,7 @@ pub trait WorkflowStore {
         preferences: &Preferences,
     ) -> Result<(), StoreError>;
 
-    /// Clears recoverable source/model/entry text but preserves digests,
+    /// Clears recoverable source/assistant/entry text but preserves digests,
     /// receipts, and unresolved intents.
     fn discard(
         &self,
@@ -126,6 +127,18 @@ pub trait SourceReader {
     fn revalidate(&self, snapshot: &SourceSnapshot) -> Result<FreshnessOutcome, SourceAccessError>;
 
     fn request_download(&self, source: &crate::SourceRef) -> Result<(), SourceAccessError>;
+}
+
+/// One assistant backend. The port exposes no filesystem, connector, workflow,
+/// confirmation, approval, publication, or shell capability.
+pub trait DraftAssistant {
+    fn descriptor(&self) -> AssistantBackendDescriptor;
+
+    fn invoke(
+        &self,
+        action: AssistantAction,
+        request: &DraftAssistantRequest,
+    ) -> Result<DraftAssistantResponse, DraftAssistantError>;
 }
 
 pub fn revalidate_workflow_sources(

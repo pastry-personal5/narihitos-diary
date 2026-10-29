@@ -19,8 +19,8 @@ use axum::routing::{get, post, put};
 use axum::{Json, Router};
 use diary_control_contract::*;
 use diary_core::{
-    CompositionPath, DiaryDay, Digest, InvalidationReason, Preferences, SelectedSource, SourceRef,
-    StartOutcome, Workflow, WritingLanguage, WritingStyle,
+    AssistantBackendId, DiaryDay, Digest, InvalidationReason, Preferences, SelectedSource,
+    SourceRef, StartOutcome, Workflow, WritingLanguage, WritingStyle,
 };
 use futures_core::Stream;
 use serde::Deserialize;
@@ -172,13 +172,30 @@ pub async fn serve(
 }
 
 pub async fn bind_loopback(port_fallback_count: u16) -> Result<(TcpListener, u16), &'static str> {
+    let ports = loopback_ports(port_fallback_count)?;
+    bind_loopback_ports(ports).await
+}
+
+fn loopback_ports(port_fallback_count: u16) -> Result<std::ops::RangeInclusive<u16>, &'static str> {
     if port_fallback_count > 16 {
         return Err("listener-port-count-invalid");
     }
     let last = 8772_u16.saturating_add(port_fallback_count);
-    for port in 8771..=last {
+    Ok(8771..=last)
+}
+
+async fn bind_loopback_ports(
+    ports: impl IntoIterator<Item = u16>,
+) -> Result<(TcpListener, u16), &'static str> {
+    for port in ports {
         match TcpListener::bind(("127.0.0.1", port)).await {
-            Ok(listener) => return Ok((listener, port)),
+            Ok(listener) => {
+                let bound_port = listener
+                    .local_addr()
+                    .map_err(|_| "listener-bind-failed")?
+                    .port();
+                return Ok((listener, bound_port));
+            }
             Err(error) if error.kind() == std::io::ErrorKind::AddrInUse => continue,
             Err(_) => return Err("listener-bind-failed"),
         }
@@ -359,7 +376,7 @@ fn route_code(path: &str) -> &'static str {
     } else if path.ends_with("/writing-settings") {
         "settings"
     } else if path.ends_with("/manual-compositions") {
-        "manual"
+        "draft-editor"
     } else if path.ends_with("/entry-confirmations") {
         "confirmation"
     } else if path.ends_with("/entry") {
@@ -476,30 +493,8 @@ async fn capabilities(State(state): State<AppState>) -> Json<CapabilitiesDto> {
     }
     Json(CapabilitiesDto {
         capabilities,
-        composition_paths: vec![
-            CompositionPathDto {
-                id: "manual".to_owned(),
-                available: true,
-                reason_code: None,
-            },
-            CompositionPathDto {
-                id: "hosted".to_owned(),
-                available: false,
-                reason_code: Some("milestone-not-implemented".to_owned()),
-            },
-            CompositionPathDto {
-                id: "apple-on-device".to_owned(),
-                available: false,
-                reason_code: Some(
-                    if state.0.config.apple_helper_available {
-                        "milestone-not-implemented"
-                    } else {
-                        "helper-unavailable"
-                    }
-                    .to_owned(),
-                ),
-            },
-        ],
+        manual_workflow_available: true,
+        assistant_backends: Vec::new(),
         disabled_routes: vec![
             "/mcp".to_owned(),
             "/v1/drafts".to_owned(),
@@ -530,7 +525,7 @@ async fn put_preferences(
     Json(request): Json<PreferencesDto>,
 ) -> Result<Json<PreferencesDto>, ApiError> {
     validate_optional_string(request.last_language.as_deref())?;
-    validate_string(&request.last_composition_path)?;
+    validate_optional_string(request.last_assistant_backend_id.as_deref())?;
     let preferences = parse_preferences(request)?;
     let result = preferences.clone();
     let service = state.0.config.commands.clone();
@@ -686,13 +681,19 @@ async fn source_detail(
     validate_string(&source_id)?;
     let day = day_from_id(&id)?;
     let prepared_handle = optional_single_header(&headers, "x-nd-preparation-handle")?;
+    let service = state.0.config.commands.clone();
+    let workflow = blocking(move || service.load_workflow(&day)).await?;
+    let candidate = workflow
+        .candidates()
+        .iter()
+        .find(|candidate| opaque_source_id(&candidate.source) == source_id)
+        .ok_or_else(|| ApiError::new(StatusCode::NOT_FOUND, "source-not-found"))?;
+    let source_note_name = candidate.source_note_name.clone();
     let (snapshot, evidence) = if let Some(handle) = prepared_handle {
         validate_string(handle)?;
         let selected = prepared_source(&state, handle, &id, &source_id)?;
         (selected.snapshot, selected.date_evidence)
     } else {
-        let service = state.0.config.commands.clone();
-        let workflow = blocking(move || service.load_workflow(&day)).await?;
         let snapshot = workflow
             .snapshots()
             .iter()
@@ -709,6 +710,7 @@ async fn source_detail(
     };
     let body = serde_json::to_vec(&SourceDetailDto {
         id: source_id,
+        source_note_name,
         body: snapshot.body.clone(),
         content_digest: snapshot.stamp.content_digest.as_str().to_owned(),
         directory_day: evidence.directory_day.map(|day| day.as_str().to_owned()),
@@ -837,19 +839,17 @@ async fn set_writing_settings(
     let revision = workflow_precondition(&headers)?;
     validate_string(&request.language)?;
     validate_string(&request.style)?;
-    validate_string(&request.composition_path)?;
+    validate_optional_string(request.assistant_backend_id.as_deref())?;
     let language = WritingLanguage::parse(&request.language)
         .map_err(|_| ApiError::new(StatusCode::BAD_REQUEST, "invalid-language"))?;
     let style = WritingStyle::parse(&request.style)
         .map_err(|_| ApiError::new(StatusCode::BAD_REQUEST, "invalid-style"))?;
-    let path = CompositionPath::parse(&request.composition_path)
-        .map_err(|_| ApiError::new(StatusCode::BAD_REQUEST, "invalid-composition-path"))?;
-    if path != CompositionPath::Manual {
-        return Err(ApiError::from(CommandError::UnavailablePath));
+    if request.assistant_backend_id.is_some() {
+        return Err(ApiError::from(CommandError::UnavailableAssistantBackend));
     }
     let service = state.0.config.commands.clone();
     let workflow =
-        blocking(move || service.set_writing_settings(&day, revision, language, style, path))
+        blocking(move || service.set_writing_settings(&day, revision, language, style, None))
             .await?;
     publish_event(
         &state,
@@ -1563,7 +1563,12 @@ fn workflow_dto(workflow: &Workflow) -> WorkflowDto {
         buffer_version: workflow.entry().version,
         language: workflow.language().map(|value| value.as_str().to_owned()),
         style: workflow.style().as_str().to_owned(),
-        composition_path: workflow.composition_path().as_str().to_owned(),
+        assistant_backend_id: workflow
+            .assistant_selection()
+            .map(|selection| selection.backend_id.as_str().to_owned()),
+        composition_path: workflow
+            .composition_path()
+            .map(|path| path.as_str().to_owned()),
         selection_digest: workflow
             .selection_digest()
             .map(|value| value.as_str().to_owned()),
@@ -1593,6 +1598,7 @@ fn candidate_dtos(workflow: &Workflow) -> Vec<SourceCandidateDto> {
         .iter()
         .map(|candidate| SourceCandidateDto {
             id: opaque_source_id(&candidate.source),
+            source_note_name: candidate.source_note_name.clone(),
             directory_day: candidate
                 .date_evidence
                 .directory_day
@@ -1641,7 +1647,10 @@ fn preferences_dto(preferences: &Preferences) -> PreferencesDto {
         last_language: preferences
             .last_language
             .map(|value| value.as_str().to_owned()),
-        last_composition_path: preferences.last_composition_path.as_str().to_owned(),
+        last_assistant_backend_id: preferences
+            .last_assistant_backend_id
+            .as_ref()
+            .map(|backend_id| backend_id.as_str().to_owned()),
     }
 }
 
@@ -1693,14 +1702,17 @@ fn parse_preferences(dto: PreferencesDto) -> Result<Preferences, ApiError> {
         .map(WritingLanguage::parse)
         .transpose()
         .map_err(|_| ApiError::new(StatusCode::BAD_REQUEST, "invalid-language"))?;
-    let path = CompositionPath::parse(&dto.last_composition_path)
-        .map_err(|_| ApiError::new(StatusCode::BAD_REQUEST, "invalid-composition-path"))?;
-    if path != CompositionPath::Manual {
-        return Err(ApiError::from(CommandError::UnavailablePath));
+    let backend_id = dto
+        .last_assistant_backend_id
+        .map(AssistantBackendId::parse)
+        .transpose()
+        .map_err(|_| ApiError::new(StatusCode::BAD_REQUEST, "invalid-assistant-backend-id"))?;
+    if backend_id.is_some() {
+        return Err(ApiError::from(CommandError::UnavailableAssistantBackend));
     }
     Ok(Preferences {
         last_language: language,
-        last_composition_path: path,
+        last_assistant_backend_id: None,
     })
 }
 
@@ -1817,26 +1829,39 @@ mod tests {
             .enable_all()
             .build()
             .unwrap();
-        let first = StdTcpListener::bind(("127.0.0.1", 8771)).ok();
-        let (listener, port) = runtime.block_on(bind_loopback(2)).unwrap();
-        assert!((8771..=8774).contains(&port));
-        if first.is_some() {
-            assert_ne!(port, 8771);
-        }
-        drop(listener);
-        drop(first);
-
-        let reservations: Vec<_> = [8771_u16, 8772]
-            .into_iter()
-            .filter_map(|port| StdTcpListener::bind(("127.0.0.1", port)).ok())
-            .collect();
         assert_eq!(
-            runtime.block_on(bind_loopback(0)).unwrap_err(),
+            loopback_ports(2).unwrap().collect::<Vec<_>>(),
+            [8771, 8772, 8773, 8774]
+        );
+
+        let first = match StdTcpListener::bind(("127.0.0.1", 0)) {
+            Ok(listener) => listener,
+            Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => {
+                assert_eq!(
+                    loopback_ports(17).unwrap_err(),
+                    "listener-port-count-invalid"
+                );
+                return;
+            }
+            Err(error) => panic!("test listener bind failed: {error}"),
+        };
+        let occupied_port = first.local_addr().unwrap().port();
+        let (listener, port) = runtime
+            .block_on(bind_loopback_ports([occupied_port, 0]))
+            .unwrap();
+        assert_ne!(port, occupied_port);
+        assert_ne!(port, 0);
+        drop(listener);
+
+        assert_eq!(
+            runtime
+                .block_on(bind_loopback_ports([occupied_port]))
+                .unwrap_err(),
             "listener-ports-exhausted"
         );
-        drop(reservations);
+        drop(first);
         assert_eq!(
-            runtime.block_on(bind_loopback(17)).unwrap_err(),
+            loopback_ports(17).unwrap_err(),
             "listener-port-count-invalid"
         );
     }

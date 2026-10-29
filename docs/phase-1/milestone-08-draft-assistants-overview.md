@@ -3,7 +3,7 @@
 Status: Planned
 
 This milestone adds a registry of optional assistant backends behind the
-existing `DraftAssistant` port while preserving the always-available manual
+existing `DraftAssistant` port while preserving the always-available Draft
 editor. It delivers reviewed two-pass drafting and paragraph review without
 hard-coding the TUI or workflow to exactly two implementations. It cannot start
 until the hosted-provider decisions in `AGENTS.md` are resolved.
@@ -29,7 +29,8 @@ Phase 1 changelog; do not infer them from this plan.
   HTTP dependency and features, license/Rust compatibility, request limits,
   timeout/cancellation behavior, and a safe test strategy. Any manifest or
   Swift-package change follows the normal dependency approval rule.
-- The contract-version and persistence-migration plan below is accepted before
+- P1-M12's assistant-neutral contract and persistence migration are complete.
+  Any further contract version or schema change is planned explicitly before
   changing DTOs or stored preferences. Automated tests use fake providers and
   synthetic prose; no live model or private diary is used.
 
@@ -43,8 +44,8 @@ Phase 1 changelog; do not infer them from this plan.
   markers, paragraph review with accept/reject, validation, cancellation,
   timeouts, and manual fallback.
 - Swift helper model commands and the selected hosted adapter.
-- Assistant-backend, composition-path, and language preferences and visible
-  backend/path labels.
+- Assistant-backend and language preferences plus visible backend/path labels;
+  the backend descriptor owns composition path.
 - Type-level and runtime enforcement of the hosted-data egress envelope.
 
 ## Out of scope
@@ -62,15 +63,13 @@ Phase 1 changelog; do not infer them from this plan.
 - [ ] The registry exposes a collection rather than fixed hosted/Apple fields;
   tests register at least three fake backends and prove selection and routing by
   stable ID with no UI or workflow branch per backend.
-- [ ] A versioned Control API update replaces P1-M6's manual-as-path
-  representation with explicit manual availability plus backend descriptors.
-  The TUI rejects mismatched versions, and a SQLite migration maps the old
-  manual preference to no selected backend while preserving every workflow and
-  writing preference.
+- [ ] The P1-M12 manual-availability, backend-descriptor, optional-selection,
+  and migrated preference contracts remain intact while assistant routes and
+  result representations are added. Mixed-version clients fail closed.
 - [ ] The chosen hosted and Apple production adapters implement the same
   `DraftAssistant` contract and report availability, language support,
   per-action capabilities, timeouts, cancellation, and invalid output as typed
-  outcomes that preserve the manual path.
+  outcomes that preserve manual editing in the Draft editor.
 - [ ] Tests prove that hosted requests can contain only readable bodies,
   memories, drafts, edited text or the focused paragraph, language, and
   style—not excluded data classes.
@@ -90,10 +89,11 @@ Phase 1 changelog; do not infer them from this plan.
 - [ ] Apple helper tests cover availability, unsupported locale, crash, timeout,
   cancellation, and schema-invalid output without calling a live model.
 - [ ] Inside the existing Compose stage, the TUI lists all registered backends
-  and labels the selected backend and path in Setup, Main Pane, and Status Line.
-  The middle Resources Sidebar keeps the draft, confirmed sources, and assistant
-  suggestions reachable. A completed assistant draft becomes active as editable
-  text in the Main Pane; manual editing remains available after any failure.
+  and labels the selected backend and path in Setup, Main Pane, Work Status, and
+  Status Line. The middle Resources Sidebar keeps the draft, confirmed sources,
+  and assistant suggestions reachable. A completed assistant draft becomes
+  active as editable text in the Main Pane; manual editing remains available
+  after any failure.
 - [ ] Synthetic end-to-end composition tests cover both production adapter
   contracts, multi-backend selection, paragraph accept/reject, and source
   freshness checks before each assistant call.
@@ -111,7 +111,7 @@ result is observed; record synthetic evidence only.
 |---|---|
 | Owner-approved provider, credential, HTTP, and migration packet | Pending |
 | Registry and three-fake routing tests | Pending |
-| Contract-version and SQLite preference-migration tests | Pending |
+| P1-M12 contract compatibility and any M8 migration tests | Pending |
 | Hosted egress-envelope and production-adapter contract tests | Pending |
 | Apple helper fake availability/failure tests | Pending |
 | Drafting, paragraph accept/reject, freshness, and TUI vertical flows | Pending |

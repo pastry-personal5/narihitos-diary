@@ -40,7 +40,7 @@ scheme, HTTP dependency, or Swift package was approved.
   for the [workflow state table](../planned-mvp-architecture.md#workflow-states-and-invalidation).
 - Source-selection and freshness outcomes supplied by fakes, the explicit
   empty-selection path, manual entry confirmation, and placeholders for later
-  reviewed drafting without implementing a model.
+  reviewed drafting without implementing an assistant adapter.
 - Workflow revisions and independent entry-buffer versions, with atomic stale
   update rejection and confirmation/approval bound to exact state and digests.
 - Core publication orchestration exercised with fake destinations: per-target
@@ -91,16 +91,18 @@ scheme, HTTP dependency, or Swift package was approved.
 - [x] Tests cover selection include/exclude regardless of date evidence,
   changed and unverifiable freshness outcomes, retention of unconfirmed user
   edits after invalidation, explicit continuation with zero selected notes,
-  disabled model steps for that case, and refusal to confirm a blank entry or
+  disabled assistant actions for that case, and refusal to confirm a blank entry or
   unresolved inferred-reflection marker.
 - [x] A diary day has at most one current workflow: choosing an unfinished day
   resumes it, and choosing a completed day preserves its receipt for the later
   amendment path. A fixed-clock test checks the Mac-local default day.
-- [x] The last language and composition-path choices persist, while a new
-  entry defaults to concise style and hosted composition. With no remembered
+- [x] At M4 completion, the last language and composition-path choices
+  persisted while a new entry defaulted to concise style and hosted
+  composition. P1-M12 supersedes that pre-client representation with an
+  optional assistant backend ID and backend-owned path. With no remembered
   language, the core requires an explicit choice rather than inventing a
-  default. Changing language or style stales model material without discarding
-  manual text.
+  default. Changing language or style stales assistant material without
+  discarding manually edited text.
 
 ### Revisions, storage, and recovery
 

@@ -442,7 +442,7 @@ fn valid_http_route(route: &str) -> bool {
             | "preparation"
             | "selection"
             | "settings"
-            | "manual"
+            | "draft-editor"
             | "entry"
             | "confirmation"
             | "job"

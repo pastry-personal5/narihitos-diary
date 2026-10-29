@@ -6,6 +6,10 @@ This plan makes the control transport an inbound adapter around the completed
 P1-M4 use cases and P1-M5 source connectors. It defines the manual-workflow
 contract needed by P1-M7 while reserving later behavior for its own milestone.
 
+P1-M12 supersedes the pre-client manual-as-path DTO and preference details in
+this completed plan while retaining its lifecycle, authorization, bounded-job,
+SSE, and source-preparation architecture.
+
 ## Preconditions and boundaries
 
 Implementation begins only after P1-M4 and P1-M5 are `Done`, P1-M6 is `Active`,

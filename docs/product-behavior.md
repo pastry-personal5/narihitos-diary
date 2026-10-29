@@ -1,6 +1,6 @@
 # Product behavior
 
-Status: Proposal
+Status: Active
 
 This document summarizes the intended user-visible diary workflow. The
 [architecture](planned-mvp-architecture.md) describes where the behavior lives;
@@ -23,12 +23,12 @@ stage, and activating one displays its content in the right Main Pane.
    loaded separately. Review proposed notes. Both the directory date and a
    valid offset-aware `created_at` date can suggest a note for the chosen day.
    Show disagreements and warnings; the person decides which readable notes to
-   include. Activating a source in the middle sidebar shows its readable text in
+   include. Activating a source note in the Resources Sidebar shows its readable text in
    the Main Pane without changing whether it is included. Acquire included
    cloud-only notes when needed, then confirm a fresh source selection. A source
    change requires rereading and reconfirmation before any output. A day with no
    notes can continue through an explicit "continue without notes"
-   confirmation, which leaves only the manual editor.
+   confirmation, which leaves only manual editing in the Draft editor.
 3. **Compose:** Write the entry in a multiline editor. Optional assistance is
    selected from the server's available backend list. The first backends are
    the chosen hosted default and Apple on-device, and the architecture accepts
@@ -37,8 +37,8 @@ stage, and activating one displays its content in the right Main Pane.
    source-linked memories for review and then drafts from confirmed memories.
    When the draft job completes, the draft becomes the active resource and its
    full text opens in the Main Pane's editor, where the person can edit it. The
-   manual path stays available after any assistant failure. The confirmed
-   sources remain in the middle sidebar for read-only inspection. Choose US
+   Draft editor stays available for manual editing after any assistant failure. The confirmed
+   source notes remain in the Resources Sidebar for read-only inspection. Choose US
    English or South Korean Korean as the entry language and a concise, standard,
    or reflective style; remember the last language choice and start with concise
    style. Source notes are expected to be en-US, so a South Korean Korean entry

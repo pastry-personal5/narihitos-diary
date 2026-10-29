@@ -2,9 +2,10 @@
 
 Status: Active
 
-These terms give the terminal client consistent labels for its
-workflow, stages, and components. They use the language of the existing product
-decisions; code-facing names are suggestions for later implementation.
+These terms are the canonical labels for the terminal client's workflow,
+stages, and components. New code uses the code-facing names unless an existing
+external contract requires a versioned migration; historical research may keep
+the terminology needed to describe its evidence.
 
 ## Canonical workflow stages
 
@@ -16,7 +17,7 @@ workflow states.
 |---|---|---|
 | Start | `start` | Server and setup status, unfinished workflows, and diary-day choice. |
 | Sources | `sources` | Discovery, source-note inclusion, readable-text inspection, selected-only download, and source-set confirmation. |
-| Compose | `compose` | Assistant selection, optional memory review, draft creation, manual editing, and paragraph review. The manual editor is always available. |
+| Compose | `compose` | Assistant selection, optional memory review, draft creation, manual editing, and paragraph review. The Draft editor is always available. |
 | Review | `review` | Review and confirmation of the complete edited entry. |
 | Preview | `preview` | Exact local and Notion output plans and approval. |
 | Publish | `publish` | Per-destination progress, verification, retry, and conflict resolution. |
@@ -28,21 +29,22 @@ presentation-only `current` marker because its resource is open in the Main
 Pane. The current marker can coexist with `done`, `available`, or `stale` and
 does not mutate the server's authoritative domain state.
 
-## Proposed visible terms
+## Canonical visible terms
 
 | UI term | Code-facing name | Meaning |
 |---|---|---|
 | Diary day | `diary_day` | The single date used for discovery, output naming, and Notion heading. |
 | Source note | `source_note` | One discovered, selectable Markdown note. |
+| Source note name | `source_note_name` | Safe local presentation name for a source note, such as its Ayumi-relative path. It is distinct from the opaque source ID used by commands and never enters diagnostics or hosted-assistant input. |
 | Active resource | `active_resource` | The item whose content is shown in the Main Pane. Activating a source note for inspection does not include or exclude it. |
 | Date disagreement | `date_disagreement` | Directory and valid header dates differ. Neither date overrides the person's selection. |
 | Source selection | `source_selection` | The included notes and their confirmed snapshots. |
 | Download needed | `download_needed` | A selected iCloud note needs a local copy before it can be read. |
 | Memory review | `memory_review` | Optional review of assistant-extracted, source-linked memories. |
-| Draft editor | `draft_editor` | Multiline editor used for both manual and assistant-created drafts. |
+| Draft editor | `draft_editor` | Always-available multiline editor used for both manual and assistant-created drafts. Manual editing is not an assistant backend or a composition path. |
 | Assistant backend | `assistant_backend` | One selectable implementation of the shared `DraftAssistant` contract, identified independently from its execution boundary. Examples include an Apple on-device backend and a hosted backend; availability and supported actions are shown at runtime. |
 | Paragraph review | `paragraph_review` | An assistant suggestion for the paragraph focused at the editor cursor. The suggestion never changes the entry until the person accepts it; rejecting it leaves the entry unchanged. |
-| Inferred reflection | `inferred_reflection` | A model-suggested interpretation shown in the editor between reserved delimiters. The person accepts it by removing the delimiters, edits it, or removes it. |
+| Inferred reflection | `inferred_reflection` | An assistant-suggested interpretation shown in the editor between reserved delimiters. The person accepts it by removing the delimiters, edits it, or removes it. |
 | Entry review | `entry_review` | Review and confirmation of the complete edited diary entry. Refused while any reserved reflection delimiter character remains. |
 | Output preview | `output_preview` | Exact local and Notion payloads and destination paths before approval, including any destination that is blocked. |
 | Publication status | `publication_status` | Per-destination state: verified, pending, blocked, or conflict. |
@@ -65,14 +67,15 @@ described as empty merely because it has not downloaded. A `ko-KR` entry drafted
 from en-US notes is labeled a translation. The [UX information architecture](ux-information-architecture.md)
 places these terms in the stage flow.
 
-## Proposed chrome terms
+## Canonical chrome terms
 
-The terminal client's screen chrome is five zones, ordered from left to right as
-the Workflow Sidebar, Resources Sidebar, and Main Pane, followed by a bottom
-Command Line and bottom-most Status Line.
+The terminal client's screen chrome is six zones: a full-width Work Status pane
+above the left-to-right Workflow Sidebar, Resources Sidebar, and Main Pane,
+followed by a bottom Command Line and bottom-most Status Line.
 
 | UI term | Code-facing name | Meaning |
 |---|---|---|
+| Work Status | `work_status` | Full-width, read-only top pane with exactly four content rows excluding title and borders. It shows current/recent work, pending or blocked work, connection and draft-save safety, and a useful safe notice or next action. |
 | Workflow Sidebar | `workflow_sidebar` | Left chrome pane listing the six canonical stages and their stage state for jump-to-stage navigation. |
 | Resources Sidebar | `resources_sidebar` | Middle chrome pane listing context-relevant sources, inputs, assistant suggestions, or outputs with explicit resource state; activating an item shows its content in the Main Pane, and it may render an indented tree. |
 | Stage state | `stage_state` | A Workflow Sidebar progress marker: done, available, locked, or stale, plus a separate current marker for the stage open in the Main Pane. Always use text or symbols, never color alone. |
@@ -80,9 +83,10 @@ Command Line and bottom-most Status Line.
 | Main Pane | `main_pane` | Right chrome pane; renders the active stage and active resource. |
 | Banner | `banner` | Top region of the Main Pane for a condition that needs a decision, such as a conflict or a stale source, with its explanation. |
 | Command Line | `command_line` | Bottom single-line input for typed commands; not a text filter. Opens with a chord, takes ASCII tokens, and maps Hangul typed on the 2-Set Korean layout back to them. |
-| Status Line | `status_line` | Bottom-most ambient bar: diary day, workflow state, connection, IME indicator, progress, a short error summary, and action hints truncated by priority. |
+| Status Line | `status_line` | Bottom-most compact ambient bar: diary day, workflow state, connection, IME indicator, progress, a short error summary, and action hints truncated by priority. It may repeat important state shown in Work Status. |
 
-Status Line is the single realization of both the "App status" and
-"Action/status area" content named in the
-[UX information architecture](ux-information-architecture.md#chrome-layout).
+Work Status and Status Line are the expanded and compact realizations of the
+"App status" and "Action/status area" content named in the
+[UX information architecture](ux-information-architecture.md#chrome-layout);
+intentional duplication between them is allowed.
 Keys follow "Keybindings" in [AGENTS.md](../AGENTS.md).

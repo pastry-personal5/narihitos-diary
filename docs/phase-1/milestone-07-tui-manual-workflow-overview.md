@@ -13,11 +13,11 @@ recoverable diary entry with or without source notes.
 
 ## Entry criteria
 
-- P1-M6 is `Done`, the phase plan marks P1-M7 `Active`, and its implemented
-  contract, runtime-file lifecycle, conditional-write behavior, and event
-  semantics have been inspected. Resolve the contract-readiness findings below
-  and requalify P1-M6 before TUI implementation; the client must not guess DTO
-  shapes or compensate for a missing server operation.
+- P1-M12 is `Done`, the phase plan marks P1-M7 `Active`, and M12's revised
+  contract, runtime-attachment loader, source-note names, explicit
+  no-notes transition, conditional-write behavior, and event semantics have
+  been inspected. The client must not guess DTO shapes or compensate for a
+  missing server operation.
 - The owner approves the exact dependency and macOS FFI packet below before any
   manifest, workspace-member, feature, or crate-level unsafe-code-policy change.
 - Use synthetic workflows and fake API/IME/terminal implementations in
@@ -26,27 +26,11 @@ recoverable diary entry with or without source notes.
 
 ## Pre-implementation decision and contract gate
 
-The 2026-10-29 review of the implemented P1-M6 contract found three bounded
-corrections required by the already-decided M7 behavior:
-
-- Add one safe, read-only runtime-advertisement loader that validates directory
-  and file ownership, mode, type, link count, size, and descriptor/path identity
-  without creating private state. It returns a non-`Debug` attachment value and
-  never exposes the token to diagnostics or presentation state.
-- Give each source candidate and detail a stable, local-only display identity
-  such as its Ayumi-relative path in addition to its opaque command ID. The
-  display identity may reach the local TUI but never diagnostics or a hosted
-  assistant. Amend the pre-client `/v1` DTO fixtures rather than deriving a
-  filename from an opaque hash in the TUI.
-- Make the existing explicit empty-selection command usable from a newly
-  started workflow when `source:read` is unavailable. It must not fabricate a
-  discovery result or silently confirm an empty set; the person still invokes
-  the dedicated confirmation action.
-
-Treat these as P1-M6 defect corrections: update its plan/evidence with the code,
-run its focused lifecycle/contract/process tests and the full gate, then begin
-M7. Do not add a TUI-side file probe, source-label cache, or alternate no-notes
-transition.
+P1-M12 owns and requalifies the three lower-layer corrections found by the
+2026-10-29 M7 review: the safe runtime-advertisement loader, source-note
+names, and direct explicit no-notes transition. M7 consumes those implemented
+contracts and must not add a TUI-side file probe, source-name cache, fake
+discovery result, or alternate no-notes transition.
 
 The recommended M7 packet is pending owner approval:
 
@@ -84,8 +68,12 @@ owner if the lockfile does not match the packet.
   `Publish`) in the left Workflow Sidebar. M7 enables the manual flow through
   Review and renders later stages as locked; later milestones add behavior
   without renaming or inserting stages.
+- A full-width Work Status pane above the Workflow Sidebar, Resources Sidebar,
+  and Main Pane. Its four content rows explain current work and retain useful
+  safe messages; the compact bottom Status Line remains and may repeat the most
+  important state.
 - Source selection/detail, selected-only preparation, empty-day confirmation,
-  manual editor, entry review, and stage invalidation UX. The middle Resources
+  Draft editor, entry review, and stage invalidation UX. The middle Resources
   Sidebar distinguishes the active source from the included set; activating a
   prepared or confirmed source renders its readable text in the Main Pane.
 - Multiline autosave, recovery, per-entry language/style selection, remembered
@@ -108,9 +96,8 @@ owner if the lockfile does not match the packet.
 
 ### Client attachment and workflow authority
 
-- [ ] The three P1-M6 contract-readiness corrections are implemented without a
-  client workaround; their focused regressions and P1-M6 requalification pass.
-  The owner-approved M7 dependency/FFI packet matches Cargo metadata, the
+- [ ] P1-M12 is `Done` with its lower-layer contract evidence, and no client
+  workaround duplicates it. The owner-approved M7 dependency/FFI packet matches Cargo metadata, the
   lockfile, and the workspace structure before implementation begins.
 - [ ] `nd` attaches only through a validated runtime file and matching health
   response, never starts the server, never logs the token, and shows
@@ -126,18 +113,23 @@ owner if the lockfile does not match the packet.
   preserve the local intent, explain the conflict safely, and require a state
   reload rather than retrying blindly.
 - [ ] The explicit no-notes path requires its confirmation, hides unavailable
-  assistant actions, opens the manual editor, and refuses a blank confirmed
+  assistant actions, opens the Draft editor, and refuses a blank confirmed
   entry.
 
 ### Layout, editor, and interaction
 
-- [ ] The standard layout has a left Workflow Sidebar, middle Resources
-  Sidebar, and right Main Pane. The left sidebar always uses the canonical
-  `Start`, `Sources`, `Compose`, `Review`, `Preview`, and `Publish` order with
-  server-derived progress state and one presentation-only current marker;
-  Preview and Publish are visibly locked in M7.
+- [ ] The standard layout has a full-width Work Status pane above a left
+  Workflow Sidebar, middle Resources Sidebar, and right Main Pane. Work Status
+  has exactly four content rows excluding its border and title, shows current
+  work plus useful safe messages, and may intentionally duplicate important
+  state from the compact bottom Status Line. The Workflow Sidebar always uses
+  the canonical `Start`, `Sources`, `Compose`, `Review`, `Preview`, and
+  `Publish` order with server-derived progress state and one presentation-only
+  current marker; Preview and Publish are visibly locked in M7.
   Both sidebars remain accessible through focus when terminal width collapses
-  either one; resource state is explicit and trees retain their hierarchy.
+  either one; resource state is explicit and trees retain their hierarchy. The
+  minimum supported terminal size is 80 columns by 30 rows; below it the client
+  shows only the terminal-too-small notice.
 - [ ] In Sources, active focus and inclusion are independent: activating a
   prepared source renders its sanitized readable text in the Main Pane without
   changing inclusion, while include/exclude changes only the prospective set.
@@ -151,17 +143,18 @@ owner if the lockfile does not match the packet.
   recovered text as confirmed. A reload or conflict keeps both local unsent and
   canonical server text visible for deliberate resolution.
 - [ ] Entry language and style are represented by the server-owned workflow;
-  only the last language and composition path are remembered, while every new
+  only the last language and optional assistant backend ID are remembered, while every new
   workflow defaults style to concise. The selected output language is visible
   in the editor and review. Reserved inferred-reflection delimiters, if present,
   identify the first unresolved span and refuse confirmation.
 - [ ] ViewModel and renderer tests cover canonical stage mapping and impact
-  notices, active-resource versus included-source behavior, prepared and
+  notices, Work Status priority and four-row rendering, intentional Status Line
+  duplication, active-resource versus included-source behavior, prepared and
   confirmed source-body rendering, source warnings/date disagreements, server
   invalidation, conditional-save conflicts, `YYYY-MM-DD` and space-permitting
   `YYYY-MM-DD (Mon)` rendering, terminal-size fallback, grapheme/display width,
-  safe visible rendering of terminal control characters, entry byte limits, and
-  content-free errors using an in-memory terminal and fake API client.
+  safe visible rendering of terminal control characters, entry byte limits,
+  and content-free errors using an in-memory terminal and fake API client.
 - [ ] Focus/Enter and Ctrl-G (F2), Ctrl-Enter (F3), Ctrl-D (F10), and
   Ctrl-Left/Ctrl-Right (F6/F7) expose every manual-flow action. Command Line
   ASCII tokens work under English and 2-Set Korean input without forbidden
@@ -188,9 +181,9 @@ or raw logs.
 
 | Evidence | Result |
 |---|---|
-| P1-M6 contract corrections/requalification and owner-approved dependency/FFI packet | Pending |
+| P1-M12 lower-layer readiness evidence and owner-approved M7 dependency/FFI packet | Pending |
 | Runtime attachment, reconnect, and conditional-mutation tests | Pending |
 | Source-selection, empty-day, autosave, recovery, and confirmation tests | Pending |
-| In-memory rendering, accessibility, width, and Korean-command mapping tests | Pending |
+| In-memory Work Status, rendering, accessibility, width, and Korean-command mapping tests | Pending |
 | Real Apple Terminal restoration and IME check | Pending |
 | Documentation inspection and full Rust/Swift gate, with date and tool versions | Pending |

@@ -251,6 +251,7 @@ impl AyumiCatalog {
                     &day.as_str()[8..10],
                     name
                 );
+                let source_note_name = relative.clone();
                 let source = SourceRef::new(CONNECTOR, relative)
                     .map_err(|_| SourceReadError::UnknownSource)?;
                 let availability = availability_probe(&source)?;
@@ -294,6 +295,7 @@ impl AyumiCatalog {
                     merge_warnings(disagreement_warning(day, header_day.as_ref()), warning);
                 candidates.push(SourceCandidate {
                     source,
+                    source_note_name,
                     date_evidence: DateEvidence {
                         directory_day: Some(day.clone()),
                         header_day,

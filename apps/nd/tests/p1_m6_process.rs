@@ -1,6 +1,7 @@
 #![forbid(unsafe_code)]
 
 use std::fs;
+use std::net::TcpListener;
 use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
@@ -11,6 +12,11 @@ static SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
 #[test]
 fn serve_process_publishes_runtime_refuses_duplicate_and_cleans_up() {
+    match TcpListener::bind(("127.0.0.1", 0)) {
+        Ok(listener) => drop(listener),
+        Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => return,
+        Err(error) => panic!("test listener bind failed: {error}"),
+    }
     let scratch = Scratch::new();
     let config = scratch.path().join("global_config.yaml");
     fs::write(

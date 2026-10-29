@@ -5,13 +5,14 @@ use std::fmt;
 
 use crate::digest::push_framed;
 use crate::{
-    Approval, CompositionPath, DestinationKind, DestinationProgress, DestinationStatus, DiaryDay,
-    Digest, DraftAssistantRequest, EntryBuffer, EntryConfirmation, FreshnessCheckpoint,
-    FreshnessOutcome, InvalidationReason, JobStatus, OutputPlan, Preferences, SelectedSource,
-    SourceCandidate, SourceSnapshot, Timestamp, WorkflowState, WritingLanguage, WritingStyle,
+    Approval, AssistantSelection, CompositionPath, DestinationKind, DestinationProgress,
+    DestinationStatus, DiaryDay, Digest, DraftAssistantRequest, EntryBuffer, EntryConfirmation,
+    FreshnessCheckpoint, FreshnessOutcome, InvalidationReason, JobStatus, OutputPlan, Preferences,
+    SelectedSource, SourceCandidate, SourceSnapshot, Timestamp, WorkflowState, WritingLanguage,
+    WritingStyle, source_note_name_is_valid,
 };
 
-/// Reserved markers used around model-inferred reflection text.
+/// Reserved markers used around assistant-inferred reflection text.
 pub const INFERRED_REFLECTION_OPEN: char = '⟪';
 pub const INFERRED_REFLECTION_CLOSE: char = '⟫';
 
@@ -44,10 +45,10 @@ pub struct Workflow {
     explicit_empty_selection: bool,
     language: Option<WritingLanguage>,
     style: WritingStyle,
-    composition_path: CompositionPath,
+    assistant_selection: Option<AssistantSelection>,
     reviewed_memories: Vec<String>,
-    model_draft: Option<String>,
-    model_material_stale: bool,
+    assistant_draft: Option<String>,
+    assistant_material_stale: bool,
     entry: EntryBuffer,
     output_plan: Option<OutputPlan>,
     approval: Option<Approval>,
@@ -73,10 +74,10 @@ pub struct PersistedWorkflow {
     pub explicit_empty_selection: bool,
     pub language: Option<WritingLanguage>,
     pub style: WritingStyle,
-    pub composition_path: CompositionPath,
+    pub assistant_selection: Option<AssistantSelection>,
     pub reviewed_memories: Vec<String>,
-    pub model_draft: Option<String>,
-    pub model_material_stale: bool,
+    pub assistant_draft: Option<String>,
+    pub assistant_material_stale: bool,
     pub entry: EntryBuffer,
     pub output_plan: Option<OutputPlan>,
     pub approval: Option<Approval>,
@@ -102,10 +103,10 @@ impl Workflow {
             explicit_empty_selection: false,
             language: preferences.last_language,
             style: WritingStyle::Concise,
-            composition_path: preferences.last_composition_path,
+            assistant_selection: None,
             reviewed_memories: Vec::new(),
-            model_draft: None,
-            model_material_stale: false,
+            assistant_draft: None,
+            assistant_material_stale: false,
             entry: EntryBuffer::default(),
             output_plan: None,
             approval: None,
@@ -130,10 +131,10 @@ impl Workflow {
             explicit_empty_selection: record.explicit_empty_selection,
             language: record.language,
             style: record.style,
-            composition_path: record.composition_path,
+            assistant_selection: record.assistant_selection,
             reviewed_memories: record.reviewed_memories,
-            model_draft: record.model_draft,
-            model_material_stale: record.model_material_stale,
+            assistant_draft: record.assistant_draft,
+            assistant_material_stale: record.assistant_material_stale,
             entry: record.entry,
             output_plan: record.output_plan,
             approval: record.approval,
@@ -161,10 +162,10 @@ impl Workflow {
             explicit_empty_selection: self.explicit_empty_selection,
             language: self.language,
             style: self.style,
-            composition_path: self.composition_path,
+            assistant_selection: self.assistant_selection.clone(),
             reviewed_memories: self.reviewed_memories.clone(),
-            model_draft: self.model_draft.clone(),
-            model_material_stale: self.model_material_stale,
+            assistant_draft: self.assistant_draft.clone(),
+            assistant_material_stale: self.assistant_material_stale,
             entry: self.entry.clone(),
             output_plan: self.output_plan.clone(),
             approval: self.approval.clone(),
@@ -227,8 +228,15 @@ impl Workflow {
     }
 
     #[must_use]
-    pub const fn composition_path(&self) -> CompositionPath {
-        self.composition_path
+    pub fn assistant_selection(&self) -> Option<&AssistantSelection> {
+        self.assistant_selection.as_ref()
+    }
+
+    #[must_use]
+    pub fn composition_path(&self) -> Option<CompositionPath> {
+        self.assistant_selection
+            .as_ref()
+            .map(|selection| selection.composition_path)
     }
 
     #[must_use]
@@ -315,18 +323,26 @@ impl Workflow {
         now: Timestamp,
     ) -> Result<(), WorkflowError> {
         self.expect_revision(expected_revision)?;
-        if !matches!(
-            self.state,
-            WorkflowState::Discovered
-                | WorkflowState::SourcesConfirmed
-                | WorkflowState::Composing
-                | WorkflowState::EntryConfirmed
-                | WorkflowState::OutputPlanned
-                | WorkflowState::Approved
-        ) {
+        let direct_explicit_empty = self.state == WorkflowState::Started
+            && snapshots.is_empty()
+            && explicitly_continue_empty;
+        if !direct_explicit_empty
+            && !matches!(
+                self.state,
+                WorkflowState::Discovered
+                    | WorkflowState::SourcesConfirmed
+                    | WorkflowState::Composing
+                    | WorkflowState::EntryConfirmed
+                    | WorkflowState::OutputPlanned
+                    | WorkflowState::Approved
+            )
+        {
             return Err(WorkflowError::WrongState);
         }
-        let replaces_confirmation = self.state != WorkflowState::Discovered;
+        let replaces_confirmation = !matches!(
+            self.state,
+            WorkflowState::Started | WorkflowState::Discovered
+        );
         if snapshots.is_empty() && !explicitly_continue_empty {
             return Err(WorkflowError::EmptySelectionNeedsConfirmation);
         }
@@ -439,7 +455,7 @@ impl Workflow {
     }
 
     #[must_use]
-    pub fn model_steps_available(&self) -> bool {
+    pub fn assistant_actions_available(&self) -> bool {
         !self.snapshots.is_empty()
             && matches!(
                 self.state,
@@ -448,8 +464,8 @@ impl Workflow {
     }
 
     pub fn assistant_request(&self) -> Result<DraftAssistantRequest, WorkflowError> {
-        if !self.model_steps_available() {
-            return Err(WorkflowError::ModelStepsDisabled);
+        if !self.assistant_actions_available() {
+            return Err(WorkflowError::AssistantActionsDisabled);
         }
         let language = self.language.ok_or(WorkflowError::LanguageRequired)?;
         Ok(DraftAssistantRequest {
@@ -459,8 +475,9 @@ impl Workflow {
                 .map(|snapshot| snapshot.body.clone())
                 .collect(),
             reviewed_memories: self.reviewed_memories.clone(),
-            prior_draft: self.model_draft.clone(),
+            prior_draft: self.assistant_draft.clone(),
             edited_entry: (!self.entry.text.is_empty()).then(|| self.entry.text.clone()),
+            focused_paragraph: None,
             language,
             style: self.style,
         })
@@ -498,18 +515,18 @@ impl Workflow {
         Ok(())
     }
 
-    pub fn set_composition_path(
+    pub fn set_assistant_selection(
         &mut self,
         expected_revision: u64,
-        path: CompositionPath,
+        selection: Option<AssistantSelection>,
         now: Timestamp,
     ) -> Result<(), WorkflowError> {
         self.expect_revision(expected_revision)?;
         self.ensure_entry_editable()?;
-        if self.composition_path == path {
+        if self.assistant_selection == selection {
             return Ok(());
         }
-        self.composition_path = path;
+        self.assistant_selection = selection;
         self.invalidate_composition(now);
         Ok(())
     }
@@ -519,17 +536,20 @@ impl Workflow {
         expected_revision: u64,
         language: WritingLanguage,
         style: WritingStyle,
-        path: CompositionPath,
+        assistant_selection: Option<AssistantSelection>,
         now: Timestamp,
     ) -> Result<(), WorkflowError> {
         self.expect_revision(expected_revision)?;
         self.ensure_entry_editable()?;
-        if self.language == Some(language) && self.style == style && self.composition_path == path {
+        if self.language == Some(language)
+            && self.style == style
+            && self.assistant_selection == assistant_selection
+        {
             return Ok(());
         }
         self.language = Some(language);
         self.style = style;
-        self.composition_path = path;
+        self.assistant_selection = assistant_selection;
         self.invalidate_composition(now);
         Ok(())
     }
@@ -1011,7 +1031,7 @@ impl Workflow {
             snapshot.body.clear();
         }
         self.reviewed_memories.clear();
-        self.model_draft = None;
+        self.assistant_draft = None;
         self.entry.confirmed = None;
         self.clear_plan_and_approval();
         if !completed {
@@ -1064,8 +1084,8 @@ impl Workflow {
 
     fn clear_after_selection(&mut self) {
         self.reviewed_memories.clear();
-        self.model_draft = None;
-        self.model_material_stale = false;
+        self.assistant_draft = None;
+        self.assistant_material_stale = false;
         self.entry.confirmed = None;
         self.clear_plan_and_approval();
     }
@@ -1088,7 +1108,7 @@ impl Workflow {
     }
 
     fn invalidate_composition(&mut self, now: Timestamp) {
-        self.model_material_stale = true;
+        self.assistant_material_stale = true;
         self.entry.confirmed = None;
         self.clear_plan_and_approval();
         self.invalidation_reason = Some(InvalidationReason::CompositionChoiceChanged);
@@ -1308,11 +1328,13 @@ fn ensure_every_local_verified(
 
 fn ensure_unique_candidates(candidates: &[SourceCandidate]) -> Result<(), WorkflowError> {
     let mut keys = BTreeSet::new();
-    if candidates
-        .iter()
-        .any(|candidate| !keys.insert(candidate.source.clone()))
-    {
-        return Err(WorkflowError::DuplicateSource);
+    for candidate in candidates {
+        if !source_note_name_is_valid(&candidate.source_note_name) {
+            return Err(WorkflowError::InvalidSourceNoteName);
+        }
+        if !keys.insert(candidate.source.clone()) {
+            return Err(WorkflowError::DuplicateSource);
+        }
     }
     Ok(())
 }
@@ -1338,10 +1360,11 @@ pub enum WorkflowError {
     EmptySelectionNeedsConfirmation,
     UnknownSource,
     DuplicateSource,
+    InvalidSourceNoteName,
     NeedsDownload,
     PermissionDeniedSource,
     UnreadableSource,
-    ModelStepsDisabled,
+    AssistantActionsDisabled,
     LanguageRequired,
     BlankEntry,
     UnresolvedInferenceMarker,
@@ -1368,10 +1391,11 @@ impl fmt::Display for WorkflowError {
             }
             Self::UnknownSource => formatter.write_str("selected source was not discovered"),
             Self::DuplicateSource => formatter.write_str("source identity is duplicated"),
+            Self::InvalidSourceNoteName => formatter.write_str("source-note name is unsafe"),
             Self::NeedsDownload => formatter.write_str("source needs download"),
             Self::PermissionDeniedSource => formatter.write_str("source permission was denied"),
             Self::UnreadableSource => formatter.write_str("source is unreadable"),
-            Self::ModelStepsDisabled => formatter.write_str("model steps are disabled"),
+            Self::AssistantActionsDisabled => formatter.write_str("assistant actions are disabled"),
             Self::LanguageRequired => formatter.write_str("writing language is required"),
             Self::BlankEntry => formatter.write_str("blank entry cannot be confirmed"),
             Self::UnresolvedInferenceMarker => {
@@ -1497,7 +1521,7 @@ mod tests {
         let mut workflow = Workflow::new(day(), time(0), &Preferences::default());
         let before = workflow.clone();
         assert_eq!(
-            workflow.confirm_sources(0, Vec::new(), true, time(1)),
+            workflow.confirm_sources(0, Vec::new(), false, time(1)),
             Err(WorkflowError::WrongState)
         );
         workflow.navigate_back();
@@ -1513,10 +1537,11 @@ mod tests {
     }
 
     #[test]
-    fn selection_is_independent_of_date_evidence_and_empty_path_disables_model() {
+    fn selection_is_independent_of_date_evidence_and_empty_path_disables_assistant_actions() {
         let mut workflow = Workflow::new(day(), time(0), &Preferences::default());
         let outside = SourceCandidate {
             source: source("outside"),
+            source_note_name: "outside.md".to_owned(),
             date_evidence: DateEvidence {
                 directory_day: Some(DiaryDay::parse("2026-10-20").unwrap()),
                 header_day: Some(DiaryDay::parse("2026-10-30").unwrap()),
@@ -1528,21 +1553,22 @@ mod tests {
         workflow
             .confirm_sources(1, vec![snapshot("outside", "included")], false, time(2))
             .unwrap();
-        assert!(workflow.model_steps_available());
+        assert!(workflow.assistant_actions_available());
 
         let mut empty = discovered_workflow();
         assert_eq!(empty.language(), None);
         assert_eq!(empty.style(), WritingStyle::Concise);
-        assert_eq!(empty.composition_path(), CompositionPath::Hosted);
+        assert_eq!(empty.assistant_selection(), None);
+        assert_eq!(empty.composition_path(), None);
         assert_eq!(
             empty.confirm_sources(1, Vec::new(), false, time(2)),
             Err(WorkflowError::EmptySelectionNeedsConfirmation)
         );
         empty.confirm_sources(1, Vec::new(), true, time(2)).unwrap();
-        assert!(!empty.model_steps_available());
+        assert!(!empty.assistant_actions_available());
         assert_eq!(
             empty.assistant_request(),
-            Err(WorkflowError::ModelStepsDisabled)
+            Err(WorkflowError::AssistantActionsDisabled)
         );
         empty.begin_manual_composition(2, time(3)).unwrap();
         empty.save_entry(0, "빈 날".to_owned(), time(5)).unwrap();
@@ -1554,6 +1580,52 @@ mod tests {
             .set_language(empty.revision(), WritingLanguage::KoKr, time(7))
             .unwrap();
         empty.confirm_entry(4, 1, time(8)).unwrap();
+    }
+
+    #[test]
+    fn explicit_empty_selection_can_confirm_directly_from_started() {
+        let mut workflow = Workflow::new(day(), time(0), &Preferences::default());
+
+        workflow
+            .confirm_sources(0, Vec::new(), true, time(1))
+            .unwrap();
+
+        assert_eq!(workflow.state(), WorkflowState::SourcesConfirmed);
+        assert!(workflow.candidates().is_empty());
+        assert!(workflow.snapshots().is_empty());
+        assert!(workflow.explicit_empty_selection());
+        assert!(workflow.selection_digest().is_some());
+        assert!(!workflow.assistant_actions_available());
+    }
+
+    #[test]
+    fn discovery_rejects_unsafe_source_note_names() {
+        for source_note_name in [
+            "",
+            "/private/note.md",
+            "../note.md",
+            "day/../note.md",
+            "day//note.md",
+            "day/note\n.md",
+        ] {
+            let mut workflow = Workflow::new(day(), time(0), &Preferences::default());
+            let candidate = SourceCandidate {
+                source: source("unsafe"),
+                source_note_name: source_note_name.to_owned(),
+                date_evidence: DateEvidence {
+                    directory_day: Some(day()),
+                    header_day: None,
+                    warning: None,
+                },
+                availability: SourceAvailability::Resident,
+            };
+
+            assert_eq!(
+                workflow.discover(0, vec![candidate], time(1)),
+                Err(WorkflowError::InvalidSourceNoteName),
+                "unexpectedly accepted {source_note_name:?}"
+            );
+        }
     }
 
     #[test]
@@ -1570,7 +1642,7 @@ mod tests {
             workflow.invalidation_reason(),
             Some(&InvalidationReason::SelectionChanged)
         );
-        assert!(!workflow.model_steps_available());
+        assert!(!workflow.assistant_actions_available());
     }
 
     #[test]
@@ -1788,7 +1860,7 @@ mod tests {
     }
 
     #[test]
-    fn language_and_style_changes_stale_model_material_without_losing_text() {
+    fn language_and_style_changes_stale_assistant_material_without_losing_text() {
         let mut workflow = confirmed_workflow();
         workflow
             .set_style(workflow.revision(), WritingStyle::Reflective, time(20))
@@ -1799,6 +1871,24 @@ mod tests {
         workflow
             .set_language(workflow.revision(), WritingLanguage::KoKr, time(21))
             .unwrap();
+        assert_eq!(workflow.entry().text, "Invented day.");
+        workflow
+            .set_assistant_selection(
+                workflow.revision(),
+                Some(AssistantSelection::new(
+                    crate::AssistantBackendId::parse("hosted-default").unwrap(),
+                    CompositionPath::Hosted,
+                )),
+                time(22),
+            )
+            .unwrap();
+        assert_eq!(
+            workflow
+                .assistant_selection()
+                .map(|selection| selection.backend_id.as_str()),
+            Some("hosted-default")
+        );
+        assert_eq!(workflow.composition_path(), Some(CompositionPath::Hosted));
         assert_eq!(workflow.entry().text, "Invented day.");
     }
 
@@ -2135,6 +2225,7 @@ mod tests {
                 0,
                 vec![SourceCandidate {
                     source: source("selected"),
+                    source_note_name: "selected.md".to_owned(),
                     date_evidence: DateEvidence {
                         directory_day: Some(day()),
                         header_day: Some(day()),

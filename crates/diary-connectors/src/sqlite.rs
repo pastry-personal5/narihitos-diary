@@ -2,16 +2,17 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use diary_core::{
-    Approval, CompositionPath, DateEvidence, DestinationKind, DestinationPlan, DestinationProgress,
-    DestinationStatus, DiaryDay, Digest, EntryBuffer, EntryConfirmation, FreshnessStamp,
-    IntentTerminal, InvalidationReason, JobStatus, OperationIntent, OperationLog, OutputPlan,
-    PersistedWorkflow, Preferences, Receipt, ReconciliationGate, SourceAvailability,
-    SourceCandidate, SourceRef, SourceSnapshot, StartOutcome, StoreError, Timestamp, Workflow,
-    WorkflowState, WorkflowStore, WorkflowSummary, WritingLanguage, WritingStyle,
+    Approval, AssistantBackendId, AssistantSelection, CompositionPath, DateEvidence,
+    DestinationKind, DestinationPlan, DestinationProgress, DestinationStatus, DiaryDay, Digest,
+    EntryBuffer, EntryConfirmation, FreshnessStamp, IntentTerminal, InvalidationReason, JobStatus,
+    OperationIntent, OperationLog, OutputPlan, PersistedWorkflow, Preferences, Receipt,
+    ReconciliationGate, SourceAvailability, SourceCandidate, SourceRef, SourceSnapshot,
+    StartOutcome, StoreError, Timestamp, Workflow, WorkflowState, WorkflowStore, WorkflowSummary,
+    WritingLanguage, WritingStyle,
 };
 use rusqlite::{Connection, OptionalExtension, Transaction, TransactionBehavior, params};
 
-const CURRENT_SCHEMA: i64 = 3;
+const CURRENT_SCHEMA: i64 = 4;
 
 #[derive(Clone, Debug)]
 pub struct SqliteStore {
@@ -158,19 +159,22 @@ impl WorkflowStore for SqliteStore {
         let connection = self.connect()?;
         connection
             .query_row(
-                "SELECT last_language, last_composition_path FROM preferences WHERE singleton = 1",
+                "SELECT last_language, last_assistant_backend_id FROM preferences WHERE singleton = 1",
                 [],
-                |row| Ok((row.get::<_, Option<String>>(0)?, row.get::<_, String>(1)?)),
+                |row| Ok((row.get::<_, Option<String>>(0)?, row.get::<_, Option<String>>(1)?)),
             )
             .map_err(map_sql_error)
-            .and_then(|(language, path)| {
+            .and_then(|(language, backend_id)| {
                 Ok(Preferences {
                     last_language: language
                         .as_deref()
                         .map(WritingLanguage::parse)
                         .transpose()
                         .map_err(invalid_value)?,
-                    last_composition_path: CompositionPath::parse(&path).map_err(invalid_value)?,
+                    last_assistant_backend_id: backend_id
+                        .map(AssistantBackendId::parse)
+                        .transpose()
+                        .map_err(invalid_value)?,
                 })
             })
     }
@@ -274,11 +278,14 @@ fn update_preferences(
 ) -> Result<(), StoreError> {
     let changed = connection
         .execute(
-            "UPDATE preferences SET last_language = ?1, last_composition_path = ?2
+            "UPDATE preferences SET last_language = ?1, last_assistant_backend_id = ?2
              WHERE singleton = 1",
             params![
                 preferences.last_language.map(WritingLanguage::as_str),
-                preferences.last_composition_path.as_str()
+                preferences
+                    .last_assistant_backend_id
+                    .as_ref()
+                    .map(AssistantBackendId::as_str)
             ],
         )
         .map_err(map_sql_error)?;
@@ -588,6 +595,21 @@ fn migrate(connection: &mut Connection) -> Result<(), StoreError> {
             .map_err(map_sql_error)?;
         transaction.commit().map_err(map_sql_error)?;
     }
+    let version: i64 = connection
+        .query_row("PRAGMA user_version", [], |row| row.get(0))
+        .map_err(map_sql_error)?;
+    if version < 4 {
+        let transaction = connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(map_sql_error)?;
+        transaction
+            .execute_batch(MIGRATION_4)
+            .map_err(map_sql_error)?;
+        transaction
+            .pragma_update(None, "user_version", 4)
+            .map_err(map_sql_error)?;
+        transaction.commit().map_err(map_sql_error)?;
+    }
     Ok(())
 }
 
@@ -773,6 +795,23 @@ ALTER TABLE source_candidates
 ADD COLUMN availability TEXT NOT NULL DEFAULT 'unknown';
 "#;
 
+const MIGRATION_4: &str = r#"
+ALTER TABLE source_candidates
+ADD COLUMN source_note_name TEXT NOT NULL DEFAULT '';
+UPDATE source_candidates SET source_note_name = source_id;
+
+ALTER TABLE workflows
+RENAME COLUMN model_material_stale TO assistant_material_stale;
+ALTER TABLE workflows
+RENAME COLUMN model_draft TO assistant_draft;
+ALTER TABLE workflows DROP COLUMN composition_path;
+ALTER TABLE workflows ADD COLUMN assistant_backend_id TEXT;
+ALTER TABLE workflows ADD COLUMN composition_path TEXT;
+
+ALTER TABLE preferences DROP COLUMN last_composition_path;
+ALTER TABLE preferences ADD COLUMN last_assistant_backend_id TEXT;
+"#;
+
 fn workflow_exists(connection: &Connection, day: &DiaryDay) -> Result<bool, StoreError> {
     connection
         .query_row(
@@ -795,14 +834,15 @@ fn insert_workflow(
         .execute(
             "INSERT INTO workflows (
                day, state, revision, created_at, updated_at, language, style,
-               composition_path, model_material_stale, explicit_empty_selection,
+               assistant_backend_id, composition_path, assistant_material_stale,
+               explicit_empty_selection,
                selection_digest, invalidation_kind, invalidation_connector,
                invalidation_source_id, job_status, all_verified_at, discarded_at,
                entry_text, buffer_version, confirmed_buffer_version,
-               confirmed_entry_digest, confirmed_at, model_draft
+               confirmed_entry_digest, confirmed_at, assistant_draft
              ) VALUES (
                ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12,
-               ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23
+               ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24
              )",
             params![
                 record.day.as_str(),
@@ -812,8 +852,15 @@ fn insert_workflow(
                 record.updated_at.0,
                 record.language.map(WritingLanguage::as_str),
                 record.style.as_str(),
-                record.composition_path.as_str(),
-                record.model_material_stale,
+                record
+                    .assistant_selection
+                    .as_ref()
+                    .map(|selection| selection.backend_id.as_str()),
+                record
+                    .assistant_selection
+                    .as_ref()
+                    .map(|selection| selection.composition_path.as_str()),
+                record.assistant_material_stale,
                 record.explicit_empty_selection,
                 record.selection_digest.as_ref().map(Digest::as_str),
                 kind,
@@ -829,7 +876,7 @@ fn insert_workflow(
                     .transpose()?,
                 confirmation.map(|value| value.entry_digest.as_str()),
                 confirmation.map(|value| value.confirmed_at.0),
-                record.model_draft,
+                record.assistant_draft,
             ],
         )
         .map_err(map_sql_error)?;
@@ -846,14 +893,15 @@ fn replace_workflow(
         .execute(
             "UPDATE workflows SET
                state = ?2, revision = ?3, created_at = ?4, updated_at = ?5,
-               language = ?6, style = ?7, composition_path = ?8,
-               model_material_stale = ?9, explicit_empty_selection = ?10,
-               selection_digest = ?11, invalidation_kind = ?12,
-               invalidation_connector = ?13, invalidation_source_id = ?14,
-               job_status = ?15, all_verified_at = ?16, discarded_at = ?17,
-               entry_text = ?18, buffer_version = ?19,
-               confirmed_buffer_version = ?20, confirmed_entry_digest = ?21,
-               confirmed_at = ?22, model_draft = ?23
+               language = ?6, style = ?7, assistant_backend_id = ?8,
+               composition_path = ?9, assistant_material_stale = ?10,
+               explicit_empty_selection = ?11, selection_digest = ?12,
+               invalidation_kind = ?13, invalidation_connector = ?14,
+               invalidation_source_id = ?15, job_status = ?16,
+               all_verified_at = ?17, discarded_at = ?18, entry_text = ?19,
+               buffer_version = ?20, confirmed_buffer_version = ?21,
+               confirmed_entry_digest = ?22, confirmed_at = ?23,
+               assistant_draft = ?24
              WHERE day = ?1",
             params![
                 record.day.as_str(),
@@ -863,8 +911,15 @@ fn replace_workflow(
                 record.updated_at.0,
                 record.language.map(WritingLanguage::as_str),
                 record.style.as_str(),
-                record.composition_path.as_str(),
-                record.model_material_stale,
+                record
+                    .assistant_selection
+                    .as_ref()
+                    .map(|selection| selection.backend_id.as_str()),
+                record
+                    .assistant_selection
+                    .as_ref()
+                    .map(|selection| selection.composition_path.as_str()),
+                record.assistant_material_stale,
                 record.explicit_empty_selection,
                 record.selection_digest.as_ref().map(Digest::as_str),
                 kind,
@@ -880,7 +935,7 @@ fn replace_workflow(
                     .transpose()?,
                 confirmation.map(|value| value.entry_digest.as_str()),
                 confirmation.map(|value| value.confirmed_at.0),
-                record.model_draft,
+                record.assistant_draft,
             ],
         )
         .map_err(map_sql_error)?;
@@ -923,8 +978,8 @@ fn insert_children(
             .execute(
                 "INSERT INTO source_candidates (
                    day, position, connector, source_id, directory_day, header_day, warning,
-                   availability
-                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                   availability, source_note_name
+                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
                 params![
                     record.day.as_str(),
                     to_i64(position, "candidate position")?,
@@ -942,6 +997,7 @@ fn insert_children(
                         .map(DiaryDay::as_str),
                     candidate.date_evidence.warning,
                     candidate.availability.as_str(),
+                    candidate.source_note_name,
                 ],
             )
             .map_err(map_sql_error)?;
@@ -1054,7 +1110,8 @@ fn load_workflow(connection: &Connection, day: &DiaryDay) -> Result<Option<Workf
         i64,
         Option<String>,
         String,
-        String,
+        Option<String>,
+        Option<String>,
         bool,
         bool,
         Option<String>,
@@ -1074,11 +1131,12 @@ fn load_workflow(connection: &Connection, day: &DiaryDay) -> Result<Option<Workf
     let row: Option<WorkflowRow> = connection
         .query_row(
             "SELECT state, revision, created_at, updated_at, language, style,
-                    composition_path, model_material_stale, explicit_empty_selection,
+                    assistant_backend_id, composition_path, assistant_material_stale,
+                    explicit_empty_selection,
                     selection_digest, invalidation_kind, invalidation_connector,
                     invalidation_source_id, job_status, all_verified_at, discarded_at,
                     entry_text, buffer_version, confirmed_buffer_version,
-                    confirmed_entry_digest, confirmed_at, model_draft
+                    confirmed_entry_digest, confirmed_at, assistant_draft
              FROM workflows WHERE day = ?1",
             [day.as_str()],
             |row| {
@@ -1105,6 +1163,7 @@ fn load_workflow(connection: &Connection, day: &DiaryDay) -> Result<Option<Workf
                     row.get(19)?,
                     row.get(20)?,
                     row.get(21)?,
+                    row.get(22)?,
                 ))
             },
         )
@@ -1117,7 +1176,7 @@ fn load_workflow(connection: &Connection, day: &DiaryDay) -> Result<Option<Workf
     let snapshots = load_snapshots(connection, day)?;
     let reviewed_memories = load_memories(connection, day)?;
     let (output_plan, approval, destination_progress) = load_plan(connection, day)?;
-    let entry_confirmation = match (row.18, row.19, row.20) {
+    let entry_confirmation = match (row.19, row.20, row.21) {
         (None, None, None) => None,
         (Some(version), Some(digest), Some(confirmed_at)) => Some(EntryConfirmation {
             buffer_version: to_u64(version, "confirmed buffer version")?,
@@ -1143,28 +1202,39 @@ fn load_workflow(connection: &Connection, day: &DiaryDay) -> Result<Option<Workf
             .transpose()
             .map_err(invalid_value)?,
         style: WritingStyle::parse(&row.5).map_err(invalid_value)?,
-        composition_path: CompositionPath::parse(&row.6).map_err(invalid_value)?,
-        model_material_stale: row.7,
-        explicit_empty_selection: row.8,
-        selection_digest: row.9.map(parse_digest).transpose()?,
-        invalidation_reason: decode_invalidation(row.10, row.11, row.12)?,
+        assistant_selection: match (row.6, row.7) {
+            (None, None) => None,
+            (Some(backend_id), Some(path)) => Some(AssistantSelection::new(
+                AssistantBackendId::parse(backend_id).map_err(invalid_value)?,
+                CompositionPath::parse(&path).map_err(invalid_value)?,
+            )),
+            _ => {
+                return Err(StoreError::InvalidRecord(
+                    "partial assistant selection".to_owned(),
+                ));
+            }
+        },
+        assistant_material_stale: row.8,
+        explicit_empty_selection: row.9,
+        selection_digest: row.10.map(parse_digest).transpose()?,
+        invalidation_reason: decode_invalidation(row.11, row.12, row.13)?,
         job_status: row
-            .13
+            .14
             .as_deref()
             .map(JobStatus::parse)
             .transpose()
             .map_err(invalid_value)?,
-        all_verified_at: row.14.map(Timestamp),
-        discarded_at: row.15.map(Timestamp),
+        all_verified_at: row.15.map(Timestamp),
+        discarded_at: row.16.map(Timestamp),
         entry: EntryBuffer {
-            text: row.16,
-            version: to_u64(row.17, "buffer version")?,
+            text: row.17,
+            version: to_u64(row.18, "buffer version")?,
             confirmed: entry_confirmation,
         },
         candidates,
         snapshots,
         reviewed_memories,
-        model_draft: row.21,
+        assistant_draft: row.22,
         output_plan,
         approval,
         destination_progress,
@@ -1180,7 +1250,8 @@ fn load_candidates(
 ) -> Result<Vec<SourceCandidate>, StoreError> {
     let mut statement = connection
         .prepare(
-            "SELECT connector, source_id, directory_day, header_day, warning, availability
+            "SELECT connector, source_id, directory_day, header_day, warning, availability,
+                    source_note_name
              FROM source_candidates WHERE day = ?1 ORDER BY position",
         )
         .map_err(map_sql_error)?;
@@ -1195,6 +1266,7 @@ fn load_candidates(
                 row.get::<_, String>(1).map_err(map_sql_error)?,
             )
             .map_err(invalid_value)?,
+            source_note_name: row.get(6).map_err(map_sql_error)?,
             date_evidence: DateEvidence {
                 directory_day: directory_day
                     .map(DiaryDay::parse)
@@ -1408,8 +1480,8 @@ fn purge_day(
                confirmed_buffer_version = NULL,
                confirmed_entry_digest = NULL,
                confirmed_at = NULL,
-               model_draft = NULL,
-               model_material_stale = 0,
+               assistant_draft = NULL,
+               assistant_material_stale = 0,
                invalidation_kind = NULL,
                invalidation_connector = NULL,
                invalidation_source_id = NULL,
@@ -1654,6 +1726,203 @@ mod tests {
         drop(connection);
         SqliteStore::open(prior.db()).unwrap();
         assert_eq!(schema_version(prior.db()), CURRENT_SCHEMA);
+
+        let prior = Scratch::new("migration-v3-with-data");
+        let connection = Connection::open(prior.db()).unwrap();
+        connection.execute_batch(MIGRATION_1).unwrap();
+        connection.execute_batch(MIGRATION_2).unwrap();
+        connection.execute_batch(MIGRATION_3).unwrap();
+        connection
+            .execute(
+                "INSERT INTO workflows (
+                   day, state, revision, created_at, updated_at, language, style,
+                   composition_path, model_material_stale, explicit_empty_selection,
+                   selection_digest, invalidation_kind, invalidation_connector,
+                   invalidation_source_id, job_status, all_verified_at, discarded_at,
+                   entry_text, buffer_version, confirmed_buffer_version,
+                   confirmed_entry_digest, confirmed_at, model_draft
+                 ) VALUES (
+                   '2026-10-29', 'discovered', 1, 1, 2, 'en-US', 'concise',
+                   'manual', 0, 0, NULL, NULL, NULL, NULL, NULL, NULL, NULL,
+                   'Recovered text', 0, NULL, NULL, NULL, 'Legacy draft'
+                 )",
+                [],
+            )
+            .unwrap();
+        connection
+            .execute(
+                "INSERT INTO source_candidates (
+                   day, position, connector, source_id, directory_day, header_day,
+                   warning, availability
+                 ) VALUES (
+                   '2026-10-29', 0, 'ayumi', '2026/10/29/note.md',
+                   '2026-10-29', NULL, NULL, 'resident'
+                 )",
+                [],
+            )
+            .unwrap();
+        connection
+            .execute(
+                "INSERT INTO workflows (
+                   day, state, revision, created_at, updated_at, language, style,
+                   composition_path, model_material_stale, explicit_empty_selection,
+                   selection_digest, invalidation_kind, invalidation_connector,
+                   invalidation_source_id, job_status, all_verified_at, discarded_at,
+                   entry_text, buffer_version, confirmed_buffer_version,
+                   confirmed_entry_digest, confirmed_at, model_draft
+                 ) VALUES (
+                   '2026-10-28', 'started', 0, 1, 1, NULL, 'concise',
+                   'hosted', 0, 0, NULL, NULL, NULL, NULL, NULL, NULL, NULL,
+                   '', 0, NULL, NULL, NULL, NULL
+                 )",
+                [],
+            )
+            .unwrap();
+        let preserved_digest = Digest::of_bytes(b"preserved-synthetic");
+        connection
+            .execute(
+                "INSERT INTO source_snapshots (
+                   day, position, connector, source_id, file_identity, byte_size,
+                   modified_at, content_digest, readable_body
+                 ) VALUES (
+                   '2026-10-28', 0, 'fake', 'snapshot-1', 'file-1', 19,
+                   2, ?1, 'Preserved snapshot.'
+                 )",
+                [preserved_digest.as_str()],
+            )
+            .unwrap();
+        connection
+            .execute(
+                "INSERT INTO output_plans (
+                   day, plan_id, entry_digest, selection_digest, plan_digest,
+                   created_at, approval_plan_digest, approval_revision,
+                   approved_at, approval_destination_only
+                 ) VALUES (
+                   '2026-10-28', 'plan-preserved', ?1, ?1, ?1,
+                   3, NULL, NULL, NULL, NULL
+                 )",
+                [preserved_digest.as_str()],
+            )
+            .unwrap();
+        connection
+            .execute(
+                "INSERT INTO destination_plans (
+                   day, position, kind, destination, target_identity,
+                   intended_state_digest, payload_digest, inspected_state_digest
+                 ) VALUES (
+                   '2026-10-28', 0, 'local', 'local', 'target-preserved',
+                   ?1, ?1, ?1
+                 )",
+                [preserved_digest.as_str()],
+            )
+            .unwrap();
+        connection
+            .execute(
+                "INSERT INTO destination_progress (day, destination, status)
+                 VALUES ('2026-10-28', 'local', 'pending')",
+                [],
+            )
+            .unwrap();
+        connection
+            .execute(
+                "INSERT INTO operation_intents (
+                   attempt_id, plan_id, day, destination, target_identity,
+                   entry_digest, selection_digest, payload_digest, created_at,
+                   cancellation_requested, terminal
+                 ) VALUES (
+                   'attempt-migrated', 'plan-migrated', '2026-10-29', 'local',
+                   'target-migrated', ?1, ?1, ?1, 3, 0, NULL
+                 )",
+                [Digest::of_bytes(b"synthetic").as_str()],
+            )
+            .unwrap();
+        connection
+            .execute(
+                "INSERT INTO operation_intents (
+                   attempt_id, plan_id, day, destination, target_identity,
+                   entry_digest, selection_digest, payload_digest, created_at,
+                   cancellation_requested, terminal
+                 ) VALUES (
+                   'attempt-receipted', 'plan-receipted', '2026-10-29', 'notion',
+                   'target-receipted', ?1, ?1, ?1, 4, 0, 'verified'
+                 )",
+                [Digest::of_bytes(b"receipted-synthetic").as_str()],
+            )
+            .unwrap();
+        connection
+            .execute(
+                "INSERT INTO receipts (
+                   receipt_id, attempt_id, day, destination, target_identity,
+                   version, entry_digest, selection_digest, payload_digest, verified_at
+                 ) VALUES (
+                   'receipt-migrated', 'attempt-receipted', '2026-10-29', 'notion',
+                   'target-receipted', 1, ?1, ?1, ?1, 5
+                 )",
+                [Digest::of_bytes(b"receipted-synthetic").as_str()],
+            )
+            .unwrap();
+        connection
+            .execute(
+                "INSERT INTO receipt_returned_ids (receipt_id, position, returned_id)
+                 VALUES ('receipt-migrated', 0, 'block-synthetic')",
+                [],
+            )
+            .unwrap();
+        connection.pragma_update(None, "user_version", 3).unwrap();
+        drop(connection);
+
+        let store = SqliteStore::open(prior.db()).unwrap();
+        let migrated = store.load(&day("2026-10-29")).unwrap().unwrap();
+        assert_eq!(migrated.state(), WorkflowState::Discovered);
+        assert_eq!(migrated.entry().text, "Recovered text");
+        assert_eq!(migrated.assistant_selection(), None);
+        assert_eq!(
+            migrated.candidates()[0].source_note_name,
+            "2026/10/29/note.md"
+        );
+        assert_eq!(store.load_preferences().unwrap(), Preferences::default());
+        assert_eq!(
+            store
+                .unresolved_intents(Some(&day("2026-10-29")))
+                .unwrap()
+                .len(),
+            1
+        );
+        let receipts = store.receipts(&day("2026-10-29")).unwrap();
+        assert_eq!(receipts.len(), 1);
+        assert_eq!(receipts[0].receipt_id, "receipt-migrated");
+        assert_eq!(receipts[0].returned_ids, ["block-synthetic"]);
+        let connection = Connection::open(prior.db()).unwrap();
+        let migrated_draft: String = connection
+            .query_row(
+                "SELECT assistant_draft FROM workflows WHERE day = '2026-10-29'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(migrated_draft, "Legacy draft");
+        let preserved: (String, String, String, String) = connection
+            .query_row(
+                "SELECT s.readable_body, p.plan_id, d.target_identity, g.status
+                 FROM source_snapshots s
+                 JOIN output_plans p ON p.day = s.day
+                 JOIN destination_plans d ON d.day = p.day
+                 JOIN destination_progress g ON g.day = p.day
+                 WHERE s.day = '2026-10-28'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            )
+            .unwrap();
+        assert_eq!(
+            preserved,
+            (
+                "Preserved snapshot.".to_owned(),
+                "plan-preserved".to_owned(),
+                "target-preserved".to_owned(),
+                "pending".to_owned(),
+            )
+        );
+        assert_eq!(schema_version(prior.db()), CURRENT_SCHEMA);
     }
 
     #[test]
@@ -1690,6 +1959,64 @@ mod tests {
     }
 
     #[test]
+    fn current_schema_rejects_partial_assistant_selection_and_invalid_source_note_name() {
+        let partial = Scratch::new("partial-assistant-selection");
+        let store = SqliteStore::open(partial.db()).unwrap();
+        create_started(&store, "2026-10-29");
+        drop(store);
+        let connection = Connection::open(partial.db()).unwrap();
+        connection
+            .execute(
+                "UPDATE workflows SET assistant_backend_id = 'hosted-default'
+                 WHERE day = '2026-10-29'",
+                [],
+            )
+            .unwrap();
+        drop(connection);
+        let store = SqliteStore::open(partial.db()).unwrap();
+        assert_eq!(
+            store.load(&day("2026-10-29")).unwrap_err(),
+            StoreError::InvalidRecord("partial assistant selection".to_owned())
+        );
+
+        let invalid_name = Scratch::new("invalid-source-note-name");
+        let store = SqliteStore::open(invalid_name.db()).unwrap();
+        let mut workflow = create_started(&store, "2026-10-29");
+        workflow
+            .discover(
+                workflow.revision(),
+                vec![SourceCandidate {
+                    source: SourceRef::new("fake", "note-1").unwrap(),
+                    source_note_name: "note-1.md".to_owned(),
+                    date_evidence: DateEvidence {
+                        directory_day: Some(day("2026-10-29")),
+                        header_day: None,
+                        warning: None,
+                    },
+                    availability: SourceAvailability::Resident,
+                }],
+                Timestamp(1),
+            )
+            .unwrap();
+        store.compare_and_swap(0, Some(0), &workflow).unwrap();
+        drop(store);
+        let connection = Connection::open(invalid_name.db()).unwrap();
+        connection
+            .execute(
+                "UPDATE source_candidates SET source_note_name = ''
+                 WHERE day = '2026-10-29'",
+                [],
+            )
+            .unwrap();
+        drop(connection);
+        let store = SqliteStore::open(invalid_name.db()).unwrap();
+        assert!(matches!(
+            store.load(&day("2026-10-29")),
+            Err(StoreError::InvalidRecord(_))
+        ));
+    }
+
+    #[test]
     fn fixed_clock_starts_one_local_day_and_completed_day_is_preserved() {
         let scratch = Scratch::new("default-day");
         let store = SqliteStore::open(scratch.db()).unwrap();
@@ -1722,7 +2049,9 @@ mod tests {
         store
             .save_preferences(&Preferences {
                 last_language: Some(WritingLanguage::KoKr),
-                last_composition_path: CompositionPath::AppleOnDevice,
+                last_assistant_backend_id: Some(
+                    AssistantBackendId::parse("apple-foundation-models").unwrap(),
+                ),
             })
             .unwrap();
         drop(store);
@@ -1732,11 +2061,26 @@ mod tests {
             store.load_preferences().unwrap(),
             Preferences {
                 last_language: Some(WritingLanguage::KoKr),
-                last_composition_path: CompositionPath::AppleOnDevice,
+                last_assistant_backend_id: Some(
+                    AssistantBackendId::parse("apple-foundation-models").unwrap(),
+                ),
             }
         );
         let mut workflow = create_started(&store, "2026-10-28");
         make_confirmed(&mut workflow);
+        workflow
+            .set_assistant_selection(
+                workflow.revision(),
+                Some(AssistantSelection::new(
+                    AssistantBackendId::parse("apple-foundation-models").unwrap(),
+                    CompositionPath::AppleOnDevice,
+                )),
+                Timestamp(6),
+            )
+            .unwrap();
+        workflow
+            .confirm_entry(workflow.revision(), workflow.entry().version, Timestamp(6))
+            .unwrap();
         let plan = OutputPlan::new(
             "persisted-plan",
             workflow
@@ -2234,6 +2578,7 @@ mod tests {
                 workflow.revision(),
                 vec![SourceCandidate {
                     source: source.clone(),
+                    source_note_name: "note-1.md".to_owned(),
                     date_evidence: DateEvidence {
                         directory_day: Some(workflow.day().clone()),
                         header_day: Some(workflow.day().clone()),

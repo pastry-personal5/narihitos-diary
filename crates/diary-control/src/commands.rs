@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use diary_core::{
-    CatalogRequest, Clock, CompositionPath, DiaryDay, FreshnessCheckpoint, FreshnessOutcome,
+    AssistantSelection, CatalogRequest, Clock, DiaryDay, FreshnessCheckpoint, FreshnessOutcome,
     OperationLog, Preferences, ReconciliationGate, SelectedSource, SourceAccessError,
     SourceCatalog, SourceReadOutcome, SourceReader, SourceRef, StartOutcome, StoreError, Timestamp,
     Workflow, WorkflowError, WorkflowStore, WorkflowSummary, WritingLanguage, WritingStyle,
@@ -243,17 +243,23 @@ impl CommandService {
         expected_revision: u64,
         language: WritingLanguage,
         style: WritingStyle,
-        path: CompositionPath,
+        assistant_selection: Option<AssistantSelection>,
     ) -> Result<Workflow, CommandError> {
         self.ensure_clear(day)?;
         let mut workflow = self.load_workflow(day)?;
         ensure_revision(&workflow, expected_revision)?;
         workflow
-            .set_writing_settings(expected_revision, language, style, path, self.clock.now())
+            .set_writing_settings(
+                expected_revision,
+                language,
+                style,
+                assistant_selection.clone(),
+                self.clock.now(),
+            )
             .map_err(CommandError::Workflow)?;
         let preferences = Preferences {
             last_language: Some(language),
-            last_composition_path: path,
+            last_assistant_backend_id: assistant_selection.map(|selection| selection.backend_id),
         };
         self.store
             .compare_and_swap_with_preferences(expected_revision, &workflow, &preferences)
@@ -382,7 +388,7 @@ pub enum CommandError {
     Cancelled,
     SourcesInvalidated,
     Reconciling,
-    UnavailablePath,
+    UnavailableAssistantBackend,
     Store(StoreError),
     Workflow(WorkflowError),
     Source(SourceAccessError),
@@ -403,7 +409,7 @@ impl CommandError {
             Self::Cancelled => "operation-cancelled",
             Self::SourcesInvalidated => "sources-invalidated",
             Self::Reconciling => "reconciling",
-            Self::UnavailablePath => "composition-path-unavailable",
+            Self::UnavailableAssistantBackend => "assistant-backend-unavailable",
             Self::Workflow(WorkflowError::WrongState) => "wrong-state",
             Self::Workflow(WorkflowError::BlankEntry) => "blank-entry",
             Self::Workflow(WorkflowError::LanguageRequired) => "language-required",

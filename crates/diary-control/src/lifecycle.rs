@@ -3,6 +3,7 @@ use std::io::{Read, Write};
 use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 
+use diary_control_contract::CONTRACT_VERSION;
 use fs2::FileExt;
 use serde::{Deserialize, Serialize};
 
@@ -121,7 +122,7 @@ impl Drop for ServerLock {
     }
 }
 
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct RuntimeAdvertisement {
     pub version: u32,
@@ -130,6 +131,173 @@ pub struct RuntimeAdvertisement {
     pub port: u16,
     pub control_token: String,
     pub contract_version: u32,
+}
+
+/// Validated native-client attachment data. This intentionally has no
+/// `Debug` implementation because it contains the bearer token.
+#[derive(Clone)]
+pub struct RuntimeAttachment {
+    instance_id: String,
+    host: String,
+    port: u16,
+    control_token: String,
+    contract_version: u32,
+}
+
+impl RuntimeAttachment {
+    #[must_use]
+    pub fn instance_id(&self) -> &str {
+        &self.instance_id
+    }
+
+    #[must_use]
+    pub fn host(&self) -> &str {
+        &self.host
+    }
+
+    #[must_use]
+    pub const fn port(&self) -> u16 {
+        self.port
+    }
+
+    #[must_use]
+    pub fn control_token(&self) -> &str {
+        &self.control_token
+    }
+
+    #[must_use]
+    pub const fn contract_version(&self) -> u32 {
+        self.contract_version
+    }
+}
+
+/// Reads an existing runtime advertisement without creating private state or
+/// consulting product configuration.
+pub fn load_runtime_attachment(
+    runtime_dir: &Path,
+    expected_uid: u32,
+) -> Result<RuntimeAttachment, LifecycleError> {
+    let directory_path = match fs::symlink_metadata(runtime_dir) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return Err(LifecycleError::MissingRuntime);
+        }
+        Err(_) => return Err(LifecycleError::Io),
+    };
+    if !directory_path.file_type().is_dir()
+        || directory_path.file_type().is_symlink()
+        || directory_path.uid() != expected_uid
+        || directory_path.mode() & 0o077 != 0
+    {
+        return Err(LifecycleError::UnsafePath);
+    }
+    let directory = File::open(runtime_dir).map_err(|_| LifecycleError::Io)?;
+    let directory_opened = directory.metadata().map_err(|_| LifecycleError::Io)?;
+    if !same_identity(&directory_path, &directory_opened)
+        || !directory_opened.file_type().is_dir()
+        || directory_opened.uid() != expected_uid
+        || directory_opened.mode() & 0o077 != 0
+    {
+        return Err(LifecycleError::UnsafePath);
+    }
+
+    let path = runtime_dir.join("control-api.json");
+    let path_metadata = match fs::symlink_metadata(&path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return Err(LifecycleError::MissingRuntime);
+        }
+        Err(_) => return Err(LifecycleError::Io),
+    };
+    if !path_metadata.file_type().is_file()
+        || path_metadata.file_type().is_symlink()
+        || path_metadata.uid() != expected_uid
+        || path_metadata.nlink() != 1
+        || path_metadata.mode() & 0o077 != 0
+        || path_metadata.len() > 64 * 1024
+    {
+        return Err(LifecycleError::UnsafePath);
+    }
+    let mut file = File::open(&path).map_err(|_| LifecycleError::Io)?;
+    let opened = file.metadata().map_err(|_| LifecycleError::Io)?;
+    if !same_identity(&path_metadata, &opened)
+        || !opened.file_type().is_file()
+        || opened.uid() != expected_uid
+        || opened.nlink() != 1
+        || opened.mode() & 0o077 != 0
+        || opened.len() > 64 * 1024
+    {
+        return Err(LifecycleError::UnsafePath);
+    }
+    let mut raw = String::new();
+    Read::by_ref(&mut file)
+        .take(64 * 1024 + 1)
+        .read_to_string(&mut raw)
+        .map_err(|_| LifecycleError::InvalidRuntime)?;
+    if raw.len() > 64 * 1024 {
+        return Err(LifecycleError::InvalidRuntime);
+    }
+
+    let opened_after_read = file.metadata().map_err(|_| LifecycleError::Io)?;
+    let current_file = fs::symlink_metadata(&path).map_err(|_| LifecycleError::UnsafePath)?;
+    let current_directory =
+        fs::symlink_metadata(runtime_dir).map_err(|_| LifecycleError::UnsafePath)?;
+    if !same_file_state(&opened, &opened_after_read)
+        || !same_file_state(&opened_after_read, &current_file)
+        || !current_file.file_type().is_file()
+        || current_file.uid() != expected_uid
+        || current_file.nlink() != 1
+        || current_file.mode() & 0o077 != 0
+        || current_file.len() > 64 * 1024
+        || !same_identity(&directory_opened, &current_directory)
+        || !current_directory.file_type().is_dir()
+        || current_directory.uid() != expected_uid
+        || current_directory.mode() & 0o077 != 0
+    {
+        return Err(LifecycleError::UnsafePath);
+    }
+    let advertisement: RuntimeAdvertisement =
+        serde_json::from_str(raw.trim()).map_err(|_| LifecycleError::InvalidRuntime)?;
+    if advertisement.version != 1
+        || advertisement.host != "127.0.0.1"
+        || advertisement.port == 0
+        || advertisement.contract_version == 0
+        || !random_value_valid(&advertisement.instance_id, "instance_")
+        || !random_value_valid(&advertisement.control_token, "token_")
+    {
+        return Err(LifecycleError::InvalidRuntime);
+    }
+    if advertisement.contract_version != CONTRACT_VERSION {
+        return Err(LifecycleError::IncompatibleContract);
+    }
+    Ok(RuntimeAttachment {
+        instance_id: advertisement.instance_id,
+        host: advertisement.host,
+        port: advertisement.port,
+        control_token: advertisement.control_token,
+        contract_version: advertisement.contract_version,
+    })
+}
+
+fn same_identity(left: &fs::Metadata, right: &fs::Metadata) -> bool {
+    left.dev() == right.dev() && left.ino() == right.ino()
+}
+
+fn same_file_state(left: &fs::Metadata, right: &fs::Metadata) -> bool {
+    same_identity(left, right)
+        && left.len() == right.len()
+        && left.mtime() == right.mtime()
+        && left.mtime_nsec() == right.mtime_nsec()
+        && left.ctime() == right.ctime()
+        && left.ctime_nsec() == right.ctime_nsec()
+}
+
+fn random_value_valid(value: &str, prefix: &str) -> bool {
+    value.len() == prefix.len() + 64
+        && value.starts_with(prefix)
+        && value[prefix.len()..]
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
 }
 
 impl RuntimeAdvertisement {
@@ -409,11 +577,13 @@ fn validate_private_regular(path: &Path, expected_uid: u32) -> Result<(), Lifecy
 pub enum LifecycleError {
     MissingHome,
     MissingConfig,
+    MissingRuntime,
     UnsafeConfig,
     InvalidConfig,
     UnsafePath,
     AlreadyRunning,
     InvalidRuntime,
+    IncompatibleContract,
     Random,
     Io,
 }
@@ -474,6 +644,185 @@ mod tests {
         assert!(!runtime.join("control-api.json").exists());
         drop(first);
         ServerLock::acquire(&runtime, uid).unwrap();
+    }
+
+    #[test]
+    fn runtime_attachment_loader_is_read_only_strict_and_token_safe() {
+        let scratch = Scratch::new("runtime-reader");
+        let uid = fs::metadata(scratch.path()).unwrap().uid();
+        let runtime = scratch.path().join("runtime");
+        assert_eq!(
+            load_runtime_attachment(&runtime, uid).err(),
+            Some(LifecycleError::MissingRuntime)
+        );
+        assert!(!runtime.exists());
+        ensure_private_directory(&runtime, uid).unwrap();
+        assert_eq!(
+            load_runtime_attachment(&runtime, uid).err(),
+            Some(LifecycleError::MissingRuntime)
+        );
+
+        let advertisement = RuntimeAdvertisement {
+            version: 1,
+            instance_id: format!("instance_{}", "11".repeat(32)),
+            host: "127.0.0.1".to_owned(),
+            port: 8771,
+            control_token: format!("token_{}", "22".repeat(32)),
+            contract_version: CONTRACT_VERSION,
+        };
+        let runtime_file = advertisement.publish(&runtime, uid).unwrap();
+        let attachment = load_runtime_attachment(&runtime, uid).unwrap();
+        assert_eq!(attachment.host(), "127.0.0.1");
+        assert_eq!(attachment.port(), 8771);
+        assert_eq!(
+            attachment.instance_id(),
+            format!("instance_{}", "11".repeat(32))
+        );
+        assert_eq!(
+            attachment.control_token(),
+            format!("token_{}", "22".repeat(32))
+        );
+        assert_eq!(attachment.contract_version(), CONTRACT_VERSION);
+        assert_eq!(
+            load_runtime_attachment(&runtime, uid.saturating_add(1)).err(),
+            Some(LifecycleError::UnsafePath)
+        );
+        runtime_file.remove_if_owned().unwrap();
+
+        fs::set_permissions(&runtime, fs::Permissions::from_mode(0o750)).unwrap();
+        assert_eq!(
+            load_runtime_attachment(&runtime, uid).err(),
+            Some(LifecycleError::UnsafePath)
+        );
+        fs::set_permissions(&runtime, fs::Permissions::from_mode(0o700)).unwrap();
+
+        let path = runtime.join("control-api.json");
+        fs::write(&path, b"not-json\n").unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
+        assert_eq!(
+            load_runtime_attachment(&runtime, uid).err(),
+            Some(LifecycleError::InvalidRuntime)
+        );
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o640)).unwrap();
+        assert_eq!(
+            load_runtime_attachment(&runtime, uid).err(),
+            Some(LifecycleError::UnsafePath)
+        );
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
+        let linked = runtime.join("runtime-copy.json");
+        fs::hard_link(&path, &linked).unwrap();
+        assert_eq!(
+            load_runtime_attachment(&runtime, uid).err(),
+            Some(LifecycleError::UnsafePath)
+        );
+        fs::remove_file(linked).unwrap();
+
+        fs::remove_file(&path).unwrap();
+        let symlink_target = scratch.path().join("advertisement-target.json");
+        fs::write(&symlink_target, b"not-json\n").unwrap();
+        fs::set_permissions(&symlink_target, fs::Permissions::from_mode(0o600)).unwrap();
+        symlink(&symlink_target, &path).unwrap();
+        assert_eq!(
+            load_runtime_attachment(&runtime, uid).err(),
+            Some(LifecycleError::UnsafePath)
+        );
+        fs::remove_file(&path).unwrap();
+        fs::create_dir(&path).unwrap();
+        assert_eq!(
+            load_runtime_attachment(&runtime, uid).err(),
+            Some(LifecycleError::UnsafePath)
+        );
+        fs::remove_dir(&path).unwrap();
+        fs::write(&path, b"not-json\n").unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
+
+        let oversized = OpenOptions::new().write(true).open(&path).unwrap();
+        oversized.set_len(64 * 1024 + 1).unwrap();
+        assert_eq!(
+            load_runtime_attachment(&runtime, uid).err(),
+            Some(LifecycleError::UnsafePath)
+        );
+    }
+
+    #[test]
+    fn runtime_attachment_loader_rejects_unsafe_directories_and_contract_mismatch() {
+        let scratch = Scratch::new("runtime-reader-directory");
+        let uid = fs::metadata(scratch.path()).unwrap().uid();
+        let runtime = scratch.path().join("runtime");
+
+        fs::write(&runtime, b"not a directory").unwrap();
+        fs::set_permissions(&runtime, fs::Permissions::from_mode(0o600)).unwrap();
+        assert_eq!(
+            load_runtime_attachment(&runtime, uid).err(),
+            Some(LifecycleError::UnsafePath)
+        );
+        fs::remove_file(&runtime).unwrap();
+
+        let target = scratch.path().join("runtime-target");
+        ensure_private_directory(&target, uid).unwrap();
+        symlink(&target, &runtime).unwrap();
+        assert_eq!(
+            load_runtime_attachment(&runtime, uid).err(),
+            Some(LifecycleError::UnsafePath)
+        );
+        fs::remove_file(&runtime).unwrap();
+        ensure_private_directory(&runtime, uid).unwrap();
+
+        let advertisement = RuntimeAdvertisement {
+            version: 1,
+            instance_id: format!("instance_{}", "11".repeat(32)),
+            host: "127.0.0.1".to_owned(),
+            port: 8771,
+            control_token: format!("token_{}", "22".repeat(32)),
+            contract_version: CONTRACT_VERSION.saturating_add(1),
+        };
+        let runtime_file = advertisement.publish(&runtime, uid).unwrap();
+        assert_eq!(
+            load_runtime_attachment(&runtime, uid).err(),
+            Some(LifecycleError::IncompatibleContract)
+        );
+        runtime_file.remove_if_owned().unwrap();
+    }
+
+    #[test]
+    fn runtime_attachment_loader_rejects_malformed_advertisement_fields() {
+        let scratch = Scratch::new("runtime-reader-fields");
+        let uid = fs::metadata(scratch.path()).unwrap().uid();
+        let runtime = scratch.path().join("runtime");
+        ensure_private_directory(&runtime, uid).unwrap();
+        let path = runtime.join("control-api.json");
+        let valid = serde_json::json!({
+            "version": 1,
+            "instance_id": format!("instance_{}", "11".repeat(32)),
+            "host": "127.0.0.1",
+            "port": 8771,
+            "control_token": format!("token_{}", "22".repeat(32)),
+            "contract_version": CONTRACT_VERSION,
+        });
+        let mut invalid = Vec::new();
+        for (field, value) in [
+            ("version", serde_json::json!(2)),
+            ("host", serde_json::json!("localhost")),
+            ("port", serde_json::json!(0)),
+            ("contract_version", serde_json::json!(0)),
+            ("instance_id", serde_json::json!("instance_short")),
+            ("control_token", serde_json::json!("token_NOT_HEX")),
+        ] {
+            let mut advertisement = valid.clone();
+            advertisement[field] = value;
+            invalid.push(advertisement);
+        }
+        let mut unknown_field = valid;
+        unknown_field["unexpected"] = serde_json::json!(true);
+        invalid.push(unknown_field);
+        for advertisement in invalid {
+            fs::write(&path, serde_json::to_vec(&advertisement).unwrap()).unwrap();
+            fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
+            assert_eq!(
+                load_runtime_attachment(&runtime, uid).err(),
+                Some(LifecycleError::InvalidRuntime)
+            );
+        }
     }
 
     #[test]

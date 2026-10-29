@@ -10,11 +10,11 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use diary_connectors::SqliteStore;
 use diary_control::{CommandError, CommandService, ServerConfig, serve};
 use diary_core::{
-    CatalogRequest, Clock, CompositionPath, DateEvidence, DestinationKind, DestinationPlan,
-    DiaryDay, Digest, FreshnessOutcome, FreshnessStamp, IntentTerminal, OperationIntent,
-    OperationLog, Preferences, SelectedSource, SourceAccessError, SourceAvailability,
-    SourceCandidate, SourceCatalog, SourceDiscovery, SourceReadOutcome, SourceReader, SourceRef,
-    SourceSnapshot, Timestamp, WorkflowStore, WritingLanguage, WritingStyle,
+    CatalogRequest, Clock, DateEvidence, DestinationKind, DestinationPlan, DiaryDay, Digest,
+    FreshnessOutcome, FreshnessStamp, IntentTerminal, OperationIntent, OperationLog, Preferences,
+    SelectedSource, SourceAccessError, SourceAvailability, SourceCandidate, SourceCatalog,
+    SourceDiscovery, SourceReadOutcome, SourceReader, SourceRef, SourceSnapshot, Timestamp,
+    WorkflowStore, WritingLanguage, WritingStyle,
 };
 use tokio::net::TcpListener;
 use tokio::sync::oneshot;
@@ -78,14 +78,14 @@ fn command_service_closes_store_gaps_and_completes_manual_no_notes_flow() {
             workflow.revision(),
             WritingLanguage::KoKr,
             WritingStyle::Reflective,
-            CompositionPath::Manual,
+            None,
         )
         .unwrap();
     assert_eq!(
         store.load_preferences().unwrap(),
         Preferences {
             last_language: Some(WritingLanguage::KoKr),
-            last_composition_path: CompositionPath::Manual,
+            last_assistant_backend_id: None,
         }
     );
     let workflow = service
@@ -110,6 +110,29 @@ fn command_service_closes_store_gaps_and_completes_manual_no_notes_flow() {
     let summaries = service.list_workflows(256).unwrap();
     assert_eq!(summaries.len(), 1);
     assert_eq!(summaries[0].day, day);
+}
+
+#[test]
+fn command_service_confirms_explicit_no_notes_without_discovery() {
+    let scratch = Scratch::new("direct-empty");
+    let store = Arc::new(SqliteStore::open(scratch.path().join("state.sqlite3")).unwrap());
+    let service = service(store);
+    let day = DiaryDay::parse("2026-10-30").unwrap();
+    let workflow = match service.start_workflow(Some(day.clone())).unwrap() {
+        diary_core::StartOutcome::Created(workflow) => workflow,
+        _ => panic!("synthetic workflow should be new"),
+    };
+
+    let workflow = service
+        .confirm_empty_selection(&day, workflow.revision())
+        .unwrap();
+
+    assert_eq!(
+        workflow.state(),
+        diary_core::WorkflowState::SourcesConfirmed
+    );
+    assert!(workflow.candidates().is_empty());
+    assert!(workflow.explicit_empty_selection());
 }
 
 #[test]
@@ -172,14 +195,18 @@ fn real_loopback_enforces_headers_authorization_and_conditional_mutations() {
     runtime.block_on(async {
         let scratch = Scratch::new("loopback");
         let store = Arc::new(SqliteStore::open(scratch.path().join("state.sqlite3")).unwrap());
-        let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+        let listener = match TcpListener::bind(("127.0.0.1", 0)).await {
+            Ok(listener) => listener,
+            Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => return,
+            Err(error) => panic!("test listener bind failed: {error}"),
+        };
         let port = listener.local_addr().unwrap().port();
         let token = format!("token_{}", "11".repeat(32));
         let config = ServerConfig {
             instance_id: format!("instance_{}", "22".repeat(32)),
             control_token: token.clone(),
             port,
-            commands: service(store),
+            commands: prepared_service(store),
             apple_helper_available: true,
             notion_configured: false,
             diagnostics: None,
@@ -192,6 +219,7 @@ fn real_loopback_enforces_headers_authorization_and_conditional_mutations() {
 
         let response = request(port, "GET", "/v1/health", "", &[], None).await;
         assert!(response.starts_with("HTTP/1.1 200"));
+        assert!(response.contains("\"contract_version\":2"));
         assert!(
             response
                 .to_ascii_lowercase()
@@ -232,6 +260,11 @@ fn real_loopback_enforces_headers_authorization_and_conditional_mutations() {
         assert!(response.starts_with("HTTP/1.1 401"));
         let response = request(port, "GET", "/v1/capabilities", "", &[], Some("wrong")).await;
         assert!(response.starts_with("HTTP/1.1 401"));
+        let response = request(port, "GET", "/v1/capabilities", "", &[], Some(&token)).await;
+        assert!(response.starts_with("HTTP/1.1 200"));
+        assert!(response.contains("\"manual_workflow_available\":true"));
+        assert!(response.contains("\"assistant_backends\":[]"));
+        assert!(!response.contains("composition_paths"));
         let nested = format!("{}0{}", "[".repeat(17), "]".repeat(17));
         let response = request(port, "PUT", "/v1/preferences", &nested, &[], Some(&token)).await;
         assert!(response.starts_with("HTTP/1.1 400"));
@@ -247,6 +280,51 @@ fn real_loopback_enforces_headers_authorization_and_conditional_mutations() {
         .await;
         assert!(response.starts_with("HTTP/1.1 201"));
         assert!(response.to_ascii_lowercase().contains("etag: \"wf-0\""));
+        let response = request(
+            port,
+            "POST",
+            "/v1/workflows",
+            r#"{"diary_day":"2026-10-30"}"#,
+            &[],
+            Some(&token),
+        )
+        .await;
+        assert!(response.starts_with("HTTP/1.1 201"));
+        let response = request(
+            port,
+            "POST",
+            "/v1/workflows/wf_20261030/empty-selection-confirmations",
+            "",
+            &[("If-Match", "\"wf-0\"".to_owned())],
+            Some(&token),
+        )
+        .await;
+        assert!(response.starts_with("HTTP/1.1 200"));
+        assert!(response.contains("\"state\":\"sources-confirmed\""));
+        assert!(response.contains("\"explicit_empty_selection\":true"));
+        let response = request(
+            port,
+            "PUT",
+            "/v1/workflows/wf_20261030/writing-settings",
+            r#"{"language":"en-US","style":"concise","assistant_backend_id":"unknown"}"#,
+            &[("If-Match", "\"wf-1\"".to_owned())],
+            Some(&token),
+        )
+        .await;
+        assert!(response.starts_with("HTTP/1.1 409"));
+        assert!(response.contains("assistant-backend-unavailable"));
+        let response = request(
+            port,
+            "PUT",
+            "/v1/workflows/wf_20261030/writing-settings",
+            r#"{"language":"en-US","style":"concise","assistant_backend_id":null}"#,
+            &[("If-Match", "\"wf-1\"".to_owned())],
+            Some(&token),
+        )
+        .await;
+        assert!(response.starts_with("HTTP/1.1 200"));
+        assert!(response.contains("\"assistant_backend_id\":null"));
+        assert!(response.contains("\"composition_path\":null"));
 
         let sse = open_sse(port, &token).await;
         tokio::time::sleep(std::time::Duration::from_millis(30)).await;
@@ -304,6 +382,19 @@ fn real_loopback_enforces_headers_authorization_and_conditional_mutations() {
         assert!(event_stream.contains("event: workflow.changed"));
         assert!(!event_stream.contains("diary_day"));
         assert!(!event_stream.contains("entry_text"));
+
+        let response = request(
+            port,
+            "GET",
+            "/v1/workflows/wf_20261029/sources",
+            "",
+            &[],
+            Some(&token),
+        )
+        .await;
+        assert!(response.starts_with("HTTP/1.1 200"));
+        assert!(response.contains("\"source_note_name\":\"2026/10/29/note.md\""));
+        assert!(response.contains("\"id\":\"src_"));
 
         let response = request(
             port,
@@ -414,6 +505,15 @@ fn service(store: Arc<SqliteStore>) -> CommandService {
     )
 }
 
+fn prepared_service(store: Arc<SqliteStore>) -> CommandService {
+    CommandService::new(
+        store,
+        Arc::new(PreparedSources),
+        Arc::new(PreparedSources),
+        Arc::new(FixedClock),
+    )
+}
+
 struct FixedClock;
 
 impl Clock for FixedClock {
@@ -449,6 +549,7 @@ impl SourceCatalog for PreparedSources {
         Ok(SourceDiscovery {
             candidates: vec![SourceCandidate {
                 source: Self::source(),
+                source_note_name: "2026/10/29/note.md".to_owned(),
                 date_evidence: DateEvidence {
                     directory_day: Some(DiaryDay::parse("2026-10-29").unwrap()),
                     header_day: None,

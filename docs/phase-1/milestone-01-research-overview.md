@@ -1,6 +1,6 @@
 # P1-M1: MVP research and decisions overview
 
-Status: Active
+Status: Done
 
 This milestone consolidates the research already completed for the macOS TUI
 MVP and closes only the questions needed to make later Phase 1 planning

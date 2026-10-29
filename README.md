@@ -2,12 +2,12 @@
 
 Make remembering a day feel effortless.
 
-The active Phase 1 MVP is a macOS TUI that reads Markdown files from a mounted
-iCloud directory, lets the user choose which dated source notes belong in an
+The active Phase 1 MVP is a macOS terminal client that reads Markdown source
+notes from a mounted iCloud directory, lets the user choose which dated source notes belong in an
 entry even when their directory and header dates disagree, and supports a
 selectable set of assistant backends (hosted by default, optional Apple
 on-device, and future approved adapters), paragraph suggestions that the user
-accepts or rejects, or manual writing. It saves the confirmed entry as local
+accepts or rejects, or manual writing in the always-available Draft editor. It saves the confirmed entry as local
 Markdown and publishes its body to a Notion daily section under root, year, and
 month pages. See the
 [product roadmap](docs/roadmap.md).
@@ -15,8 +15,9 @@ month pages. See the
 The repository contains the independently testable workflow core, private
 SQLite persistence, bounded Ayumi source ingestion and Swift iCloud bridge,
 and P1-M6's secure loopback Control API Server. Start the foreground server
-with `cargo run -p nd -- serve`; the default `nd` TUI mode remains unfinished
-until P1-M7.
+with `cargo run -p nd -- serve`; P1-M12 completed the canonical terminology,
+assistant-neutral contract, and M7 lower-layer readiness pass. P1-M7 remains
+planned behind its dependency and macOS FFI approval gate.
 
 ## License
 

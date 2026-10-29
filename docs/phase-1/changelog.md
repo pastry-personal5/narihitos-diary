@@ -6,10 +6,48 @@ This changelog records owner decisions and material plan changes for Phase 1.
 
 ## Entries
 
+- 2026-10-29 — P1-M12 completion review — Tightened source-note presentation
+  names against absolute, traversal-like, empty-component, oversized, and
+  control-character forms; made shared workflow DTO decoding reject malformed
+  or partial assistant selections; and corrected the last current UX use of
+  generic model terminology. Stabilized helper-timeout and loopback tests so
+  unrelated process load, occupied fixed ports, or a network-prohibited test
+  sandbox do not masquerade as product regressions. The complete Rust and Swift
+  gate passed again.
+
+- 2026-10-29 — Owner decision: P1-M7 Work Status — Added a full-width Work
+  Status pane above the Workflow Sidebar, Resources Sidebar, and Main Pane. Its
+  bordered body has four content rows for current/recent work, pending or
+  blocked work, connection and draft-save safety, and a useful safe notice or
+  next action. The compact bottom Status Line remains and may intentionally
+  duplicate important state. The planned minimum terminal size increases from
+  80 by 24 to 80 by 30; no production code or dependency changed.
+
+- 2026-10-29 — P1-M12 completion — Reviewed all active documentation and the
+  implemented codebase, made UX and assistant terminology canonical, and
+  completed the breaking pre-client contract version 2 migration. Manual
+  editing is now separate from assistant backend/path selection; source-note
+  names, direct explicit no-notes continuation, and a read-only hardened
+  runtime attachment loader prepare the lower layers for P1-M7. SQLite v4
+  forward-migrates existing workflow, source, receipt, and operation state.
+  The full Rust and Swift gate passed; P1-M7 remains `Planned` pending its
+  dependency and macOS FFI approval packet.
+
+- 2026-10-29 — Owner-directed P1-M12 start and milestone reorder — Added
+  P1-M12 Consistency and contract readiness after completed P1-M6 and before
+  P1-M7 implementation. M12 reviews every active document first, adopts the
+  canonical UX vocabulary, moves the assistant-neutral backend/path contract
+  foundation ahead of the first client, and then fixes the source-note name,
+  explicit no-notes, and safe runtime-attachment lower-layer gaps already found
+  by the M7 review. The unshipped Control API may break and increment its
+  contract version; durable workflow, source, output, receipt, and operation
+  state must be forward-migrated. P1-M7 remains `Planned` and its dependency/FFI
+  packet remains unapproved.
+
 - 2026-10-29 — P1-M7 contract-readiness and implementation-plan review —
   Audited the planned TUI against the completed P1-M6 code and found three
   pre-implementation corrections: a safe runtime-advertisement reader, a
-  server-supplied local source display identity, and a reachable explicit
+  server-supplied local source-note name, and a reachable explicit
   no-notes transition when source reading is unavailable. Strengthened M7 with
   bounded HTTP/SSE and autosave recovery, future-state fail-closed behavior,
   terminal-control rendering, a minimal Command Line grammar, and exact

@@ -63,7 +63,8 @@ The optional `server.port_fallback_count` configuration value defaults to `8`
 and may be `0` through `16`. The server always tries `8771` and `8772` first,
 then that many additional consecutive ports. An unavailable Apple helper or
 unconfigured Notion destination is reported as a disabled capability and does
-not prevent the manual no-notes workflow.
+not prevent the explicit continue-without-notes action and manual editing in
+the Draft editor.
 
 Content-free `ndlog-v1` diagnostics are stored in the Git-ignored
 `.local/logs/control-api/` directory with owner-only permissions. Contributors,

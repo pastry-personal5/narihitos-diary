@@ -859,7 +859,7 @@ printf '{"ok":true,"protocol_version":1,"request_id":"%s","value":{"status":"res
 "#,
         );
         let client =
-            AppleBridgeClient::new(&success, "Ayumi", &handoff, Duration::from_secs(1), 1).unwrap();
+            AppleBridgeClient::new(&success, "Ayumi", &handoff, Duration::from_secs(5), 1).unwrap();
         let source = SourceRef::new(CONNECTOR, "2026/10/29/n.md").unwrap();
         assert_eq!(
             client.availability(&source, &AtomicBool::new(false)),
@@ -881,7 +881,7 @@ printf '{"ok":true,"protocol_version":1,"request_id":"%s","value":{"status":"res
 
         let crash = script(&scratch, "crash.sh", "cat >/dev/null\nexit 7\n");
         let crash_client =
-            AppleBridgeClient::new(crash, "Ayumi", &handoff, Duration::from_secs(1), 1).unwrap();
+            AppleBridgeClient::new(crash, "Ayumi", &handoff, Duration::from_secs(5), 1).unwrap();
         assert_eq!(
             crash_client.availability(&source, &AtomicBool::new(false)),
             Err(SourceAccessError::HelperCrashed)

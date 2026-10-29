@@ -62,6 +62,9 @@ requests. The TUI in P1-M7 renders the evidence and warnings returned here.
    location, independently of front-matter `id`, file content, or discovery
    order. Resolve it only inside the connector after root and file checks; do
    not expose the absolute path as a core or assistant field.
+   P1-M12 later persists that already-sanitized relative path separately as the
+   local source-note name used by the terminal client; the opaque command ID
+   and assistant-data boundary remain unchanged.
 4. Return the directory date for each candidate. For locally readable files,
    inspect bounded metadata to obtain a valid offset-aware `created_at` date,
    using the calendar date in that timestamp's own offset, not a conversion to

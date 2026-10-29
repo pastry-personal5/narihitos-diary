@@ -1,6 +1,6 @@
 # P1-M2: Software architecture overview
 
-Status: Active
+Status: Done
 
 This milestone defines a reviewable software architecture for the macOS diary
 application. Its product architecture is recorded separately so that it can be

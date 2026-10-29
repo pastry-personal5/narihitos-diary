@@ -1,6 +1,6 @@
 # P1-M1 research and owner decision summary
 
-Status: Active
+Status: Done
 
 P1-M1 research produced the evidence below. The owner interview confirmed or
 replaced its product recommendations. Later owner corrections set a Notion
@@ -22,7 +22,7 @@ the TUI.
 | Selection stability | Make metadata/digest checks at workflow checkpoints; a detected change invalidates drafts and previews. An unverifiable check stops output until successful reread and reconfirmation. | [Operational constraints](../research/mvp-operational-constraints.md) |
 | Audio | Drop supported audio-link nodes and targets; attachment count never changes eligibility. | [Input format](../research/markdown-input-format.md) |
 | iCloud | Request download of selected cloud-only notes and coordinate their reads with a Foundation adapter. | [Input format](../research/markdown-input-format.md), [Apple evidence](../research/p1-m1-validation-evidence.md) |
-| Composition | Use reviewed, guided two-pass drafting and a full multiline manual editor always, including after model failure. Recover unfinished drafts locally. (Originally Apple on-device only with no hosted provider; superseded: hosted is now the default and Apple on-device is optional.) | [Composition research](../research/agent-assisted-diary-composition.md), [prototype comparison](../research/p1-m1-validation-evidence.md) |
+| Composition | Use reviewed, guided two-pass drafting and an always-available multiline Draft editor for manual editing, including after assistant failure. Recover unfinished drafts locally. (Originally Apple on-device only with no hosted provider; superseded: hosted is now the default and Apple on-device is optional.) | [Composition research](../research/agent-assisted-diary-composition.md), [prototype comparison](../research/p1-m1-validation-evidence.md) |
 | Writing choices | Choose US English or South Korean Korean per entry, remembering the last choice. Offer concise, standard, or reflective style, defaulting to concise. Allow inferred reflections by default but mark them for review; confirm the complete edited text. | [Composition research](../research/agent-assisted-diary-composition.md) |
 | Local output | Default to configurable `~/Documents/narihitos-diary/entries/YYYY/MM/YYYY-MM-DD.md` with YAML day/language front matter; atomically create, resume identical content, and never overwrite different content automatically. | [Operational constraints](../research/mvp-operational-constraints.md) |
 | Persistent state | Store draft recovery and versioned publication receipts in a per-user SQLite database under Application Support. Keep credentials out of it. | [Operational constraints](../research/mvp-operational-constraints.md) |
@@ -51,8 +51,8 @@ the TUI.
   source. Japanese is now out of scope; implementation acceptance repeats
   `en ↔ ko` instead.
 - One guided synthetic generation passed; this does not prove model quality on
-  every diary. The manual editor, source-linked review, marked inferred
-  reflections, runtime availability check, and manual path after failure are
+  every diary. The Draft editor, source-linked review, marked inferred
+  reflections, runtime availability check, and manual editing after failure are
   therefore part of the decision rather than optional polish.
 - Real-terminal restoration after panic/cancellation cannot be proven by an
   in-memory backend. It remains an implementation acceptance test using only

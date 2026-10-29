@@ -1,6 +1,6 @@
 # P1-M1: MVP research and decisions approach
 
-Status: Active
+Status: Done
 
 This document defines how P1-M1 research is gathered, reviewed, and converted
 into decisions. It is a research approach, not an implementation architecture
@@ -39,7 +39,7 @@ or a plan for another milestone.
    define the diary-day identity shared by filenames, Notion headings, and retry
    state.
 2. Evaluate composition and review with that normalized source model, keeping a
-   manual path available in every experiment.
+   manual editing available in the Draft editor for every experiment.
 3. Define local output before Notion publication so the local file remains the
    durable source of truth after partial success.
 4. Inspect and probe Notion only after the content boundary and same-day identity

@@ -14,9 +14,9 @@ pub mod workflow;
 
 pub use digest::Digest;
 pub use ports::{
-    Clock, Destination, IntentTerminal, OperationLog, SourceCatalog, SourceCheckpointError,
-    SourceReader, StartOutcome, StoreError, WorkflowStore, revalidate_workflow_sources,
-    start_default_workflow,
+    Clock, Destination, DraftAssistant, IntentTerminal, OperationLog, SourceCatalog,
+    SourceCheckpointError, SourceReader, StartOutcome, StoreError, WorkflowStore,
+    revalidate_workflow_sources, start_default_workflow,
 };
 pub use publication::{PublicationCoordinator, PublicationError, PublicationResult};
 pub use types::*;

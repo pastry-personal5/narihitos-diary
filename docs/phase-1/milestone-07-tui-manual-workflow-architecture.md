@@ -9,12 +9,12 @@ Control API without creating a second workflow authority in the client.
 
 - `diary-tui`: terminal guard, typed API client, SSE worker, ViewModels, views,
   editor buffer, Command Line mapping, and IME adapter.
-- `diary-control-contract`: the already-implemented representations, problems,
+- `diary-control-contract`: the P1-M12 representations, problems,
   ETags, and event payloads needed by the manual workflow.
 - `apps/nd`: default TUI startup, runtime-file attachment, and terminal error
   handling.
-- `diary-control`: the bounded P1-M6 runtime-reader and no-notes defect
-  corrections; it remains the owner of policy and persistence.
+- `diary-control`: the P1-M12 runtime-attachment, source-note naming, and
+  no-notes contracts; it remains the owner of policy and persistence.
 - Proposed `diary-macos`: TIS/Core Foundation query,
   notification, ownership, and run-loop integration behind a safe fakeable
   interface. Creating it and its narrow unsafe policy requires the owner
@@ -22,21 +22,21 @@ Control API without creating a second workflow authority in the client.
 
 The TUI has no filesystem, SQLite, source-reader, helper, or assistant adapter.
 A missing P1-M7 operation in the completed server contract is a
-planning/contract gap: stop and amend the owning P1-M6 plan rather than
+planning/contract gap: stop and amend the owning P1-M12 plan rather than
 inventing a client-side workaround or a parallel endpoint.
 
 ## Implemented-contract readiness audit
 
-Before the TUI manifest changes, amend P1-M6 and requalify these findings from
-the implemented code:
+Before the TUI manifest changes, verify the P1-M12 evidence for these findings:
 
 | Finding | Required correction and evidence |
 |---|---|
-| Runtime advertisements can be published and removed safely, but no safe client read operation exists. | Add a descriptor-validated, size-bounded, read-only loader. It does not create directories, acquire the server lock, read configuration, or implement a second path policy in `apps/nd`. Test missing, malformed, wrong-owner/mode/type/link, swapped, oversized, and valid files. |
-| `SourceCandidateDto` exposes only an opaque hash, so distinct notes cannot be identified in Sources. | Add a local display identity supplied by the trusted server to candidate and detail DTOs. Keep the opaque ID for commands and forbid the display identity from diagnostics and hosted-assistant envelopes. Update strict fixtures before the first client ships. |
-| `source:read` is disabled with an unavailable helper, while explicit empty confirmation currently requires a prior Discovered state. | Let the existing dedicated empty-selection command advance a newly started workflow only through an explicit human action and without creating candidates or pretending discovery succeeded. Cover helper-unavailable and ordinary discovered-empty cases. |
+| Runtime advertisements previously had no safe client read operation. | P1-M12 added a descriptor-validated, size-bounded, read-only loader. It creates no state, acquires no server lock, and reads no configuration. Verify its missing, malformed, owner/mode/type/link, path-identity, oversized, and valid-file tests. |
+| `SourceCandidateDto` previously exposed only an opaque hash, so distinct notes could not be identified in Sources. | P1-M12 added the trusted server-supplied `source_note_name` to candidate and detail DTOs while retaining the opaque command ID. Verify it is absent from diagnostics and assistant request envelopes. |
+| `source:read` can be unavailable before discovery, while explicit no-notes confirmation must remain reachable. | P1-M12 lets the existing dedicated empty-selection command advance a newly started workflow only through an explicit human action and without creating candidates or pretending discovery succeeded. Verify direct and discovered-empty cases. |
 
-These are contract defect corrections, not permission for M7 to add routes.
+P1-M12 implements these corrections. They are not permission for M7 to add
+routes or duplicate lower-layer behavior.
 
 ## Canonical stages in M7
 
@@ -49,7 +49,7 @@ server's state enum as navigation labels.
 |---|---|
 | Start | Attach, setup status, choose a day, and start, resume, or discard. |
 | Sources | Discover, include or exclude, prepare, inspect readable text, and confirm the source set or explicit empty set. |
-| Compose | Choose language/style and use the manual editor; confirmed sources remain inspectable. Assistant controls arrive in P1-M8 without adding a stage. |
+| Compose | Choose language/style and use the Draft editor manually; confirmed source notes remain inspectable. Assistant controls arrive in P1-M8 without adding a stage. |
 | Review | Inspect and confirm the complete edited entry. |
 | Preview | Visible but locked until P1-M9. |
 | Publish | Visible but locked until P1-M9 and P1-M10. |
@@ -81,7 +81,7 @@ The pure mapping also handles every later state already representable by the
 core (`OutputPlanned`, `Approved`, `Publishing`, `Partial`, and `Completed`). M7
 shows their canonical progress read-only and keeps Preview/Publish actions
 locked with an “available in a later milestone/client” explanation; it never
-maps a completed entry back into the manual editor or accidentally begins an
+maps a completed entry back into the Draft editor or accidentally begins an
 amendment. An unknown state is a fail-closed contract mismatch, not Start.
 
 ## Client-to-server boundary
@@ -89,31 +89,28 @@ amendment. An unknown state is a fail-closed contract mismatch, not Start.
 The typed client is the only route from a ViewModel to persisted workflow
 state. It exposes purpose-named operations, not general request construction;
 route paths, bearer handling, ETags, and RFC 9457 problem decoding stay inside
-the API-client module. The following map is the P1-M7 surface expected from
-P1-M6. It is a verification aid, not permission to add a missing route.
+the API-client module. The following map is the P1-M7 surface provided by
+P1-M12 over the P1-M6 server. It is a verification aid, not permission to add a
+missing route.
 
-| TUI intent | P1-M6 resource | Client and ViewModel rule |
+| Terminal-client intent | Control API resource | Client and ViewModel rule |
 |---|---|---|
 | Attach and determine whether actions are available | `GET /v1/health`, then authenticated `GET /v1/capabilities` and `GET /v1/setup-check` | Compare runtime-file and health instance IDs and contract version before bearer use. Keep setup results informational; a failed setup check never turns into a client-side configuration probe. |
 | Choose defaults and remembered entry settings | `GET`/`PUT /v1/preferences` | Render only server-accepted values. A rejected preference edit remains local presentation input until the person changes or discards it. |
 | Start, resume, list, or discard a workflow | `GET`/`POST /v1/workflows`, `GET`/`DELETE /v1/workflows/{id}` | Consume bounded pagination in server order so unfinished drafts remain first. Send no diary day for the server-owned Mac-local “today” default. Use the current workflow ETag for discard and refetch after a stale precondition or domain conflict. Completed workflows are read-only in M7. |
-| Find and inspect candidates or confirmed snapshots | `POST /v1/workflows/{id}/discoveries`, `GET /v1/workflows/{id}/sources`, `GET /v1/workflows/{id}/sources/{source_id}` | Render the server-supplied local display identity, date evidence, availability, and warnings. Consume bounded source pagination. Discovery summaries contain no body. Before confirmation, source detail carries the active preparation handle in its header and returns one prepared sanitized body; afterward it returns only a persisted confirmed snapshot. It performs no new source read. |
+| Find and inspect candidates or confirmed snapshots | `POST /v1/workflows/{id}/discoveries`, `GET /v1/workflows/{id}/sources`, `GET /v1/workflows/{id}/sources/{source_id}` | Render the server-supplied `source_note_name`, date evidence, availability, and warnings. Consume bounded source pagination. Discovery summaries contain no body. Before confirmation, source detail carries the active preparation handle in its header and returns one prepared sanitized body; afterward it returns only a persisted confirmed snapshot. It performs no new source read. |
 | Prepare selected sources and confirm selection | `POST /v1/workflows/{id}/sources/prepare`, `PUT /v1/workflows/{id}/selection`, `POST /v1/workflows/{id}/empty-selection-confirmations`, `GET`/`DELETE /v1/jobs/{id}` | Track accepted work as a job and review its expiring server-owned preparation result. The Resources Sidebar's active source is presentation state separate from the prospective included IDs. Confirm by handle, never by echoing a body or stamp. If the job expires or the server restarts, prepare again. The separate empty-selection command is the only zero-note continuation. |
-| Choose current entry settings and enter manual composition | `PUT /v1/workflows/{id}/writing-settings`, `POST /v1/workflows/{id}/manual-compositions` | Use the workflow ETag, show unavailable assistant paths without invoking them, and treat the server as authoritative for language, style, path, and invalidation. |
+| Choose current entry settings and open the Draft editor | `PUT /v1/workflows/{id}/writing-settings`, `POST /v1/workflows/{id}/manual-compositions` | Use the workflow ETag, send no assistant backend ID in M7, and treat the server as authoritative for language, style, selected backend/path, and invalidation. Manual editing is not a backend or composition path. |
 | Save and confirm the complete manual entry | `PUT /v1/workflows/{id}/entry`, `POST /v1/workflows/{id}/entry-confirmations` | Autosave uses only the entry-buffer ETag. Confirmation supplies both current versions and is disabled for blank text or unresolved inferred-reflection delimiters. |
 | Notice committed changes | `GET /v1/events?workflow_id={id}` plus canonical workflow/job reads | Treat every event as a prompt to reload, never as the full state or a confirmation receipt. |
 
 No P1-M7 ViewModel calls assistant, publication, amendment, or `/mcp` resources.
 The client must not synthesize source availability, workflow transitions,
-selection digests, entry confirmation, or composition-path availability from
-local data.
-
-P1-M6's frozen contract reports `manual` in `composition_paths` because manual
-composition is its only implemented mode. M7 consumes that representation as
-implemented and labels it as the manual editor; it does not treat it as an
-assistant backend or guess future backend descriptors. P1-M8 owns the versioned
-contract and persistence migration that separates manual availability from the
-registered backend collection and each backend's hosted/on-device path.
+selection digests, entry confirmation, backend availability, or composition
+path from local data. P1-M12 separates `manual_workflow_available` from the
+collection-shaped assistant backend descriptors before M7. That collection is
+empty in the manual-only slice; P1-M8 registers production backends without
+another manual/path migration.
 
 ### Attachment and HTTP safety
 
@@ -162,9 +159,10 @@ The terminal owner is the sole renderer and input dispatcher. Bounded workers
 perform API calls and event-stream reads, returning typed results over bounded
 channels; workers do not mutate a ViewModel. A ViewModel contains the last
 canonical server representation, current canonical stage, active resource,
-prospective included source IDs, focus and layout state, an in-memory editor
-buffer and cursor, a monotonically increasing local edit generation, and a
-pending-intent label. Active resource and inclusion are independent. The only
+prospective included source IDs, focus and layout state, a four-row Work Status
+presentation model, an in-memory editor buffer and cursor, a monotonically
+increasing local edit generation, and a pending-intent label. Active resource
+and inclusion are independent. The only
 durable text is the server entry buffer; a local unsent buffer disappears if
 the process ends before a flush.
 
@@ -190,6 +188,31 @@ otherwise the newer text stays dirty and schedules another conditional save.
 Timeouts and unknown outcomes always refetch before another save. On `412`, show
 the canonical server text and retained local text as separate choices; never
 silently merge diary prose or replay it against a new buffer version.
+
+## Work Status and compact status
+
+Work Status is a full-width, bordered pane directly above the three-column
+Workflow Sidebar, Resources Sidebar, and Main Pane region. Its visible title is
+`Work Status`, and its body is always exactly four text rows; the title and top
+and bottom borders do not count toward those four rows. The pane does not take
+focus or own actions.
+
+The four rows prioritize: current or most recent work and its outcome; pending
+or blocked work; connection and draft-save safety; and the newest useful safe
+notice or next action. Each priority owns one visual row and truncates by
+display width; empty priorities leave a blank row rather than shrinking the
+pane. Messages come from typed ViewModel state and fixed client messages. They
+may use a sanitized presentation name already allowed on the current screen,
+but never diary text, credentials, raw request data, or arbitrary
+transport/server strings. A Banner in the Main Pane still holds the full
+explanation and controls for a condition that needs a decision.
+
+The bottom Status Line remains the compact ambient summary for diary day,
+workflow state, connection, IME, progress, short error state, and action hints.
+Work Status may intentionally repeat important connection, progress, save, or
+error state from the Status Line so that useful information remains readable
+without relying on the single-line summary. Tests cover ordering, replacement,
+display-width truncation, safe rendering, and this intentional duplication.
 
 ## Terminal, editor, and command input
 
@@ -236,8 +259,8 @@ privacy prompt are acceptance cases.
 
 ## Approach and sequence
 
-1. Apply and requalify the three P1-M6 contract corrections, inspect the final
-   runtime-file and contract fixtures, and record owner approval for the exact
+1. Verify P1-M12 is `Done`, inspect its runtime-attachment and contract
+   fixtures, and record owner approval for the exact
    dependency, worker-limit, workspace, and unsafe-FFI packet. Stop if the
    implemented surface still cannot express the manual flow.
 2. Build a terminal guard that restores terminal state on normal return,
@@ -248,15 +271,16 @@ privacy prompt are acceptance cases.
 3. Implement the typed bounded HTTP/SSE client and fake boundary, including
    route-specific body caps, timeouts, paging, conditional headers, instance
    replacement, event cursors, canonical refetch, and fixed safe errors.
-4. Implement the Standard Layout shell as a left Workflow Sidebar, middle
-   Resources Sidebar, and right Main Pane, then add connection states, Status
-   Line, focus model, terminal-size fallback, and bounded API/event workers. The Workflow
-   Sidebar renders the six canonical stages, server-derived progress, and the
-   presentation-only current marker. The Resources Sidebar renders the active stage's source/input/output
-   resources and their explicit state, using indented trees where a server
-   resource has a hierarchy. The terminal owner polls worker completions and
-   renders; reconnect and an SSE
-   gap trigger a canonical workflow refetch before a mutation can be enabled.
+4. Implement the Standard Layout shell with a full-width four-content-row Work
+   Status pane above a left Workflow Sidebar, middle Resources Sidebar, and
+   right Main Pane, then add connection states, the compact Status Line, focus
+   model, the 80-by-30 terminal-size fallback, and bounded API/event workers.
+   The Workflow Sidebar renders the six canonical stages, server-derived
+   progress, and the presentation-only current marker. The Resources Sidebar
+   renders the active stage's source/input/output resources and their explicit
+   state, using indented trees where a server resource has a hierarchy. The
+   terminal owner polls worker completions and renders; reconnect and an SSE gap
+   trigger a canonical workflow refetch before a mutation can be enabled.
 5. Add Start and Sources ViewModels over authoritative workflow DTOs. Keep
    candidate discovery, the active-resource/included-set distinction,
    selected-only cloud preparation, prepared-body inspection in the Main Pane,
@@ -273,7 +297,7 @@ privacy prompt are acceptance cases.
    returning to the draft restores cursor and selection. Recovered text is
    editable but is never itself evidence of confirmation.
 7. Represent language/style as server-owned workflow state, remembering only
-   the last language/path preference and retaining the concise new-workflow
+   the last language and optional assistant backend ID while retaining the concise new-workflow
    style default. Render any reserved inferred-reflection delimiter defensively
    and block entry
    confirmation until it is resolved, while leaving extraction and drafting for

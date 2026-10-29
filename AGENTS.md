@@ -73,7 +73,7 @@ See [README.md](README.md) for the overview. Setup and contribution rules are in
 - **Cloud-only sources:** request download only for selected cloud-only iCloud
   notes, then coordinate their reads through a macOS adapter.
 - **Composition:** offer reviewed two-pass drafting behind one `DraftAssistant`
-  port and an always-available multiline manual editor, including after
+  port and an always-available multiline Draft editor for manual editing, including after
   assistant failure. Register assistant adapters by stable ID and allow two or
   more to be available without provider-specific workflow or TUI branches;
   each assistant action targets exactly one selected backend. The default
@@ -84,7 +84,7 @@ See [README.md](README.md) for the overview. Setup and contribution rules are in
   the user invokes an assistant action and includes only confirmed source
   snapshots. Offer US English or South Korean Korean per entry, remembering the
   last choice, and concise, standard, or reflective style with concise as the
-  default. Mark model-inferred reflections for user review. A user may ask a
+  default. Mark assistant-inferred reflections for user review. A user may ask a
   selected backend to review a paragraph; its version-bound suggestion must be
   explicitly accepted or rejected and never confirms the complete entry.
   Confirm the complete edited entry before output. Recover unfinished drafts
@@ -106,10 +106,13 @@ See [README.md](README.md) for the overview. Setup and contribution rules are in
   time zone, and the Start stage lists unfinished drafts first.
 - **TUI workflow layout:** use the canonical user-facing stages `Start`,
   `Sources`, `Compose`, `Review`, `Preview`, and `Publish`, in that order. The
-  standard layout has a left Workflow Sidebar for those stages, a middle
-  Resources Sidebar for sources, drafts, assistant suggestions, or
-  destinations, and a right Main Pane for the active resource. Activating a
-  source displays its readable text without changing whether it is included.
+  standard layout has a full-width Work Status pane above a left Workflow
+  Sidebar for those stages, a middle Resources Sidebar for sources, drafts,
+  assistant suggestions, or destinations, and a right Main Pane for the active
+  resource. Work Status has four content rows excluding its border and title;
+  it explains current work and useful messages and may duplicate the compact
+  bottom Status Line. Activating a source displays its readable text without
+  changing whether it is included.
   Only the confirmed included snapshots can be sent, and only when the user
   explicitly invokes an assistant action. A completed assistant draft opens as
   editable text in the Main Pane; paragraph suggestions require explicit accept
@@ -192,7 +195,7 @@ See [README.md](README.md) for the overview. Setup and contribution rules are in
 - **Hosted provider:** the provider, its credential storage, and the HTTP
   dependency for the default hosted adapter are undecided. Settle them before
   building that adapter; until then the `DraftAssistant` port, the data classes
-  in Hosted data egress, and the manual editor are the contract.
+  in Hosted data egress, and the Draft editor are the contract.
 - **Language metadata:** no known Ayumi front-matter field identifies a note's
   language, so nothing is blocked by language. Name a field before adding
   metadata-based rejection.

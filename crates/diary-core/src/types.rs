@@ -111,8 +111,24 @@ pub struct DateEvidence {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SourceCandidate {
     pub source: SourceRef,
+    /// Safe local presentation name. This never enters assistant requests or
+    /// content-free diagnostics.
+    pub source_note_name: String,
     pub date_evidence: DateEvidence,
     pub availability: SourceAvailability,
+}
+
+/// Returns whether a connector-supplied source-note name is safe to present as
+/// a local relative label. Names are not filesystem authority: absolute,
+/// traversal-like, empty-component, and control-character forms are rejected.
+#[must_use]
+pub fn source_note_name_is_valid(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 4 * 1024
+        && !value.chars().any(char::is_control)
+        && value
+            .split('/')
+            .all(|component| !component.is_empty() && !matches!(component, "." | ".."))
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -177,7 +193,7 @@ pub struct SourceSnapshot {
     pub body: String,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub enum WritingLanguage {
     EnUs,
     KoKr,
@@ -232,7 +248,6 @@ impl WritingStyle {
 pub enum CompositionPath {
     Hosted,
     AppleOnDevice,
-    Manual,
 }
 
 impl CompositionPath {
@@ -241,7 +256,6 @@ impl CompositionPath {
         match self {
             Self::Hosted => "hosted",
             Self::AppleOnDevice => "apple-on-device",
-            Self::Manual => "manual",
         }
     }
 
@@ -249,16 +263,62 @@ impl CompositionPath {
         match value {
             "hosted" => Ok(Self::Hosted),
             "apple-on-device" => Ok(Self::AppleOnDevice),
-            "manual" => Ok(Self::Manual),
             _ => Err(ValueError::new("unknown composition path")),
         }
     }
 }
 
+#[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct AssistantBackendId(String);
+
+impl AssistantBackendId {
+    pub fn parse(value: impl Into<String>) -> Result<Self, ValueError> {
+        let value = value.into();
+        if value.is_empty()
+            || value.len() > 128
+            || !value.bytes().all(|byte| {
+                byte.is_ascii_lowercase()
+                    || byte.is_ascii_digit()
+                    || matches!(byte, b'-' | b'_' | b'.')
+            })
+        {
+            return Err(ValueError::new("invalid assistant backend ID"));
+        }
+        Ok(Self(value))
+    }
+
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl fmt::Display for AssistantBackendId {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.0.fmt(formatter)
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AssistantSelection {
+    pub backend_id: AssistantBackendId,
+    pub composition_path: CompositionPath,
+}
+
+impl AssistantSelection {
+    #[must_use]
+    pub const fn new(backend_id: AssistantBackendId, composition_path: CompositionPath) -> Self {
+        Self {
+            backend_id,
+            composition_path,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct Preferences {
     pub last_language: Option<WritingLanguage>,
-    pub last_composition_path: CompositionPath,
+    pub last_assistant_backend_id: Option<AssistantBackendId>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -271,15 +331,6 @@ pub struct WorkflowSummary {
     pub discarded_at: Option<Timestamp>,
 }
 
-impl Default for Preferences {
-    fn default() -> Self {
-        Self {
-            last_language: None,
-            last_composition_path: CompositionPath::Hosted,
-        }
-    }
-}
-
 /// The complete assistant-visible request envelope. Its field set is an
 /// intentional privacy boundary.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -288,8 +339,90 @@ pub struct DraftAssistantRequest {
     pub reviewed_memories: Vec<String>,
     pub prior_draft: Option<String>,
     pub edited_entry: Option<String>,
+    pub focused_paragraph: Option<String>,
     pub language: WritingLanguage,
     pub style: WritingStyle,
+}
+
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub enum AssistantAction {
+    ExtractMemories,
+    DraftEntry,
+    ReviewParagraph,
+}
+
+impl AssistantAction {
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::ExtractMemories => "extract-memories",
+            Self::DraftEntry => "draft-entry",
+            Self::ReviewParagraph => "review-paragraph",
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AssistantBackendDescriptor {
+    pub id: AssistantBackendId,
+    pub display_label: String,
+    pub composition_path: CompositionPath,
+    pub available: bool,
+    pub reason_code: Option<String>,
+    pub supported_languages: BTreeSet<WritingLanguage>,
+    pub supported_actions: BTreeSet<AssistantAction>,
+}
+
+impl AssistantBackendDescriptor {
+    pub fn new(
+        id: AssistantBackendId,
+        display_label: impl Into<String>,
+        composition_path: CompositionPath,
+        available: bool,
+        reason_code: Option<String>,
+        supported_languages: BTreeSet<WritingLanguage>,
+        supported_actions: BTreeSet<AssistantAction>,
+    ) -> Result<Self, ValueError> {
+        let display_label = nonempty(display_label.into(), "assistant display label")?;
+        if display_label.len() > 256
+            || reason_code
+                .as_ref()
+                .is_some_and(|reason| reason.is_empty() || reason.len() > 128 || !reason.is_ascii())
+            || (available && reason_code.is_some())
+            || (!available && reason_code.is_none())
+        {
+            return Err(ValueError::new("invalid assistant backend descriptor"));
+        }
+        Ok(Self {
+            id,
+            display_label,
+            composition_path,
+            available,
+            reason_code,
+            supported_languages,
+            supported_actions,
+        })
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum DraftAssistantResponse {
+    Memories(Vec<String>),
+    EntryDraft(String),
+    ParagraphReview {
+        replacement: String,
+        explanation: Option<String>,
+    },
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum DraftAssistantError {
+    Unavailable,
+    UnsupportedLanguage,
+    UnsupportedAction,
+    InvalidOutput,
+    TimedOut,
+    Cancelled,
 }
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
