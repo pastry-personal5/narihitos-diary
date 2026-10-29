@@ -374,19 +374,19 @@ impl AyumiCatalog {
     /// byte-for-byte reproduction of a source file that used a BOM or CRLF
     /// line endings, only of the header text itself. Any audio links the
     /// parser withheld from the readable body are re-appended after
-    /// `new_body` (each as its own `[audio](<destination>)` line) so a
-    /// later re-parse, and therefore [`Self::delete_source`], still finds
-    /// them. Rejects the write with `SourceWriteError::Stale`, without
-    /// modifying anything, if the file's current readable body does not
-    /// match `expected_content_digest`, or if the file now contains any
-    /// content the parser could not safely read (an ambiguous attachment
-    /// line, or unclosed front matter) that the caller's digest could not
-    /// have accounted for.
-    ///
-    /// `expected_content_digest` is a digest of the readable body text
-    /// (`Digest::of_bytes` over the sanitized `SourceSnapshot.body`), not
-    /// the same thing as `FreshnessStamp.content_digest` returned here or
-    /// elsewhere in this module, which digests the whole raw file.
+    /// `new_body` (each as its own `[audio](<destination>)` line, using the
+    /// bracket form only when the destination contains whitespace, since a
+    /// bare destination is cut at the first space on re-parse) so a later
+    /// re-parse, and therefore [`Self::delete_source`], still finds them.
+    /// Rejects the write with `SourceWriteError::Stale`, without modifying
+    /// anything, if the file's current content matches neither the
+    /// caller-supplied `expected_content_digest` as a readable-body digest
+    /// nor as a whole-raw-file digest (a caller may reasonably hold either:
+    /// a body digest they computed themselves over a `SourceSnapshot.body`,
+    /// or the raw `content_digest` this method — or `read_selected` —
+    /// previously returned), or if the file now contains any content the
+    /// parser could not safely read (an ambiguous attachment line, or
+    /// unclosed front matter) that neither digest could have accounted for.
     pub fn overwrite_body(
         &self,
         source: &SourceRef,
@@ -405,7 +405,10 @@ impl AyumiCatalog {
         if parsed.ambiguous_attachment {
             return Err(SourceWriteError::Stale);
         }
-        if Digest::of_bytes(parsed.body.as_bytes()) != *expected_content_digest {
+        let body_digest_matches =
+            Digest::of_bytes(parsed.body.as_bytes()) == *expected_content_digest;
+        let raw_digest_matches = Digest::of_bytes(&bytes) == *expected_content_digest;
+        if !body_digest_matches && !raw_digest_matches {
             return Err(SourceWriteError::Stale);
         }
 
@@ -422,7 +425,19 @@ impl AyumiCatalog {
                     new_body_section.push('\n');
                 }
                 new_body_section.push_str("[audio](");
-                new_body_section.push_str(link);
+                // A bracket-sourced destination can never contain '>', and a
+                // bare one can never contain whitespace (Task 2's parser
+                // only accepted one or the other on the way in), so this
+                // round-trips both shapes without ambiguity:
+                // `link_destination` only preserves a destination's interior
+                // whitespace when it is wrapped in `<...>`.
+                if link.contains(|character: char| character.is_ascii_whitespace()) {
+                    new_body_section.push('<');
+                    new_body_section.push_str(link);
+                    new_body_section.push('>');
+                } else {
+                    new_body_section.push_str(link);
+                }
                 new_body_section.push(')');
             }
         }
@@ -443,8 +458,17 @@ impl AyumiCatalog {
         }
 
         fs::write(&path, new_contents.as_bytes()).map_err(|_| SourceWriteError::Io(Vec::new()))?;
-        let metadata = fs::symlink_metadata(&path).map_err(|_| SourceWriteError::Io(Vec::new()))?;
-        stamp(&metadata, new_contents.as_bytes()).map_err(|_| SourceWriteError::Io(Vec::new()))
+
+        // Derive the returned stamp from an actual re-read, not from the
+        // in-memory `new_contents` we believe we just wrote: the returned
+        // value must truthfully describe whatever is really on disk now.
+        let written_metadata =
+            fs::symlink_metadata(&path).map_err(|_| SourceWriteError::Io(Vec::new()))?;
+        if written_metadata.file_type().is_symlink() || !written_metadata.is_file() {
+            return Err(SourceWriteError::UnsafePath);
+        }
+        let written_bytes = fs::read(&path).map_err(|_| SourceWriteError::Io(Vec::new()))?;
+        stamp(&written_metadata, &written_bytes).map_err(|_| SourceWriteError::Io(Vec::new()))
     }
 
     /// Deletes `source` and every locally-resolvable audio file linked from
@@ -1518,6 +1542,77 @@ fi
         let result = catalog.overwrite_body(&source, "new body", &wrong_digest);
         assert_eq!(result, Err(SourceWriteError::Stale));
         assert_eq!(fs::read_to_string(&path).unwrap(), "original body");
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn overwrite_body_accepts_its_own_previously_returned_digest_on_a_second_call() {
+        let root = temp();
+        let note_path = root.join("Ayumi/2026/10/28/n.md");
+        let audio_path = root.join("Ayumi/2026/10/28/recording.m4a");
+        fs::write(&note_path, "line1\n[audio](recording.m4a)").unwrap();
+        fs::write(&audio_path, b"fake audio bytes").unwrap();
+        let catalog = AyumiCatalog::new(&root, "Ayumi").unwrap();
+        let source = SourceRef::new(CONNECTOR, "2026/10/28/n.md").unwrap();
+        let ReadOutcome::Read(selected) = catalog.read_selected(&source).unwrap() else {
+            panic!()
+        };
+        let first_digest = Digest::of_bytes(selected.snapshot.body.as_bytes());
+
+        let first_stamp = catalog
+            .overwrite_body(&source, "line1 v2", &first_digest)
+            .unwrap();
+
+        // A real caller naturally holds the raw `content_digest` this
+        // method just returned (the only digest value it hands back), not
+        // a freshly recomputed body digest. Using it directly as
+        // `expected_content_digest` for the very next call must not
+        // spuriously fail, even though the on-disk body is no longer
+        // byte-identical to "line1 v2" (it now also carries the
+        // reattached audio line).
+        let second_result =
+            catalog.overwrite_body(&source, "line1 v3", &first_stamp.content_digest);
+        assert!(
+            second_result.is_ok(),
+            "expected the second call to succeed using the first call's returned digest, got {second_result:?}"
+        );
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn overwrite_body_round_trips_a_bracket_sourced_destination_with_whitespace() {
+        let root = temp();
+        let note_path = root.join("Ayumi/2026/10/28/n.md");
+        let audio_path = root.join("Ayumi/2026/10/28/my rec.m4a");
+        fs::write(&note_path, "keep\n[audio](<my rec.m4a>)\nmore").unwrap();
+        fs::write(&audio_path, b"fake audio bytes").unwrap();
+        let catalog = AyumiCatalog::new(&root, "Ayumi").unwrap();
+        let source = SourceRef::new(CONNECTOR, "2026/10/28/n.md").unwrap();
+        let ReadOutcome::Read(selected) = catalog.read_selected(&source).unwrap() else {
+            panic!()
+        };
+        assert_eq!(selected.snapshot.body, "keep\nmore");
+        let digest = Digest::of_bytes(selected.snapshot.body.as_bytes());
+
+        catalog
+            .overwrite_body(&source, "updated keep\nmore", &digest)
+            .unwrap();
+
+        // A bare destination would be cut at the first space on re-parse,
+        // so the whitespace-containing destination must be re-emitted in
+        // bracket form to survive the round trip.
+        assert_eq!(
+            fs::read_to_string(&note_path).unwrap(),
+            "updated keep\nmore\n\n[audio](<my rec.m4a>)"
+        );
+
+        let deleted = catalog.delete_source(&source).unwrap();
+        assert!(!note_path.exists());
+        assert!(
+            !audio_path.exists(),
+            "delete_source must still find the whitespace-destination audio file after the round trip"
+        );
+        assert_eq!(deleted.len(), 2);
         let _ = fs::remove_dir_all(root);
     }
 
