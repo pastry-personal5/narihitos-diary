@@ -4,6 +4,7 @@ use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 
 use diary_control_contract::CONTRACT_VERSION;
+use diary_control_contract::MAX_COLLECTION_ITEMS;
 use fs2::FileExt;
 use serde::{Deserialize, Serialize};
 
@@ -18,7 +19,15 @@ pub struct LifecycleConfig {
     pub port_fallback_count: u16,
     pub ayumi_directory_name: String,
     pub notion_configured: bool,
+    pub codex_profiles: Vec<CodexProfileConfig>,
     pub expected_uid: u32,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CodexProfileConfig {
+    pub alias: String,
+    pub codex_home: PathBuf,
+    pub codex_executable: Option<PathBuf>,
 }
 
 impl LifecycleConfig {
@@ -49,6 +58,7 @@ impl LifecycleConfig {
             port_fallback_count: parsed.port_fallback_count,
             ayumi_directory_name: parsed.ayumi_directory_name,
             notion_configured: parsed.notion_configured,
+            codex_profiles: parsed.codex_profiles,
             expected_uid,
         })
     }
@@ -446,6 +456,7 @@ struct ParsedConfig {
     port_fallback_count: u16,
     notion_configured: bool,
     ayumi_directory_name: String,
+    codex_profiles: Vec<CodexProfileConfig>,
 }
 
 fn parse_config(raw: &str) -> Result<ParsedConfig, LifecycleError> {
@@ -453,25 +464,72 @@ fn parse_config(raw: &str) -> Result<ParsedConfig, LifecycleError> {
         port_fallback_count: 8,
         notion_configured: false,
         ayumi_directory_name: String::new(),
+        codex_profiles: Vec::new(),
     };
     let mut section = "";
+    let mut sections = std::collections::BTreeSet::new();
     let mut saw_fallback = false;
+    let mut saw_sources = false;
+    let mut saw_entries_root = false;
+    let mut saw_notion_token = false;
+    let mut saw_notion_root = false;
+    let mut saw_codex_profiles = false;
     let mut notion_token = false;
     let mut notion_root = false;
+    let mut profile = None;
     for original in raw.lines() {
         let line = original.trim();
         if line.is_empty() || line.starts_with('#') {
             continue;
         }
+        if original.contains('\t') {
+            return Err(LifecycleError::InvalidConfig);
+        }
         if !original.starts_with(' ') && line.ends_with(':') {
+            finish_profile(&mut parsed.codex_profiles, profile.take())?;
             section = line.trim_end_matches(':');
-            if !matches!(section, "sources" | "paths" | "notion" | "server") {
+            if !matches!(
+                section,
+                "sources" | "paths" | "notion" | "server" | "assistants"
+            ) || !sections.insert(section)
+            {
                 return Err(LifecycleError::InvalidConfig);
             }
             continue;
         }
+        if section == "assistants" {
+            if original.starts_with("  ") && !original.starts_with("    ") {
+                finish_profile(&mut parsed.codex_profiles, profile.take())?;
+                if line != "codex_profiles:" || saw_codex_profiles {
+                    return Err(LifecycleError::InvalidConfig);
+                }
+                saw_codex_profiles = true;
+                continue;
+            }
+            if original.starts_with("    - ") && !original.starts_with("      ") {
+                if !saw_codex_profiles {
+                    return Err(LifecycleError::InvalidConfig);
+                }
+                finish_profile(&mut parsed.codex_profiles, profile.take())?;
+                profile = Some(ProfileFields::default());
+                parse_profile_field(
+                    profile.as_mut().expect("profile was just created"),
+                    line.strip_prefix("- ")
+                        .ok_or(LifecycleError::InvalidConfig)?,
+                )?;
+                continue;
+            }
+            if original.starts_with("      ") && !original.starts_with("       ") {
+                parse_profile_field(profile.as_mut().ok_or(LifecycleError::InvalidConfig)?, line)?;
+                continue;
+            }
+            return Err(LifecycleError::InvalidConfig);
+        }
+        if !original.starts_with("  ") || original.starts_with("   ") {
+            return Err(LifecycleError::InvalidConfig);
+        }
         let (key, value) = line.split_once(':').ok_or(LifecycleError::InvalidConfig)?;
-        let value = value.trim().trim_matches('"');
+        let value = parse_scalar(value)?;
         match (section, key.trim()) {
             ("server", "port_fallback_count") => {
                 if saw_fallback {
@@ -485,26 +543,138 @@ fn parse_config(raw: &str) -> Result<ParsedConfig, LifecycleError> {
                 saw_fallback = true;
             }
             ("sources", "ayumi_directory_name") => {
-                if !parsed.ayumi_directory_name.is_empty() || value.is_empty() {
+                if saw_sources || value.is_empty() {
                     return Err(LifecycleError::InvalidConfig);
                 }
-                parsed.ayumi_directory_name = value.to_owned();
+                parsed.ayumi_directory_name = value;
+                saw_sources = true;
             }
-            ("paths", "entries_root") => {}
+            ("paths", "entries_root") => {
+                if saw_entries_root {
+                    return Err(LifecycleError::InvalidConfig);
+                }
+                saw_entries_root = true;
+            }
             ("notion", "token") => {
-                notion_token = !value.is_empty() && !value.starts_with("REPLACE_")
+                if saw_notion_token {
+                    return Err(LifecycleError::InvalidConfig);
+                }
+                notion_token = !value.is_empty() && !value.starts_with("REPLACE_");
+                saw_notion_token = true;
             }
             ("notion", "root_page_id") => {
-                notion_root = !value.is_empty() && !value.starts_with("REPLACE_")
+                if saw_notion_root {
+                    return Err(LifecycleError::InvalidConfig);
+                }
+                notion_root = !value.is_empty() && !value.starts_with("REPLACE_");
+                saw_notion_root = true;
             }
             _ => return Err(LifecycleError::InvalidConfig),
         }
+    }
+    finish_profile(&mut parsed.codex_profiles, profile)?;
+    if sections.contains("assistants") && !saw_codex_profiles {
+        return Err(LifecycleError::InvalidConfig);
     }
     parsed.notion_configured = notion_token && notion_root;
     if parsed.ayumi_directory_name.is_empty() {
         return Err(LifecycleError::InvalidConfig);
     }
     Ok(parsed)
+}
+
+#[derive(Default)]
+struct ProfileFields {
+    alias: Option<String>,
+    codex_home: Option<String>,
+    codex_executable: Option<String>,
+}
+
+fn parse_profile_field(fields: &mut ProfileFields, line: &str) -> Result<(), LifecycleError> {
+    let (key, value) = line.split_once(':').ok_or(LifecycleError::InvalidConfig)?;
+    let value = parse_scalar(value)?;
+    match key.trim() {
+        "alias" if fields.alias.is_none() => fields.alias = Some(value),
+        "codex_home" if fields.codex_home.is_none() => fields.codex_home = Some(value),
+        "codex_executable" if fields.codex_executable.is_none() => {
+            fields.codex_executable = Some(value);
+        }
+        _ => return Err(LifecycleError::InvalidConfig),
+    }
+    Ok(())
+}
+
+fn finish_profile(
+    profiles: &mut Vec<CodexProfileConfig>,
+    fields: Option<ProfileFields>,
+) -> Result<(), LifecycleError> {
+    let Some(fields) = fields else {
+        return Ok(());
+    };
+    if profiles.len() >= MAX_COLLECTION_ITEMS {
+        return Err(LifecycleError::InvalidConfig);
+    }
+    let alias = fields.alias.ok_or(LifecycleError::InvalidConfig)?;
+    if alias.is_empty()
+        || alias.len() > 32
+        || !alias.bytes().all(|byte| {
+            byte.is_ascii_lowercase() || byte.is_ascii_digit() || matches!(byte, b'_' | b'-')
+        })
+        || profiles.iter().any(|profile| profile.alias == alias)
+    {
+        return Err(LifecycleError::InvalidConfig);
+    }
+    let codex_home =
+        validated_absolute_path(fields.codex_home.ok_or(LifecycleError::InvalidConfig)?)?;
+    let codex_executable = fields
+        .codex_executable
+        .map(validated_absolute_path)
+        .transpose()?;
+    profiles.push(CodexProfileConfig {
+        alias,
+        codex_home,
+        codex_executable,
+    });
+    Ok(())
+}
+
+fn parse_scalar(raw: &str) -> Result<String, LifecycleError> {
+    let value = raw.trim();
+    if value.is_empty() {
+        return Ok(String::new());
+    }
+    let value = if value.starts_with('"') {
+        value
+            .strip_prefix('"')
+            .and_then(|value| value.strip_suffix('"'))
+            .ok_or(LifecycleError::InvalidConfig)?
+    } else if value.contains('"') {
+        return Err(LifecycleError::InvalidConfig);
+    } else {
+        value
+    };
+    if value.chars().any(char::is_control) {
+        return Err(LifecycleError::InvalidConfig);
+    }
+    Ok(value.to_owned())
+}
+
+fn validated_absolute_path(value: String) -> Result<PathBuf, LifecycleError> {
+    if value.is_empty() || value.len() > 4 * 1024 || value.chars().any(char::is_control) {
+        return Err(LifecycleError::InvalidConfig);
+    }
+    let path = PathBuf::from(value);
+    if !path.is_absolute()
+        || path.components().any(|component| {
+            matches!(
+                component,
+                std::path::Component::ParentDir | std::path::Component::CurDir
+            )
+        })
+    {
+        return Err(LifecycleError::InvalidConfig);
+    }
+    Ok(path)
 }
 
 fn ensure_private_directory(path: &Path, expected_uid: u32) -> Result<(), LifecycleError> {
@@ -615,6 +785,75 @@ mod tests {
         assert!(
             parse_config("sources:\n  ayumi_directory_name: Ayumi\nunknown:\n  value: 1\n")
                 .is_err()
+        );
+    }
+
+    #[test]
+    fn strict_config_parses_zero_one_and_multiple_codex_profiles() {
+        let zero = parse_config("sources:\n  ayumi_directory_name: Ayumi\n").unwrap();
+        assert!(zero.codex_profiles.is_empty());
+
+        let one = parse_config(
+            "sources:\n  ayumi_directory_name: Ayumi\nassistants:\n  codex_profiles:\n    - alias: pp7\n      codex_home: \"/tmp/codex-pp7\"\n",
+        )
+        .unwrap();
+        assert_eq!(one.codex_profiles.len(), 1);
+        assert_eq!(one.codex_profiles[0].alias, "pp7");
+        assert_eq!(
+            one.codex_profiles[0].codex_home,
+            Path::new("/tmp/codex-pp7")
+        );
+        assert_eq!(one.codex_profiles[0].codex_executable, None);
+
+        let multiple = parse_config(
+            "sources:\n  ayumi_directory_name: Ayumi\nassistants:\n  codex_profiles:\n    - alias: first\n      codex_home: /tmp/first\n      codex_executable: /opt/codex/bin/codex\n    - alias: second_2\n      codex_home: /tmp/second\n",
+        )
+        .unwrap();
+        assert_eq!(multiple.codex_profiles.len(), 2);
+        assert_eq!(
+            multiple.codex_profiles[0].codex_executable.as_deref(),
+            Some(Path::new("/opt/codex/bin/codex"))
+        );
+    }
+
+    #[test]
+    fn strict_config_rejects_malformed_codex_profile_collections() {
+        let invalid_blocks = [
+            "assistants:\n  other: []\n",
+            "assistants:\n  codex_profiles:\n    - alias: Upper\n      codex_home: /tmp/home\n",
+            "assistants:\n  codex_profiles:\n    - alias: same\n      codex_home: /tmp/one\n    - alias: same\n      codex_home: /tmp/two\n",
+            "assistants:\n  codex_profiles:\n    - alias: missing_home\n",
+            "assistants:\n  codex_profiles:\n    - alias: relative\n      codex_home: relative/home\n",
+            "assistants:\n  codex_profiles:\n    - alias: traversal\n      codex_home: /tmp/../private\n",
+            "assistants:\n  codex_profiles:\n    - alias: relative_exec\n      codex_home: /tmp/home\n      codex_executable: bin/codex\n",
+            "assistants:\n  codex_profiles:\n    - alias: duplicate_key\n      alias: twice\n      codex_home: /tmp/home\n",
+            "assistants:\n  codex_profiles:\n    - alias: unknown\n      codex_home: /tmp/home\n      command: codex\n",
+            "assistants:\n  codex_profiles:\n    - codex_home: /tmp/home\n      alias: wrong_first_is_allowed_but_too_long_here\n",
+        ];
+        for block in invalid_blocks {
+            let raw = format!("sources:\n  ayumi_directory_name: Ayumi\n{block}");
+            assert_eq!(
+                parse_config(&raw).err(),
+                Some(LifecycleError::InvalidConfig)
+            );
+        }
+    }
+
+    #[test]
+    fn strict_config_bounds_codex_profile_count() {
+        let mut raw =
+            "sources:\n  ayumi_directory_name: Ayumi\nassistants:\n  codex_profiles:\n".to_owned();
+        for index in 0..=MAX_COLLECTION_ITEMS {
+            use std::fmt::Write as _;
+            write!(
+                &mut raw,
+                "    - alias: p{index}\n      codex_home: /tmp/profile-{index}\n"
+            )
+            .unwrap();
+        }
+        assert_eq!(
+            parse_config(&raw).err(),
+            Some(LifecycleError::InvalidConfig)
         );
     }
 
@@ -861,6 +1100,7 @@ mod tests {
             port_fallback_count: 0,
             ayumi_directory_name: "Synthetic".to_owned(),
             notion_configured: false,
+            codex_profiles: Vec::new(),
             expected_uid: uid,
         };
         assert_eq!(

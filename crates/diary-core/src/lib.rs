@@ -6,17 +6,21 @@
 
 #![forbid(unsafe_code)]
 
+pub mod assistant;
+pub mod assistant_registry;
 pub mod digest;
 pub mod ports;
 pub mod publication;
 pub mod types;
 pub mod workflow;
 
+pub use assistant::*;
+pub use assistant_registry::{DraftAssistantRegistry, RegistryError, RegistryInvokeError};
 pub use digest::Digest;
 pub use ports::{
     Clock, Destination, DraftAssistant, IntentTerminal, OperationLog, SourceCatalog,
-    SourceCheckpointError, SourceReader, StartOutcome, StoreError, WorkflowStore,
-    revalidate_workflow_sources, start_default_workflow,
+    SourceCheckpointError, SourceReader, SourceWriteError, SourceWriter, StartOutcome, StoreError,
+    WorkflowStore, revalidate_workflow_sources, start_default_workflow,
 };
 pub use publication::{PublicationCoordinator, PublicationError, PublicationResult};
 pub use types::*;

@@ -2,17 +2,20 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use diary_core::{
-    Approval, AssistantBackendId, AssistantSelection, CompositionPath, DateEvidence,
-    DestinationKind, DestinationPlan, DestinationProgress, DestinationStatus, DiaryDay, Digest,
-    EntryBuffer, EntryConfirmation, FreshnessStamp, IntentTerminal, InvalidationReason, JobStatus,
-    OperationIntent, OperationLog, OutputPlan, PersistedWorkflow, Preferences, Receipt,
-    ReconciliationGate, SourceAvailability, SourceCandidate, SourceRef, SourceSnapshot,
-    StartOutcome, StoreError, Timestamp, Workflow, WorkflowState, WorkflowStore, WorkflowSummary,
-    WritingLanguage, WritingStyle,
+    Approval, ArtifactProvenance, AssistantBackendId, AssistantSelection, CompositionPath,
+    DateEvidence, DestinationKind, DestinationPlan, DestinationProgress, DestinationStatus,
+    DiaryDay, Digest, DraftProposal, DraftProposalBinding, EntryBuffer, EntryConfirmation,
+    FreshnessStamp, IntentTerminal, InvalidationReason, JobStatus, MemoryCandidateArtifact,
+    MemoryCandidateBinding, MemoryCandidateSet, OperationIntent, OperationLog, OutputPlan,
+    ParagraphSuggestion, ParagraphSuggestionBinding, PersistedWorkflow, Preferences, Receipt,
+    ReconciliationGate, ReflectionRange, ReviewedMemoryArtifact, ReviewedMemoryBinding,
+    SourceAvailability, SourceCandidate, SourceRef, SourceRefineSuggestion, SourceSnapshot,
+    StartOutcome, StoreError, SuggestionResolution, Timestamp, Workflow, WorkflowState,
+    WorkflowStore, WorkflowSummary, WritingLanguage, WritingStyle,
 };
 use rusqlite::{Connection, OptionalExtension, Transaction, TransactionBehavior, params};
 
-const CURRENT_SCHEMA: i64 = 4;
+const CURRENT_SCHEMA: i64 = 5;
 
 #[derive(Clone, Debug)]
 pub struct SqliteStore {
@@ -610,6 +613,21 @@ fn migrate(connection: &mut Connection) -> Result<(), StoreError> {
             .map_err(map_sql_error)?;
         transaction.commit().map_err(map_sql_error)?;
     }
+    let version: i64 = connection
+        .query_row("PRAGMA user_version", [], |row| row.get(0))
+        .map_err(map_sql_error)?;
+    if version < 5 {
+        let transaction = connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(map_sql_error)?;
+        transaction
+            .execute_batch(MIGRATION_5)
+            .map_err(map_sql_error)?;
+        transaction
+            .pragma_update(None, "user_version", 5)
+            .map_err(map_sql_error)?;
+        transaction.commit().map_err(map_sql_error)?;
+    }
     Ok(())
 }
 
@@ -625,6 +643,15 @@ fn validate_schema(connection: &Connection) -> Result<(), StoreError> {
         "source_candidates",
         "source_snapshots",
         "reviewed_memories",
+        "assistant_memory_candidate_sets",
+        "assistant_memory_candidates",
+        "assistant_memory_candidate_sources",
+        "reviewed_memory_artifacts",
+        "draft_proposals",
+        "draft_reflection_ranges",
+        "paragraph_suggestions",
+        "paragraph_reflection_ranges",
+        "source_refine_suggestions",
         "preferences",
         "output_plans",
         "destination_plans",
@@ -812,6 +839,152 @@ ALTER TABLE preferences DROP COLUMN last_composition_path;
 ALTER TABLE preferences ADD COLUMN last_assistant_backend_id TEXT;
 "#;
 
+const MIGRATION_5: &str = r#"
+CREATE TABLE assistant_memory_candidate_sets (
+  day TEXT NOT NULL REFERENCES workflows(day) ON DELETE CASCADE,
+  artifact_id TEXT NOT NULL,
+  backend_id TEXT,
+  composition_path TEXT,
+  created_at INTEGER NOT NULL,
+  content_digest TEXT,
+  source_selection_digest TEXT,
+  stale INTEGER NOT NULL CHECK(stale IN (0, 1)),
+  PRIMARY KEY(day, artifact_id)
+) STRICT;
+CREATE TABLE assistant_memory_candidates (
+  day TEXT NOT NULL,
+  artifact_id TEXT NOT NULL,
+  position INTEGER NOT NULL CHECK(position >= 0),
+  candidate_id TEXT NOT NULL,
+  candidate_text TEXT NOT NULL,
+  PRIMARY KEY(day, artifact_id, position),
+  UNIQUE(day, artifact_id, candidate_id),
+  FOREIGN KEY(day, artifact_id)
+    REFERENCES assistant_memory_candidate_sets(day, artifact_id) ON DELETE CASCADE
+) STRICT;
+CREATE TABLE assistant_memory_candidate_sources (
+  day TEXT NOT NULL,
+  artifact_id TEXT NOT NULL,
+  candidate_id TEXT NOT NULL,
+  position INTEGER NOT NULL CHECK(position >= 0),
+  source_snapshot_digest TEXT NOT NULL,
+  PRIMARY KEY(day, artifact_id, candidate_id, position),
+  FOREIGN KEY(day, artifact_id, candidate_id)
+    REFERENCES assistant_memory_candidates(day, artifact_id, candidate_id) ON DELETE CASCADE
+) STRICT;
+CREATE TABLE reviewed_memory_artifacts (
+  day TEXT PRIMARY KEY REFERENCES workflows(day) ON DELETE CASCADE,
+  artifact_id TEXT NOT NULL UNIQUE,
+  backend_id TEXT,
+  composition_path TEXT,
+  created_at INTEGER NOT NULL,
+  content_digest TEXT,
+  candidate_set_digest TEXT,
+  memory_revision INTEGER NOT NULL CHECK(memory_revision >= 0),
+  reviewed_text TEXT NOT NULL,
+  stale INTEGER NOT NULL CHECK(stale IN (0, 1))
+) STRICT;
+CREATE TABLE draft_proposals (
+  day TEXT NOT NULL REFERENCES workflows(day) ON DELETE CASCADE,
+  artifact_id TEXT NOT NULL,
+  backend_id TEXT,
+  composition_path TEXT,
+  created_at INTEGER NOT NULL,
+  content_digest TEXT,
+  source_selection_digest TEXT,
+  language TEXT,
+  style TEXT,
+  reviewed_memory_digest TEXT,
+  reviewed_memory_revision INTEGER,
+  captured_buffer_version INTEGER,
+  draft_text TEXT NOT NULL,
+  stale INTEGER NOT NULL CHECK(stale IN (0, 1)),
+  populated_buffer_version INTEGER,
+  PRIMARY KEY(day, artifact_id)
+) STRICT;
+CREATE TABLE draft_reflection_ranges (
+  day TEXT NOT NULL,
+  artifact_id TEXT NOT NULL,
+  position INTEGER NOT NULL CHECK(position >= 0),
+  start_byte INTEGER NOT NULL CHECK(start_byte >= 0),
+  end_byte INTEGER NOT NULL CHECK(end_byte > start_byte),
+  PRIMARY KEY(day, artifact_id, position),
+  FOREIGN KEY(day, artifact_id)
+    REFERENCES draft_proposals(day, artifact_id) ON DELETE CASCADE
+) STRICT;
+CREATE TABLE paragraph_suggestions (
+  day TEXT NOT NULL REFERENCES workflows(day) ON DELETE CASCADE,
+  suggestion_id TEXT NOT NULL,
+  backend_id TEXT NOT NULL,
+  composition_path TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
+  content_digest TEXT NOT NULL,
+  source_selection_digest TEXT NOT NULL,
+  language TEXT NOT NULL,
+  style TEXT NOT NULL,
+  buffer_version INTEGER NOT NULL CHECK(buffer_version >= 0),
+  range_start INTEGER NOT NULL CHECK(range_start >= 0),
+  range_end INTEGER NOT NULL CHECK(range_end > range_start),
+  selected_text_digest TEXT NOT NULL,
+  replacement_text TEXT NOT NULL,
+  explanation TEXT,
+  stale INTEGER NOT NULL CHECK(stale IN (0, 1)),
+  resolution TEXT CHECK(resolution IS NULL OR resolution IN ('accepted', 'rejected')),
+  resolved_at INTEGER,
+  PRIMARY KEY(day, suggestion_id)
+) STRICT;
+CREATE TABLE paragraph_reflection_ranges (
+  day TEXT NOT NULL,
+  suggestion_id TEXT NOT NULL,
+  position INTEGER NOT NULL CHECK(position >= 0),
+  start_byte INTEGER NOT NULL CHECK(start_byte >= 0),
+  end_byte INTEGER NOT NULL CHECK(end_byte > start_byte),
+  PRIMARY KEY(day, suggestion_id, position),
+  FOREIGN KEY(day, suggestion_id)
+    REFERENCES paragraph_suggestions(day, suggestion_id) ON DELETE CASCADE
+) STRICT;
+CREATE TABLE source_refine_suggestions (
+  day TEXT NOT NULL REFERENCES workflows(day) ON DELETE CASCADE,
+  connector TEXT NOT NULL,
+  source_id TEXT NOT NULL,
+  original_body TEXT NOT NULL,
+  suggested_body TEXT NOT NULL,
+  binding_digest TEXT NOT NULL,
+  backend_id TEXT NOT NULL,
+  composition_path TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
+  PRIMARY KEY(day, connector, source_id)
+) STRICT;
+
+INSERT INTO reviewed_memory_artifacts (
+  day, artifact_id, backend_id, composition_path, created_at, content_digest,
+  candidate_set_digest, memory_revision, reviewed_text, stale
+)
+SELECT
+  w.day, 'migrated-memory-' || replace(w.day, '-', ''),
+  w.assistant_backend_id, w.composition_path, w.updated_at, NULL, NULL, 0,
+  (SELECT group_concat(memory_text, char(10)) FROM (
+     SELECT memory_text FROM reviewed_memories rm
+     WHERE rm.day = w.day ORDER BY position
+   )),
+  1
+FROM workflows w
+WHERE EXISTS (SELECT 1 FROM reviewed_memories rm WHERE rm.day = w.day);
+
+INSERT INTO draft_proposals (
+  day, artifact_id, backend_id, composition_path, created_at, content_digest,
+  source_selection_digest, language, style, reviewed_memory_digest,
+  reviewed_memory_revision, captured_buffer_version, draft_text, stale,
+  populated_buffer_version
+)
+SELECT
+  day, 'migrated-draft-' || replace(day, '-', ''), assistant_backend_id,
+  composition_path, updated_at, NULL, NULL, NULL, NULL,
+  NULL, NULL, NULL, assistant_draft, 1, NULL
+FROM workflows
+WHERE assistant_draft IS NOT NULL;
+"#;
+
 fn workflow_exists(connection: &Connection, day: &DiaryDay) -> Result<bool, StoreError> {
     connection
         .query_row(
@@ -960,6 +1133,20 @@ fn replace_workflow(
             [record.day.as_str()],
         )
         .map_err(map_sql_error)?;
+    for table in [
+        "assistant_memory_candidate_sets",
+        "reviewed_memory_artifacts",
+        "draft_proposals",
+        "paragraph_suggestions",
+        "source_refine_suggestions",
+    ] {
+        transaction
+            .execute(
+                &format!("DELETE FROM {table} WHERE day = ?1"),
+                [record.day.as_str()],
+            )
+            .map_err(map_sql_error)?;
+    }
     transaction
         .execute(
             "DELETE FROM output_plans WHERE day = ?1",
@@ -1036,6 +1223,7 @@ fn insert_children(
             )
             .map_err(map_sql_error)?;
     }
+    insert_assistant_artifacts(transaction, record)?;
     if let Some(plan) = &record.output_plan {
         let approval = record.approval.as_ref();
         transaction
@@ -1098,6 +1286,253 @@ fn insert_children(
         return Err(StoreError::InvalidRecord(
             "approval or progress exists without a plan".to_owned(),
         ));
+    }
+    Ok(())
+}
+
+fn insert_assistant_artifacts(
+    transaction: &Transaction<'_>,
+    record: &PersistedWorkflow,
+) -> Result<(), StoreError> {
+    for set in &record.memory_candidate_sets {
+        transaction
+            .execute(
+                "INSERT INTO assistant_memory_candidate_sets (
+                   day, artifact_id, backend_id, composition_path, created_at,
+                   content_digest, source_selection_digest, stale
+                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                params![
+                    record.day.as_str(),
+                    set.id,
+                    set.provenance.backend_id.as_str(),
+                    set.provenance.composition_path.as_str(),
+                    set.created_at.0,
+                    set.content_digest.as_str(),
+                    set.binding.source_selection_digest.as_str(),
+                    set.stale,
+                ],
+            )
+            .map_err(map_sql_error)?;
+        for (position, candidate) in set.candidates.iter().enumerate() {
+            transaction
+                .execute(
+                    "INSERT INTO assistant_memory_candidates (
+                       day, artifact_id, position, candidate_id, candidate_text
+                     ) VALUES (?1, ?2, ?3, ?4, ?5)",
+                    params![
+                        record.day.as_str(),
+                        set.id,
+                        to_i64(position, "assistant candidate position")?,
+                        candidate.id,
+                        candidate.text,
+                    ],
+                )
+                .map_err(map_sql_error)?;
+            for (source_position, digest) in candidate.source_snapshot_digests.iter().enumerate() {
+                transaction
+                    .execute(
+                        "INSERT INTO assistant_memory_candidate_sources (
+                           day, artifact_id, candidate_id, position, source_snapshot_digest
+                         ) VALUES (?1, ?2, ?3, ?4, ?5)",
+                        params![
+                            record.day.as_str(),
+                            set.id,
+                            candidate.id,
+                            to_i64(source_position, "assistant candidate source position")?,
+                            digest.as_str(),
+                        ],
+                    )
+                    .map_err(map_sql_error)?;
+            }
+        }
+    }
+    if let Some(reviewed) = &record.reviewed_memory_artifact {
+        transaction
+            .execute(
+                "INSERT INTO reviewed_memory_artifacts (
+                   day, artifact_id, backend_id, composition_path, created_at,
+                   content_digest, candidate_set_digest, memory_revision,
+                   reviewed_text, stale
+                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+                params![
+                    record.day.as_str(),
+                    reviewed.id,
+                    reviewed
+                        .provenance
+                        .as_ref()
+                        .map(|value| value.backend_id.as_str()),
+                    reviewed
+                        .provenance
+                        .as_ref()
+                        .map(|value| value.composition_path.as_str()),
+                    reviewed.created_at.0,
+                    reviewed.content_digest.as_str(),
+                    reviewed
+                        .binding
+                        .as_ref()
+                        .map(|value| value.candidate_set_digest.as_str()),
+                    to_i64(reviewed.revision, "reviewed memory revision")?,
+                    reviewed.text,
+                    reviewed.stale,
+                ],
+            )
+            .map_err(map_sql_error)?;
+    }
+    for draft in &record.draft_proposals {
+        let binding = draft.binding.as_ref();
+        transaction
+            .execute(
+                "INSERT INTO draft_proposals (
+                   day, artifact_id, backend_id, composition_path, created_at,
+                   content_digest, source_selection_digest, language, style,
+                   reviewed_memory_digest, reviewed_memory_revision,
+                   captured_buffer_version, draft_text, stale, populated_buffer_version
+                 ) VALUES (
+                   ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12,
+                   ?13, ?14, ?15
+                 )",
+                params![
+                    record.day.as_str(),
+                    draft.id,
+                    draft
+                        .provenance
+                        .as_ref()
+                        .map(|value| value.backend_id.as_str()),
+                    draft
+                        .provenance
+                        .as_ref()
+                        .map(|value| value.composition_path.as_str()),
+                    draft.created_at.0,
+                    draft.content_digest.as_str(),
+                    binding.map(|value| value.source_selection_digest.as_str()),
+                    binding.map(|value| value.language.as_str()),
+                    binding.map(|value| value.style.as_str()),
+                    binding.map(|value| value.reviewed_memory_digest.as_str()),
+                    binding
+                        .map(|value| to_i64(
+                            value.reviewed_memory_revision,
+                            "reviewed memory revision"
+                        ))
+                        .transpose()?,
+                    binding
+                        .map(|value| to_i64(
+                            value.captured_buffer_version,
+                            "captured buffer version"
+                        ))
+                        .transpose()?,
+                    draft.text,
+                    draft.stale,
+                    draft
+                        .populated_buffer_version
+                        .map(|value| to_i64(value, "populated buffer version"))
+                        .transpose()?,
+                ],
+            )
+            .map_err(map_sql_error)?;
+        insert_ranges(
+            transaction,
+            "draft_reflection_ranges",
+            "artifact_id",
+            record.day.as_str(),
+            &draft.id,
+            &draft.reflection_ranges,
+        )?;
+    }
+    for suggestion in &record.paragraph_suggestions {
+        transaction
+            .execute(
+                "INSERT INTO paragraph_suggestions (
+                   day, suggestion_id, backend_id, composition_path, created_at,
+                   content_digest, source_selection_digest, language, style,
+                   buffer_version, range_start, range_end, selected_text_digest,
+                   replacement_text, explanation, stale, resolution, resolved_at
+                 ) VALUES (
+                   ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12,
+                   ?13, ?14, ?15, ?16, ?17, ?18
+                 )",
+                params![
+                    record.day.as_str(),
+                    suggestion.id,
+                    suggestion.provenance.backend_id.as_str(),
+                    suggestion.provenance.composition_path.as_str(),
+                    suggestion.created_at.0,
+                    suggestion.content_digest.as_str(),
+                    suggestion.binding.source_selection_digest.as_str(),
+                    suggestion.binding.language.as_str(),
+                    suggestion.binding.style.as_str(),
+                    to_i64(
+                        suggestion.binding.buffer_version,
+                        "suggestion buffer version"
+                    )?,
+                    to_i64(suggestion.binding.range.start, "suggestion range start")?,
+                    to_i64(suggestion.binding.range.end, "suggestion range end")?,
+                    suggestion.binding.selected_text_digest.as_str(),
+                    suggestion.replacement,
+                    suggestion.explanation,
+                    suggestion.stale,
+                    suggestion.resolution.map(SuggestionResolution::as_str),
+                    suggestion.resolved_at.map(|value| value.0),
+                ],
+            )
+            .map_err(map_sql_error)?;
+        insert_ranges(
+            transaction,
+            "paragraph_reflection_ranges",
+            "suggestion_id",
+            record.day.as_str(),
+            &suggestion.id,
+            &suggestion.reflection_ranges,
+        )?;
+    }
+    for suggestion in &record.source_refine_suggestions {
+        transaction
+            .execute(
+                "INSERT INTO source_refine_suggestions (
+               day, connector, source_id, original_body, suggested_body,
+               binding_digest, backend_id, composition_path, created_at
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+                params![
+                    record.day.as_str(),
+                    suggestion.source.connector,
+                    suggestion.source.source_id,
+                    suggestion.original_body,
+                    suggestion.suggested_body,
+                    suggestion.binding_digest.as_str(),
+                    suggestion.provenance.backend_id.as_str(),
+                    suggestion.provenance.composition_path.as_str(),
+                    suggestion.created_at.0
+                ],
+            )
+            .map_err(map_sql_error)?;
+    }
+    Ok(())
+}
+
+fn insert_ranges(
+    transaction: &Transaction<'_>,
+    table: &str,
+    id_column: &str,
+    day: &str,
+    id: &str,
+    ranges: &[ReflectionRange],
+) -> Result<(), StoreError> {
+    let sql = format!(
+        "INSERT INTO {table} (day, {id_column}, position, start_byte, end_byte)
+         VALUES (?1, ?2, ?3, ?4, ?5)"
+    );
+    for (position, range) in ranges.iter().enumerate() {
+        transaction
+            .execute(
+                &sql,
+                params![
+                    day,
+                    id,
+                    to_i64(position, "reflection range position")?,
+                    to_i64(range.start, "reflection range start")?,
+                    to_i64(range.end, "reflection range end")?,
+                ],
+            )
+            .map_err(map_sql_error)?;
     }
     Ok(())
 }
@@ -1175,6 +1610,11 @@ fn load_workflow(connection: &Connection, day: &DiaryDay) -> Result<Option<Workf
     let candidates = load_candidates(connection, day)?;
     let snapshots = load_snapshots(connection, day)?;
     let reviewed_memories = load_memories(connection, day)?;
+    let memory_candidate_sets = load_memory_candidate_sets(connection, day)?;
+    let reviewed_memory_artifact = load_reviewed_memory_artifact(connection, day)?;
+    let draft_proposals = load_draft_proposals(connection, day)?;
+    let paragraph_suggestions = load_paragraph_suggestions(connection, day)?;
+    let source_refine_suggestions = load_source_refine_suggestions(connection, day)?;
     let (output_plan, approval, destination_progress) = load_plan(connection, day)?;
     let entry_confirmation = match (row.19, row.20, row.21) {
         (None, None, None) => None,
@@ -1235,6 +1675,11 @@ fn load_workflow(connection: &Connection, day: &DiaryDay) -> Result<Option<Workf
         snapshots,
         reviewed_memories,
         assistant_draft: row.22,
+        memory_candidate_sets,
+        reviewed_memory_artifact,
+        draft_proposals,
+        paragraph_suggestions,
+        source_refine_suggestions,
         output_plan,
         approval,
         destination_progress,
@@ -1330,6 +1775,426 @@ fn load_memories(connection: &Connection, day: &DiaryDay) -> Result<Vec<String>,
         .map_err(map_sql_error)?
         .collect::<Result<Vec<_>, _>>()
         .map_err(map_sql_error)
+}
+
+fn load_memory_candidate_sets(
+    connection: &Connection,
+    day: &DiaryDay,
+) -> Result<Vec<MemoryCandidateSet>, StoreError> {
+    let mut statement = connection
+        .prepare(
+            "SELECT artifact_id, backend_id, composition_path, created_at,
+                    content_digest, source_selection_digest, stale
+             FROM assistant_memory_candidate_sets
+             WHERE day = ?1 ORDER BY created_at, artifact_id",
+        )
+        .map_err(map_sql_error)?;
+    let rows = statement
+        .query_map([day.as_str()], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, Option<String>>(1)?,
+                row.get::<_, Option<String>>(2)?,
+                row.get::<_, i64>(3)?,
+                row.get::<_, Option<String>>(4)?,
+                row.get::<_, Option<String>>(5)?,
+                row.get::<_, bool>(6)?,
+            ))
+        })
+        .map_err(map_sql_error)?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(map_sql_error)?;
+    let mut sets = Vec::new();
+    for (id, backend, path, created_at, digest, source_digest, stale) in rows {
+        let provenance = required_provenance(backend, path)?;
+        let content_digest = digest.map(parse_digest).transpose()?.ok_or_else(|| {
+            StoreError::InvalidRecord("candidate set digest is missing".to_owned())
+        })?;
+        let source_selection_digest =
+            source_digest
+                .map(parse_digest)
+                .transpose()?
+                .ok_or_else(|| {
+                    StoreError::InvalidRecord("candidate set binding is missing".to_owned())
+                })?;
+        let mut candidate_statement = connection
+            .prepare(
+                "SELECT candidate_id, candidate_text
+                 FROM assistant_memory_candidates
+                 WHERE day = ?1 AND artifact_id = ?2 ORDER BY position",
+            )
+            .map_err(map_sql_error)?;
+        let candidate_rows = candidate_statement
+            .query_map(params![day.as_str(), id], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            })
+            .map_err(map_sql_error)?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(map_sql_error)?;
+        let mut candidates = Vec::new();
+        for (candidate_id, text) in candidate_rows {
+            let mut source_statement = connection
+                .prepare(
+                    "SELECT source_snapshot_digest
+                     FROM assistant_memory_candidate_sources
+                     WHERE day = ?1 AND artifact_id = ?2 AND candidate_id = ?3
+                     ORDER BY position",
+                )
+                .map_err(map_sql_error)?;
+            let digests = source_statement
+                .query_map(params![day.as_str(), id, candidate_id], |row| {
+                    row.get::<_, String>(0)
+                })
+                .map_err(map_sql_error)?
+                .map(|value| value.map_err(map_sql_error).and_then(parse_digest))
+                .collect::<Result<Vec<_>, _>>()?;
+            candidates.push(MemoryCandidateArtifact {
+                id: candidate_id,
+                text,
+                source_snapshot_digests: digests,
+            });
+        }
+        sets.push(MemoryCandidateSet {
+            id,
+            provenance,
+            created_at: Timestamp(created_at),
+            content_digest,
+            binding: MemoryCandidateBinding {
+                source_selection_digest,
+            },
+            candidates,
+            stale,
+        });
+    }
+    Ok(sets)
+}
+
+fn load_reviewed_memory_artifact(
+    connection: &Connection,
+    day: &DiaryDay,
+) -> Result<Option<ReviewedMemoryArtifact>, StoreError> {
+    let row = connection
+        .query_row(
+            "SELECT artifact_id, backend_id, composition_path, created_at,
+                    content_digest, candidate_set_digest, memory_revision,
+                    reviewed_text, stale
+             FROM reviewed_memory_artifacts WHERE day = ?1",
+            [day.as_str()],
+            |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, Option<String>>(1)?,
+                    row.get::<_, Option<String>>(2)?,
+                    row.get::<_, i64>(3)?,
+                    row.get::<_, Option<String>>(4)?,
+                    row.get::<_, Option<String>>(5)?,
+                    row.get::<_, i64>(6)?,
+                    row.get::<_, String>(7)?,
+                    row.get::<_, bool>(8)?,
+                ))
+            },
+        )
+        .optional()
+        .map_err(map_sql_error)?;
+    let Some((id, backend, path, created_at, digest, binding, revision, text, stale)) = row else {
+        return Ok(None);
+    };
+    Ok(Some(ReviewedMemoryArtifact {
+        id,
+        provenance: optional_provenance(backend, path)?,
+        created_at: Timestamp(created_at),
+        content_digest: digest
+            .map(parse_digest)
+            .transpose()?
+            .unwrap_or_else(|| Digest::of_bytes(text.as_bytes())),
+        binding: binding
+            .map(parse_digest)
+            .transpose()?
+            .map(|candidate_set_digest| ReviewedMemoryBinding {
+                candidate_set_digest,
+            }),
+        revision: to_u64(revision, "reviewed memory revision")?,
+        text,
+        stale,
+    }))
+}
+
+fn load_draft_proposals(
+    connection: &Connection,
+    day: &DiaryDay,
+) -> Result<Vec<DraftProposal>, StoreError> {
+    let mut statement = connection
+        .prepare(
+            "SELECT artifact_id, backend_id, composition_path, created_at,
+                    content_digest, source_selection_digest, language, style,
+                    reviewed_memory_digest, reviewed_memory_revision,
+                    captured_buffer_version, draft_text, stale,
+                    populated_buffer_version
+             FROM draft_proposals WHERE day = ?1 ORDER BY created_at, artifact_id",
+        )
+        .map_err(map_sql_error)?;
+    let rows = statement
+        .query_map([day.as_str()], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, Option<String>>(1)?,
+                row.get::<_, Option<String>>(2)?,
+                row.get::<_, i64>(3)?,
+                row.get::<_, Option<String>>(4)?,
+                row.get::<_, Option<String>>(5)?,
+                row.get::<_, Option<String>>(6)?,
+                row.get::<_, Option<String>>(7)?,
+                row.get::<_, Option<String>>(8)?,
+                row.get::<_, Option<i64>>(9)?,
+                row.get::<_, Option<i64>>(10)?,
+                row.get::<_, String>(11)?,
+                row.get::<_, bool>(12)?,
+                row.get::<_, Option<i64>>(13)?,
+            ))
+        })
+        .map_err(map_sql_error)?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(map_sql_error)?;
+    let mut drafts = Vec::new();
+    for row in rows {
+        let provenance = optional_provenance(row.1, row.2)?;
+        let binding = match (row.5, row.6, row.7, row.8, row.9, row.10) {
+            (
+                Some(source),
+                Some(language),
+                Some(style),
+                Some(memory),
+                Some(revision),
+                Some(buffer),
+            ) => {
+                let backend_id = provenance
+                    .as_ref()
+                    .ok_or_else(|| {
+                        StoreError::InvalidRecord("draft provenance is missing".to_owned())
+                    })?
+                    .backend_id
+                    .clone();
+                Some(DraftProposalBinding {
+                    source_selection_digest: parse_digest(source)?,
+                    language: WritingLanguage::parse(&language).map_err(invalid_value)?,
+                    style: WritingStyle::parse(&style).map_err(invalid_value)?,
+                    backend_id,
+                    reviewed_memory_digest: parse_digest(memory)?,
+                    reviewed_memory_revision: to_u64(revision, "reviewed memory revision")?,
+                    captured_buffer_version: to_u64(buffer, "captured buffer version")?,
+                })
+            }
+            (None, None, None, None, None, None) => None,
+            _ => {
+                return Err(StoreError::InvalidRecord(
+                    "partial draft binding".to_owned(),
+                ));
+            }
+        };
+        drafts.push(DraftProposal {
+            id: row.0.clone(),
+            provenance,
+            created_at: Timestamp(row.3),
+            content_digest: row
+                .4
+                .map(parse_digest)
+                .transpose()?
+                .unwrap_or_else(|| Digest::of_bytes(row.11.as_bytes())),
+            binding,
+            text: row.11,
+            reflection_ranges: load_ranges(
+                connection,
+                "draft_reflection_ranges",
+                "artifact_id",
+                day,
+                &row.0,
+            )?,
+            stale: row.12,
+            populated_buffer_version: row
+                .13
+                .map(|value| to_u64(value, "populated buffer version"))
+                .transpose()?,
+        });
+    }
+    Ok(drafts)
+}
+
+fn load_paragraph_suggestions(
+    connection: &Connection,
+    day: &DiaryDay,
+) -> Result<Vec<ParagraphSuggestion>, StoreError> {
+    let mut statement = connection
+        .prepare(
+            "SELECT suggestion_id, backend_id, composition_path, created_at,
+                    content_digest, source_selection_digest, language, style,
+                    buffer_version, range_start, range_end, selected_text_digest,
+                    replacement_text, explanation, stale, resolution, resolved_at
+             FROM paragraph_suggestions WHERE day = ?1 ORDER BY created_at, suggestion_id",
+        )
+        .map_err(map_sql_error)?;
+    let rows = statement
+        .query_map([day.as_str()], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, i64>(3)?,
+                row.get::<_, String>(4)?,
+                row.get::<_, String>(5)?,
+                row.get::<_, String>(6)?,
+                row.get::<_, String>(7)?,
+                row.get::<_, i64>(8)?,
+                row.get::<_, i64>(9)?,
+                row.get::<_, i64>(10)?,
+                row.get::<_, String>(11)?,
+                row.get::<_, String>(12)?,
+                row.get::<_, Option<String>>(13)?,
+                row.get::<_, bool>(14)?,
+                row.get::<_, Option<String>>(15)?,
+                row.get::<_, Option<i64>>(16)?,
+            ))
+        })
+        .map_err(map_sql_error)?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(map_sql_error)?;
+    rows.into_iter()
+        .map(|row| {
+            let id = row.0;
+            let provenance = required_provenance(Some(row.1), Some(row.2))?;
+            Ok(ParagraphSuggestion {
+                id: id.clone(),
+                provenance: provenance.clone(),
+                created_at: Timestamp(row.3),
+                content_digest: parse_digest(row.4)?,
+                binding: ParagraphSuggestionBinding {
+                    source_selection_digest: parse_digest(row.5)?,
+                    language: WritingLanguage::parse(&row.6).map_err(invalid_value)?,
+                    style: WritingStyle::parse(&row.7).map_err(invalid_value)?,
+                    backend_id: provenance.backend_id,
+                    buffer_version: to_u64(row.8, "suggestion buffer version")?,
+                    range: ReflectionRange {
+                        start: to_usize(row.9, "suggestion range start")?,
+                        end: to_usize(row.10, "suggestion range end")?,
+                    },
+                    selected_text_digest: parse_digest(row.11)?,
+                },
+                replacement: row.12,
+                reflection_ranges: load_ranges(
+                    connection,
+                    "paragraph_reflection_ranges",
+                    "suggestion_id",
+                    day,
+                    &id,
+                )?,
+                explanation: row.13,
+                stale: row.14,
+                resolution: row
+                    .15
+                    .as_deref()
+                    .map(SuggestionResolution::parse)
+                    .transpose()
+                    .map_err(invalid_value)?,
+                resolved_at: row.16.map(Timestamp),
+            })
+        })
+        .collect()
+}
+
+fn load_source_refine_suggestions(
+    connection: &Connection,
+    day: &DiaryDay,
+) -> Result<Vec<SourceRefineSuggestion>, StoreError> {
+    let mut statement = connection
+        .prepare(
+            "SELECT connector, source_id, original_body, suggested_body,
+                binding_digest, backend_id, composition_path, created_at
+         FROM source_refine_suggestions WHERE day = ?1 ORDER BY connector, source_id",
+        )
+        .map_err(map_sql_error)?;
+    let rows = statement
+        .query_map([day.as_str()], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, String>(3)?,
+                row.get::<_, String>(4)?,
+                row.get::<_, String>(5)?,
+                row.get::<_, String>(6)?,
+                row.get::<_, i64>(7)?,
+            ))
+        })
+        .map_err(map_sql_error)?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(map_sql_error)?;
+    rows.into_iter()
+        .map(|row| {
+            Ok(SourceRefineSuggestion {
+                source: SourceRef {
+                    connector: row.0,
+                    source_id: row.1,
+                },
+                original_body: row.2,
+                suggested_body: row.3,
+                binding_digest: parse_digest(row.4)?,
+                provenance: required_provenance(Some(row.5), Some(row.6))?,
+                created_at: Timestamp(row.7),
+            })
+        })
+        .collect()
+}
+
+fn load_ranges(
+    connection: &Connection,
+    table: &str,
+    id_column: &str,
+    day: &DiaryDay,
+    id: &str,
+) -> Result<Vec<ReflectionRange>, StoreError> {
+    let mut statement = connection
+        .prepare(&format!(
+            "SELECT start_byte, end_byte FROM {table}
+             WHERE day = ?1 AND {id_column} = ?2 ORDER BY position"
+        ))
+        .map_err(map_sql_error)?;
+    statement
+        .query_map(params![day.as_str(), id], |row| {
+            Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?))
+        })
+        .map_err(map_sql_error)?
+        .map(|row| {
+            let (start, end) = row.map_err(map_sql_error)?;
+            Ok(ReflectionRange {
+                start: to_usize(start, "reflection range start")?,
+                end: to_usize(end, "reflection range end")?,
+            })
+        })
+        .collect()
+}
+
+fn optional_provenance(
+    backend: Option<String>,
+    path: Option<String>,
+) -> Result<Option<ArtifactProvenance>, StoreError> {
+    match (backend, path) {
+        (None, None) => Ok(None),
+        (Some(backend), Some(path)) => Ok(Some(ArtifactProvenance {
+            backend_id: AssistantBackendId::parse(backend).map_err(invalid_value)?,
+            composition_path: CompositionPath::parse(&path).map_err(invalid_value)?,
+        })),
+        _ => Err(StoreError::InvalidRecord(
+            "partial assistant artifact provenance".to_owned(),
+        )),
+    }
+}
+
+fn required_provenance(
+    backend: Option<String>,
+    path: Option<String>,
+) -> Result<ArtifactProvenance, StoreError> {
+    optional_provenance(backend, path)?.ok_or_else(|| {
+        StoreError::InvalidRecord("assistant artifact provenance is missing".to_owned())
+    })
 }
 
 type LoadedPlan = (
@@ -1503,6 +2368,20 @@ fn purge_day(
             [day.as_str()],
         )
         .map_err(map_sql_error)?;
+    for table in [
+        "assistant_memory_candidate_sets",
+        "reviewed_memory_artifacts",
+        "draft_proposals",
+        "paragraph_suggestions",
+        "source_refine_suggestions",
+    ] {
+        transaction
+            .execute(
+                &format!("DELETE FROM {table} WHERE day = ?1"),
+                [day.as_str()],
+            )
+            .map_err(map_sql_error)?;
+    }
     transaction
         .execute("DELETE FROM output_plans WHERE day = ?1", [day.as_str()])
         .map_err(map_sql_error)?;
@@ -1649,6 +2528,12 @@ fn to_u64(value: i64, name: &'static str) -> Result<u64, StoreError> {
         .map_err(|_| StoreError::InvalidRecord(format!("{name} is negative")))
 }
 
+fn to_usize(value: i64, name: &'static str) -> Result<usize, StoreError> {
+    value
+        .try_into()
+        .map_err(|_| StoreError::InvalidRecord(format!("{name} is out of range")))
+}
+
 fn to_u32(value: i64, name: &'static str) -> Result<u32, StoreError> {
     value
         .try_into()
@@ -1758,6 +2643,13 @@ mod tests {
                    '2026-10-29', 0, 'ayumi', '2026/10/29/note.md',
                    '2026-10-29', NULL, NULL, 'resident'
                  )",
+                [],
+            )
+            .unwrap();
+        connection
+            .execute(
+                "INSERT INTO reviewed_memories (day, position, memory_text)
+                 VALUES ('2026-10-29', 0, 'Legacy reviewed memory')",
                 [],
             )
             .unwrap();
@@ -1901,6 +2793,38 @@ mod tests {
             )
             .unwrap();
         assert_eq!(migrated_draft, "Legacy draft");
+        let migrated_memory_artifact: (String, String, bool) = connection
+            .query_row(
+                "SELECT artifact_id, reviewed_text, stale
+                 FROM reviewed_memory_artifacts WHERE day = '2026-10-29'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!(
+            migrated_memory_artifact,
+            (
+                "migrated-memory-20261029".to_owned(),
+                "Legacy reviewed memory".to_owned(),
+                true,
+            )
+        );
+        let migrated_draft_artifact: (String, String, bool) = connection
+            .query_row(
+                "SELECT artifact_id, draft_text, stale
+                 FROM draft_proposals WHERE day = '2026-10-29'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!(
+            migrated_draft_artifact,
+            (
+                "migrated-draft-20261029".to_owned(),
+                "Legacy draft".to_owned(),
+                true,
+            )
+        );
         let preserved: (String, String, String, String) = connection
             .query_row(
                 "SELECT s.readable_body, p.plan_id, d.target_identity, g.status

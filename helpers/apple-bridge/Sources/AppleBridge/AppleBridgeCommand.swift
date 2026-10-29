@@ -6,7 +6,11 @@ import Foundation
 struct AppleBridgeCommand {
     static func main() {
         let input = readBoundedFrame()
-        let outcome = BridgeProtocol.handle(input, sourceService: LiveICloudSourceService())
+        let outcome = BridgeProtocol.handle(
+            input,
+            sourceService: LiveICloudSourceService(),
+            assistantService: LiveFoundationModelsAssistantService()
+        )
         FileHandle.standardOutput.write(outcome.response)
 
         if let diagnosticCode = outcome.diagnosticCode {
@@ -23,8 +27,8 @@ struct AppleBridgeCommand {
         var input = Data()
 
         do {
-            while input.count <= BridgeProtocol.maximumFrameBytes {
-                let remaining = BridgeProtocol.maximumFrameBytes + 1 - input.count
+            while input.count <= BridgeProtocol.maximumFrameBytes + 4 {
+                let remaining = BridgeProtocol.maximumFrameBytes + 5 - input.count
                 guard let chunk = try FileHandle.standardInput.read(upToCount: remaining),
                       !chunk.isEmpty
                 else {

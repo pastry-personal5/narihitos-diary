@@ -7,7 +7,8 @@
 use std::collections::BTreeSet;
 
 use diary_control_contract::{
-    JobAcceptedDto, JobDto, SourceCandidateDto, SourceDetailDto, SourceListDto, WorkflowDto,
+    JobAcceptedDto, JobDto, SourceCandidateDto, SourceDetailDto, SourceListDto,
+    SourceRefineSuggestionDto, WorkflowDto,
 };
 
 use crate::client::{
@@ -48,6 +49,8 @@ pub struct SourcesViewModel {
     pub reviewed: BTreeSet<String>,
     pub next_cursor: Option<String>,
     pub active_detail: Option<SourceDetailDto>,
+    pub active_refine_suggestion: Option<SourceRefineSuggestionDto>,
+    pub pending_delete_confirmation: Option<String>,
     pub pending_discovery_job: Option<String>,
     pub pending_preparation_job: Option<String>,
     pub job_progress_percent: Option<u8>,

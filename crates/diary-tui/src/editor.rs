@@ -48,6 +48,39 @@ impl DraftEditor {
         &self.textarea
     }
 
+    /// Returns the blank-line-delimited Markdown paragraph containing the
+    /// cursor as a UTF-8 byte range and exact text.
+    #[must_use]
+    pub fn focused_paragraph(&self) -> Option<(usize, usize, String)> {
+        let text = self.text();
+        if text.is_empty() {
+            return None;
+        }
+        let cursor_position = self.textarea.cursor();
+        let (row, column) = (cursor_position.0, cursor_position.1);
+        let line_start = self
+            .textarea
+            .lines()
+            .iter()
+            .take(row)
+            .map(|line| line.len() + 1)
+            .sum::<usize>();
+        let column_bytes = self
+            .textarea
+            .lines()
+            .get(row)?
+            .chars()
+            .take(column)
+            .map(char::len_utf8)
+            .sum::<usize>();
+        let cursor = line_start.saturating_add(column_bytes).min(text.len());
+        let start = text[..cursor].rfind("\n\n").map_or(0, |index| index + 2);
+        let end = text[cursor..]
+            .find("\n\n")
+            .map_or(text.len(), |index| cursor + index);
+        (start < end).then(|| (start, end, text[start..end].to_owned()))
+    }
+
     /// Feeds one key-press event through the editor's own dispatch.
     /// Returns whether the text changed. A key this editor does not
     /// recognize (including any Ctrl chord, which the caller should

@@ -2,6 +2,7 @@
 
 #![forbid(unsafe_code)]
 
+pub mod assistant_view;
 pub mod client;
 pub mod command_line;
 pub mod command_line_view;

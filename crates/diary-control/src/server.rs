@@ -2,7 +2,7 @@ use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::convert::Infallible;
 use std::future::Future;
 use std::pin::Pin;
-use std::sync::atomic::{AtomicU8, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -19,8 +19,9 @@ use axum::routing::{get, post, put};
 use axum::{Json, Router};
 use diary_control_contract::*;
 use diary_core::{
-    AssistantBackendId, DiaryDay, Digest, InvalidationReason, Preferences, SelectedSource,
-    SourceRef, StartOutcome, Workflow, WritingLanguage, WritingStyle,
+    AssistantBackendId, AssistantSelection, CompositionPath, DiaryDay, Digest,
+    DraftAssistantRegistry, InvalidationReason, Preferences, ReflectionRange, SelectedSource,
+    SourceRef, StartOutcome, SuggestionResolution, Workflow, WritingLanguage, WritingStyle,
 };
 use futures_core::Stream;
 use serde::Deserialize;
@@ -47,6 +48,7 @@ pub struct ServerConfig {
     pub commands: CommandService,
     pub apple_helper_available: bool,
     pub notion_configured: bool,
+    pub assistant_registry: Arc<DraftAssistantRegistry>,
     pub diagnostics: Option<Arc<DiagnosticLog>>,
     pub diagnostic_failure: Option<mpsc::UnboundedSender<()>>,
 }
@@ -80,6 +82,7 @@ struct JobRecord {
     error_code: Option<String>,
     expires_at_ms: i64,
     commit_state: Arc<AtomicU8>,
+    cancelled: Arc<AtomicBool>,
 }
 
 struct PreparedRecord {
@@ -125,6 +128,7 @@ pub fn build_router(config: ServerConfig) -> ServerHandle {
         .route("/v1/health", get(health))
         .route("/v1/capabilities", get(capabilities))
         .route("/v1/setup-check", get(setup_check))
+        .route("/v1/assistant-backends", get(assistant_backends))
         .route("/v1/preferences", get(get_preferences).put(put_preferences))
         .route("/v1/workflows", get(list_workflows).post(start_workflow))
         .route(
@@ -133,7 +137,26 @@ pub fn build_router(config: ServerConfig) -> ServerHandle {
         )
         .route("/v1/workflows/{id}/discoveries", post(discover))
         .route("/v1/workflows/{id}/sources", get(list_sources))
-        .route("/v1/workflows/{id}/sources/{source_id}", get(source_detail))
+        .route(
+            "/v1/workflows/{id}/sources/{source_id}",
+            get(source_detail).delete(delete_source_route),
+        )
+        .route(
+            "/v1/workflows/{id}/sources/{source_id}/refine-requests",
+            post(start_source_refine),
+        )
+        .route(
+            "/v1/workflows/{id}/sources/{source_id}/refine-suggestion",
+            get(get_source_refine_suggestion),
+        )
+        .route(
+            "/v1/workflows/{id}/sources/{source_id}/refine-suggestion/resolution",
+            put(resolve_source_refine),
+        )
+        .route(
+            "/v1/workflows/{id}/sources/{source_id}/body",
+            put(edit_source_body),
+        )
         .route("/v1/workflows/{id}/sources/prepare", post(prepare_sources))
         .route("/v1/workflows/{id}/selection", put(confirm_selection))
         .route(
@@ -143,6 +166,39 @@ pub fn build_router(config: ServerConfig) -> ServerHandle {
         .route(
             "/v1/workflows/{id}/writing-settings",
             put(set_writing_settings),
+        )
+        .route(
+            "/v1/workflows/{id}/assistant-selection",
+            get(get_assistant_selection).put(put_assistant_selection),
+        )
+        .route(
+            "/v1/workflows/{id}/memory-extractions",
+            post(start_memory_extraction),
+        )
+        .route(
+            "/v1/workflows/{id}/memory-review",
+            get(get_memory_review).put(put_memory_review),
+        )
+        .route(
+            "/v1/workflows/{id}/draft-requests",
+            post(start_draft_request),
+        )
+        .route("/v1/workflows/{id}/draft-result", get(get_draft_result))
+        .route(
+            "/v1/workflows/{id}/paragraph-review-requests",
+            post(start_paragraph_review),
+        )
+        .route(
+            "/v1/workflows/{id}/paragraph-suggestions",
+            get(list_paragraph_suggestions),
+        )
+        .route(
+            "/v1/workflows/{id}/paragraph-suggestions/{suggestion_id}",
+            get(get_paragraph_suggestion),
+        )
+        .route(
+            "/v1/workflows/{id}/paragraph-suggestions/{suggestion_id}/resolution",
+            put(resolve_paragraph_suggestion),
         )
         .route(
             "/v1/workflows/{id}/manual-compositions",
@@ -494,7 +550,7 @@ async fn capabilities(State(state): State<AppState>) -> Json<CapabilitiesDto> {
     Json(CapabilitiesDto {
         capabilities,
         manual_workflow_available: true,
-        assistant_backends: Vec::new(),
+        assistant_backends: backend_dtos(&state),
         disabled_routes: vec![
             "/mcp".to_owned(),
             "/v1/drafts".to_owned(),
@@ -502,6 +558,39 @@ async fn capabilities(State(state): State<AppState>) -> Json<CapabilitiesDto> {
             "/v1/amendments".to_owned(),
         ],
     })
+}
+
+async fn assistant_backends(State(state): State<AppState>) -> Json<AssistantBackendListDto> {
+    Json(AssistantBackendListDto {
+        backends: backend_dtos(&state),
+    })
+}
+
+fn backend_dtos(state: &AppState) -> Vec<AssistantBackendDto> {
+    state
+        .0
+        .config
+        .assistant_registry
+        .descriptors()
+        .into_iter()
+        .map(|descriptor| AssistantBackendDto {
+            id: descriptor.id.to_string(),
+            display_label: descriptor.display_label,
+            composition_path: descriptor.composition_path.as_str().to_owned(),
+            available: descriptor.available,
+            reason_code: descriptor.reason_code,
+            supported_languages: descriptor
+                .supported_languages
+                .into_iter()
+                .map(|language| language.as_str().to_owned())
+                .collect(),
+            supported_actions: descriptor
+                .supported_actions
+                .into_iter()
+                .map(|action| action.as_str().to_owned())
+                .collect(),
+        })
+        .collect()
 }
 
 async fn setup_check(State(state): State<AppState>) -> Json<SetupCheckDto> {
@@ -737,6 +826,171 @@ async fn source_detail(
     Ok(([(CONTENT_TYPE, "application/json")], body).into_response())
 }
 
+async fn start_source_refine(
+    State(state): State<AppState>,
+    Path((id, source_id)): Path<(String, String)>,
+    headers: HeaderMap,
+    Json(request): Json<RefineSourceRequest>,
+) -> Result<(StatusCode, Json<JobAcceptedDto>), ApiError> {
+    validate_string(&source_id)?;
+    validate_string(&request.content_digest)?;
+    let digest = Digest::parse(request.content_digest)
+        .map_err(|_| ApiError::new(StatusCode::BAD_REQUEST, "invalid-content-digest"))?;
+    let day = day_from_id(&id)?;
+    let revision = workflow_precondition(&headers)?;
+    let service = state.0.config.commands.clone();
+    let lookup = day.clone();
+    let workflow = blocking(move || service.load_workflow(&lookup)).await?;
+    let source = workflow
+        .candidates()
+        .iter()
+        .find(|value| opaque_source_id(&value.source) == source_id)
+        .map(|value| value.source.clone())
+        .ok_or_else(|| ApiError::new(StatusCode::NOT_FOUND, "source-not-found"))?;
+    let job_id = new_job(&state, "assistant-source-refine", &id)?;
+    tokio::spawn(run_assistant_job(
+        state,
+        job_id.clone(),
+        id,
+        day,
+        AssistantJob::Refine {
+            revision,
+            source,
+            digest,
+        },
+    ));
+    Ok((StatusCode::ACCEPTED, Json(JobAcceptedDto { job_id })))
+}
+
+async fn get_source_refine_suggestion(
+    State(state): State<AppState>,
+    Path((id, source_id)): Path<(String, String)>,
+) -> Result<Json<SourceRefineSuggestionDto>, ApiError> {
+    validate_string(&source_id)?;
+    let day = day_from_id(&id)?;
+    let service = state.0.config.commands.clone();
+    let workflow = blocking(move || service.load_workflow(&day)).await?;
+    let suggestion = workflow
+        .source_refine_suggestions()
+        .iter()
+        .find(|value| opaque_source_id(&value.source) == source_id)
+        .ok_or_else(|| {
+            ApiError::new(StatusCode::NOT_FOUND, "source-refine-suggestion-not-found")
+        })?;
+    Ok(Json(SourceRefineSuggestionDto {
+        source_id,
+        original_body: suggestion.original_body.clone(),
+        suggested_body: suggestion.suggested_body.clone(),
+        binding_digest: suggestion.binding_digest.to_string(),
+    }))
+}
+
+async fn resolve_source_refine(
+    State(state): State<AppState>,
+    Path((id, source_id)): Path<(String, String)>,
+    headers: HeaderMap,
+    Json(request): Json<ResolveSourceRefineRequest>,
+) -> Result<Response, ApiError> {
+    ensure_no_assistant_job(&state, &id)?;
+    let revision = workflow_precondition(&headers)?;
+    let day = day_from_id(&id)?;
+    let digest = Digest::parse(request.binding_digest)
+        .map_err(|_| ApiError::new(StatusCode::BAD_REQUEST, "invalid-content-digest"))?;
+    let service = state.0.config.commands.clone();
+    let lookup = day.clone();
+    let workflow = blocking(move || service.load_workflow(&lookup)).await?;
+    let source = workflow
+        .candidates()
+        .iter()
+        .find(|value| opaque_source_id(&value.source) == source_id)
+        .map(|value| value.source.clone())
+        .ok_or_else(|| ApiError::new(StatusCode::NOT_FOUND, "source-not-found"))?;
+    let service = state.0.config.commands.clone();
+    let updated = blocking(move || {
+        service.resolve_source_refinement(&day, revision, &source, request.accept, &digest)
+    })
+    .await?;
+    publish_event(
+        &state,
+        "workflow.changed",
+        Some(id),
+        Some(updated.revision()),
+        None,
+        None,
+    );
+    workflow_response(StatusCode::OK, &updated)
+}
+
+async fn edit_source_body(
+    State(state): State<AppState>,
+    Path((id, source_id)): Path<(String, String)>,
+    headers: HeaderMap,
+    Json(request): Json<EditSourceBodyRequest>,
+) -> Result<Response, ApiError> {
+    ensure_no_assistant_job(&state, &id)?;
+    if request.text.len() > MAX_SOURCE_BYTES {
+        return Err(ApiError::new(StatusCode::PAYLOAD_TOO_LARGE, "string-limit"));
+    }
+    let revision = workflow_precondition(&headers)?;
+    let day = day_from_id(&id)?;
+    let digest = Digest::parse(request.expected_content_digest)
+        .map_err(|_| ApiError::new(StatusCode::BAD_REQUEST, "invalid-content-digest"))?;
+    let service = state.0.config.commands.clone();
+    let lookup = day.clone();
+    let workflow = blocking(move || service.load_workflow(&lookup)).await?;
+    let source = workflow
+        .candidates()
+        .iter()
+        .find(|value| opaque_source_id(&value.source) == source_id)
+        .map(|value| value.source.clone())
+        .ok_or_else(|| ApiError::new(StatusCode::NOT_FOUND, "source-not-found"))?;
+    let service = state.0.config.commands.clone();
+    let updated =
+        blocking(move || service.edit_source_body(&day, revision, &source, &request.text, &digest))
+            .await?;
+    publish_event(
+        &state,
+        "workflow.changed",
+        Some(id),
+        Some(updated.revision()),
+        None,
+        None,
+    );
+    workflow_response(StatusCode::OK, &updated)
+}
+
+async fn delete_source_route(
+    State(state): State<AppState>,
+    Path((id, source_id)): Path<(String, String)>,
+    headers: HeaderMap,
+    Json(request): Json<DeleteSourceRequest>,
+) -> Result<Response, ApiError> {
+    ensure_no_assistant_job(&state, &id)?;
+    let revision = workflow_precondition(&headers)?;
+    let day = day_from_id(&id)?;
+    let service = state.0.config.commands.clone();
+    let lookup = day.clone();
+    let workflow = blocking(move || service.load_workflow(&lookup)).await?;
+    let source = workflow
+        .candidates()
+        .iter()
+        .find(|value| opaque_source_id(&value.source) == source_id)
+        .map(|value| value.source.clone())
+        .ok_or_else(|| ApiError::new(StatusCode::NOT_FOUND, "source-not-found"))?;
+    let service = state.0.config.commands.clone();
+    let updated =
+        blocking(move || service.delete_source(&day, revision, &source, request.confirm)).await?;
+    publish_event(
+        &state,
+        "workflow.changed",
+        Some(id),
+        Some(updated.revision()),
+        None,
+        None,
+    );
+    workflow_response(StatusCode::OK, &updated)
+}
+
 async fn prepare_sources(
     State(state): State<AppState>,
     Path(id): Path<String>,
@@ -872,6 +1126,381 @@ async fn set_writing_settings(
     workflow_response(StatusCode::OK, &workflow)
 }
 
+async fn get_assistant_selection(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<Json<AssistantSelectionDto>, ApiError> {
+    let day = day_from_id(&id)?;
+    let service = state.0.config.commands.clone();
+    let workflow = blocking(move || service.load_workflow(&day)).await?;
+    Ok(Json(assistant_selection_dto(&workflow)))
+}
+
+async fn put_assistant_selection(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    headers: HeaderMap,
+    Json(request): Json<PutAssistantSelectionRequest>,
+) -> Result<Response, ApiError> {
+    let day = day_from_id(&id)?;
+    let revision = workflow_precondition(&headers)?;
+    validate_optional_string(request.backend_id.as_deref())?;
+    let selection = if let Some(raw_id) = request.backend_id {
+        let backend_id = AssistantBackendId::parse(raw_id)
+            .map_err(|_| ApiError::new(StatusCode::BAD_REQUEST, "invalid-assistant-backend"))?;
+        let descriptor = state
+            .0
+            .config
+            .assistant_registry
+            .descriptors()
+            .into_iter()
+            .find(|descriptor| descriptor.id == backend_id)
+            .ok_or_else(|| ApiError::from(CommandError::UnavailableAssistantBackend))?;
+        if !descriptor.available {
+            return Err(ApiError::from(CommandError::UnavailableAssistantBackend));
+        }
+        Some(AssistantSelection::new(
+            backend_id,
+            descriptor.composition_path,
+        ))
+    } else {
+        None
+    };
+    let service = state.0.config.commands.clone();
+    let workflow =
+        blocking(move || service.set_assistant_selection(&day, revision, selection)).await?;
+    publish_event(
+        &state,
+        "workflow.changed",
+        Some(id),
+        Some(workflow.revision()),
+        None,
+        None,
+    );
+    workflow_response(StatusCode::OK, &workflow)
+}
+
+fn assistant_selection_dto(workflow: &Workflow) -> AssistantSelectionDto {
+    AssistantSelectionDto {
+        backend_id: workflow
+            .assistant_selection()
+            .map(|selection| selection.backend_id.to_string()),
+        composition_path: workflow
+            .composition_path()
+            .map(CompositionPath::as_str)
+            .map(str::to_owned),
+    }
+}
+
+async fn start_memory_extraction(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    headers: HeaderMap,
+    Json(_request): Json<StartMemoryExtractionRequest>,
+) -> Result<(StatusCode, Json<JobAcceptedDto>), ApiError> {
+    let day = day_from_id(&id)?;
+    let revision = workflow_precondition(&headers)?;
+    let artifact_id = random_id("memory_").map_err(|_| ApiError::internal())?;
+    let job_id = new_job(&state, "assistant-memory-extraction", &id)?;
+    tokio::spawn(run_assistant_job(
+        state,
+        job_id.clone(),
+        id,
+        day,
+        AssistantJob::Extract {
+            revision,
+            artifact_id,
+        },
+    ));
+    Ok((StatusCode::ACCEPTED, Json(JobAcceptedDto { job_id })))
+}
+
+async fn get_memory_review(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<Json<MemoryReviewDto>, ApiError> {
+    let day = day_from_id(&id)?;
+    let service = state.0.config.commands.clone();
+    let workflow = blocking(move || service.load_workflow(&day)).await?;
+    let set = workflow.memory_candidate_sets().last();
+    let reviewed = workflow.reviewed_memory_artifact();
+    Ok(Json(MemoryReviewDto {
+        candidate_set_id: set.map(|value| value.id.clone()),
+        candidates: set
+            .map(|value| {
+                value
+                    .candidates
+                    .iter()
+                    .map(|candidate| MemoryCandidateDto {
+                        id: candidate.id.clone(),
+                        text: candidate.text.clone(),
+                        source_snapshot_digests: candidate
+                            .source_snapshot_digests
+                            .iter()
+                            .map(ToString::to_string)
+                            .collect(),
+                        stale: value.stale,
+                    })
+                    .collect()
+            })
+            .unwrap_or_default(),
+        reviewed_memory: reviewed.map_or_else(String::new, |value| value.text.clone()),
+        reviewed_memory_revision: reviewed.map_or(0, |value| value.revision),
+        stale: set.is_some_and(|value| value.stale) || reviewed.is_some_and(|value| value.stale),
+    }))
+}
+
+async fn put_memory_review(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    headers: HeaderMap,
+    Json(request): Json<PutMemoryReviewRequest>,
+) -> Result<Response, ApiError> {
+    if request.reviewed_memory.len() > MAX_REVIEWED_MEMORY_BYTES {
+        return Err(ApiError::new(StatusCode::PAYLOAD_TOO_LARGE, "string-limit"));
+    }
+    validate_string(&request.candidate_set_id)?;
+    let day = day_from_id(&id)?;
+    let revision = workflow_precondition(&headers)?;
+    let artifact_id = random_id("reviewed_").map_err(|_| ApiError::internal())?;
+    let service = state.0.config.commands.clone();
+    let workflow = blocking(move || {
+        service.replace_reviewed_memory(
+            &day,
+            revision,
+            artifact_id,
+            &request.candidate_set_id,
+            request.reviewed_memory,
+        )
+    })
+    .await?;
+    publish_event(
+        &state,
+        "workflow.changed",
+        Some(id),
+        Some(workflow.revision()),
+        None,
+        None,
+    );
+    workflow_response(StatusCode::OK, &workflow)
+}
+
+async fn start_draft_request(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    headers: HeaderMap,
+    Json(request): Json<StartDraftRequest>,
+) -> Result<(StatusCode, Json<JobAcceptedDto>), ApiError> {
+    let day = day_from_id(&id)?;
+    let revision = workflow_precondition(&headers)?;
+    let artifact_id = random_id("draft_").map_err(|_| ApiError::internal())?;
+    let job_id = new_job(&state, "assistant-draft", &id)?;
+    tokio::spawn(run_assistant_job(
+        state,
+        job_id.clone(),
+        id,
+        day,
+        AssistantJob::Draft {
+            revision,
+            artifact_id,
+            include_prior: request.include_prior_draft,
+        },
+    ));
+    Ok((StatusCode::ACCEPTED, Json(JobAcceptedDto { job_id })))
+}
+
+async fn get_draft_result(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<Json<DraftResultDto>, ApiError> {
+    let day = day_from_id(&id)?;
+    let service = state.0.config.commands.clone();
+    let workflow = blocking(move || service.load_workflow(&day)).await?;
+    let draft = workflow
+        .draft_proposals()
+        .last()
+        .ok_or_else(|| ApiError::new(StatusCode::NOT_FOUND, "assistant-draft-not-found"))?;
+    let provenance = draft
+        .provenance
+        .as_ref()
+        .ok_or_else(|| ApiError::new(StatusCode::CONFLICT, "assistant-binding-stale"))?;
+    Ok(Json(DraftResultDto {
+        id: draft.id.clone(),
+        backend_id: provenance.backend_id.to_string(),
+        composition_path: provenance.composition_path.as_str().to_owned(),
+        text: draft.text.clone(),
+        reflection_ranges: range_dtos(&draft.reflection_ranges),
+        stale: draft.stale,
+        populated_buffer_version: draft.populated_buffer_version,
+    }))
+}
+
+async fn start_paragraph_review(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    headers: HeaderMap,
+    Json(request): Json<StartParagraphReviewRequest>,
+) -> Result<(StatusCode, Json<JobAcceptedDto>), ApiError> {
+    validate_string(&request.buffer_etag)?;
+    validate_string(&request.selected_text_digest)?;
+    let day = day_from_id(&id)?;
+    let revision = workflow_precondition(&headers)?;
+    let buffer = parse_buffer_etag(&request.buffer_etag)
+        .ok_or_else(|| ApiError::new(StatusCode::BAD_REQUEST, "invalid-buffer-etag"))?;
+    let digest = Digest::parse(request.selected_text_digest)
+        .map_err(|_| ApiError::new(StatusCode::BAD_REQUEST, "invalid-text-digest"))?;
+    let service = state.0.config.commands.clone();
+    let lookup_day = day.clone();
+    let workflow = blocking(move || service.load_workflow(&lookup_day)).await?;
+    let range = ReflectionRange {
+        start: request.range_start,
+        end: request.range_end,
+    };
+    let selected = workflow
+        .entry()
+        .text
+        .get(range.start..range.end)
+        .ok_or_else(|| ApiError::new(StatusCode::BAD_REQUEST, "invalid-paragraph-range"))?;
+    if workflow.entry().version != buffer || Digest::of_bytes(selected.as_bytes()) != digest {
+        return Err(ApiError::new(
+            StatusCode::PRECONDITION_FAILED,
+            "assistant-binding-stale",
+        ));
+    }
+    let suggestion_id = random_id("suggestion_").map_err(|_| ApiError::internal())?;
+    let job_id = new_job(&state, "assistant-paragraph-review", &id)?;
+    tokio::spawn(run_assistant_job(
+        state,
+        job_id.clone(),
+        id,
+        day,
+        AssistantJob::Paragraph {
+            revision,
+            suggestion_id,
+            range,
+        },
+    ));
+    Ok((StatusCode::ACCEPTED, Json(JobAcceptedDto { job_id })))
+}
+
+async fn list_paragraph_suggestions(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<Json<ParagraphSuggestionListDto>, ApiError> {
+    let day = day_from_id(&id)?;
+    let service = state.0.config.commands.clone();
+    let workflow = blocking(move || service.load_workflow(&day)).await?;
+    Ok(Json(ParagraphSuggestionListDto {
+        suggestions: workflow
+            .paragraph_suggestions()
+            .iter()
+            .map(|suggestion| ParagraphSuggestionSummaryDto {
+                id: suggestion.id.clone(),
+                backend_id: suggestion.provenance.backend_id.to_string(),
+                composition_path: suggestion.provenance.composition_path.as_str().to_owned(),
+                stale: suggestion.stale,
+                resolution: suggestion.resolution.map(|value| value.as_str().to_owned()),
+            })
+            .collect(),
+    }))
+}
+
+async fn get_paragraph_suggestion(
+    State(state): State<AppState>,
+    Path((id, suggestion_id)): Path<(String, String)>,
+) -> Result<Json<ParagraphSuggestionDto>, ApiError> {
+    validate_string(&suggestion_id)?;
+    let day = day_from_id(&id)?;
+    let service = state.0.config.commands.clone();
+    let workflow = blocking(move || service.load_workflow(&day)).await?;
+    let suggestion = workflow
+        .paragraph_suggestions()
+        .iter()
+        .find(|suggestion| suggestion.id == suggestion_id)
+        .ok_or_else(|| ApiError::new(StatusCode::NOT_FOUND, "assistant-suggestion-not-found"))?;
+    Ok(Json(paragraph_suggestion_dto(suggestion)))
+}
+
+async fn resolve_paragraph_suggestion(
+    State(state): State<AppState>,
+    Path((id, suggestion_id)): Path<(String, String)>,
+    headers: HeaderMap,
+    Json(request): Json<ResolveParagraphSuggestionRequest>,
+) -> Result<Response, ApiError> {
+    validate_string(&suggestion_id)?;
+    validate_string(&request.buffer_etag)?;
+    validate_string(&request.selected_text_digest)?;
+    let resolution = match request.resolution.as_str() {
+        "accept" => SuggestionResolution::Accepted,
+        "reject" => SuggestionResolution::Rejected,
+        _ => return Err(ApiError::new(StatusCode::BAD_REQUEST, "invalid-resolution")),
+    };
+    let revision = workflow_precondition(&headers)?;
+    let day = day_from_id(&id)?;
+    let service = state.0.config.commands.clone();
+    let lookup_day = day.clone();
+    let workflow = blocking(move || service.load_workflow(&lookup_day)).await?;
+    let suggestion = workflow
+        .paragraph_suggestions()
+        .iter()
+        .find(|suggestion| suggestion.id == suggestion_id)
+        .ok_or_else(|| ApiError::new(StatusCode::NOT_FOUND, "assistant-suggestion-not-found"))?;
+    if parse_buffer_etag(&request.buffer_etag) != Some(suggestion.binding.buffer_version)
+        || request.range_start != suggestion.binding.range.start
+        || request.range_end != suggestion.binding.range.end
+        || request.selected_text_digest != suggestion.binding.selected_text_digest.as_str()
+    {
+        return Err(ApiError::new(
+            StatusCode::PRECONDITION_FAILED,
+            "assistant-binding-stale",
+        ));
+    }
+    let service = state.0.config.commands.clone();
+    let suggestion_for_write = suggestion_id.clone();
+    let updated = blocking(move || {
+        service.resolve_paragraph_suggestion(&day, revision, &suggestion_for_write, resolution)
+    })
+    .await?;
+    publish_event(
+        &state,
+        "workflow.changed",
+        Some(id),
+        Some(updated.revision()),
+        None,
+        None,
+    );
+    workflow_response(StatusCode::OK, &updated)
+}
+
+fn range_dtos(ranges: &[ReflectionRange]) -> Vec<ReflectionRangeDto> {
+    ranges
+        .iter()
+        .map(|range| ReflectionRangeDto {
+            start: range.start,
+            end: range.end,
+        })
+        .collect()
+}
+
+fn paragraph_suggestion_dto(
+    suggestion: &diary_core::ParagraphSuggestion,
+) -> ParagraphSuggestionDto {
+    ParagraphSuggestionDto {
+        id: suggestion.id.clone(),
+        backend_id: suggestion.provenance.backend_id.to_string(),
+        composition_path: suggestion.provenance.composition_path.as_str().to_owned(),
+        replacement: suggestion.replacement.clone(),
+        reflection_ranges: range_dtos(&suggestion.reflection_ranges),
+        explanation: suggestion.explanation.clone(),
+        buffer_version: suggestion.binding.buffer_version,
+        range_start: suggestion.binding.range.start,
+        range_end: suggestion.binding.range.end,
+        selected_text_digest: suggestion.binding.selected_text_digest.to_string(),
+        stale: suggestion.stale,
+        resolution: suggestion.resolution.map(|value| value.as_str().to_owned()),
+    }
+}
+
 async fn begin_manual_composition(
     State(state): State<AppState>,
     Path(id): Path<String>,
@@ -960,6 +1589,7 @@ async fn cancel_job(
         .get_mut(&id)
         .ok_or_else(|| ApiError::new(StatusCode::NOT_FOUND, "job-not-found"))?;
     if record.status == "queued" {
+        record.cancelled.store(true, Ordering::Release);
         record
             .commit_state
             .store(COMMIT_CANCELLED, Ordering::Release);
@@ -976,6 +1606,7 @@ async fn cancel_job(
             )
             .is_ok()
     {
+        record.cancelled.store(true, Ordering::Release);
         record.status = "cancellation-requested";
     }
     if let Some(handle) = record.result_handle.take() {
@@ -1179,6 +1810,18 @@ fn new_job(state: &AppState, kind: &'static str, workflow_id: &str) -> Result<St
         .values()
         .filter(|job| matches!(job.status, "queued" | "running" | "cancellation-requested"))
         .count();
+    if is_assistant_job(kind)
+        && jobs.jobs.values().any(|job| {
+            job.workflow_id == workflow_id
+                && is_assistant_job(job.kind)
+                && matches!(job.status, "queued" | "running" | "cancellation-requested")
+        })
+    {
+        return Err(ApiError::new(
+            StatusCode::CONFLICT,
+            "assistant-job-already-active",
+        ));
+    }
     if active >= JOB_QUEUE_CAPACITY + JOB_CONCURRENCY || jobs.jobs.len() >= MAX_JOBS {
         return Err(ApiError::new(
             StatusCode::SERVICE_UNAVAILABLE,
@@ -1198,9 +1841,36 @@ fn new_job(state: &AppState, kind: &'static str, workflow_id: &str) -> Result<St
             error_code: None,
             expires_at_ms: now_ms().saturating_add(JOB_EXPIRY_MS),
             commit_state: Arc::new(AtomicU8::new(COMMIT_ACTIVE)),
+            cancelled: Arc::new(AtomicBool::new(false)),
         },
     );
     Ok(id)
+}
+
+fn is_assistant_job(kind: &str) -> bool {
+    matches!(
+        kind,
+        "assistant-memory-extraction"
+            | "assistant-draft"
+            | "assistant-paragraph-review"
+            | "assistant-source-refine"
+    )
+}
+
+fn ensure_no_assistant_job(state: &AppState, workflow_id: &str) -> Result<(), ApiError> {
+    let jobs = state.0.jobs.lock().map_err(|_| ApiError::internal())?;
+    if jobs.jobs.values().any(|job| {
+        job.workflow_id == workflow_id
+            && is_assistant_job(job.kind)
+            && matches!(job.status, "queued" | "running" | "cancellation-requested")
+    }) {
+        Err(ApiError::new(
+            StatusCode::CONFLICT,
+            "assistant-job-already-active",
+        ))
+    } else {
+        Ok(())
+    }
 }
 
 async fn run_discovery_job(
@@ -1275,6 +1945,164 @@ async fn run_discovery_job(
         Ok(Err(error)) => fail_job(&state, &job_id, error.code()),
         Err(_) => fail_job(&state, &job_id, "internal-failure"),
     }
+}
+
+enum AssistantJob {
+    Extract {
+        revision: u64,
+        artifact_id: String,
+    },
+    Draft {
+        revision: u64,
+        artifact_id: String,
+        include_prior: bool,
+    },
+    Paragraph {
+        revision: u64,
+        suggestion_id: String,
+        range: ReflectionRange,
+    },
+    Refine {
+        revision: u64,
+        source: SourceRef,
+        digest: Digest,
+    },
+}
+
+async fn run_assistant_job(
+    state: AppState,
+    job_id: String,
+    workflow_id: String,
+    day: DiaryDay,
+    operation: AssistantJob,
+) {
+    let Ok(permit) = Arc::clone(&state.0.workers).acquire_owned().await else {
+        return;
+    };
+    if !mark_running(&state, &job_id) {
+        return;
+    }
+    let Some((commit_state, cancelled)) = assistant_job_state(&state, &job_id) else {
+        fail_job(&state, &job_id, "internal-failure");
+        return;
+    };
+    let service = state.0.config.commands.clone();
+    let registry = Arc::clone(&state.0.config.assistant_registry);
+    let commit_for_worker = Arc::clone(&commit_state);
+    let cancelled_for_worker = Arc::clone(&cancelled);
+    let result_handle = match &operation {
+        AssistantJob::Extract { artifact_id, .. } | AssistantJob::Draft { artifact_id, .. } => {
+            artifact_id.clone()
+        }
+        AssistantJob::Paragraph { suggestion_id, .. } => suggestion_id.clone(),
+        AssistantJob::Refine { source, .. } => opaque_source_id(source),
+    };
+    let mut task = tokio::task::spawn_blocking(move || {
+        let commit = || {
+            commit_for_worker
+                .compare_exchange(
+                    COMMIT_ACTIVE,
+                    COMMITTING,
+                    Ordering::AcqRel,
+                    Ordering::Acquire,
+                )
+                .is_ok()
+        };
+        match operation {
+            AssistantJob::Extract {
+                revision,
+                artifact_id,
+            } => service.extract_memories(
+                &day,
+                revision,
+                artifact_id,
+                &registry,
+                &cancelled_for_worker,
+                commit,
+            ),
+            AssistantJob::Draft {
+                revision,
+                artifact_id,
+                include_prior,
+            } => service.draft_entry(
+                &day,
+                revision,
+                artifact_id,
+                include_prior,
+                &registry,
+                &cancelled_for_worker,
+                commit,
+            ),
+            AssistantJob::Paragraph {
+                revision,
+                suggestion_id,
+                range,
+            } => service.review_paragraph(
+                &day,
+                revision,
+                suggestion_id,
+                range,
+                &registry,
+                &cancelled_for_worker,
+                commit,
+            ),
+            AssistantJob::Refine {
+                revision,
+                source,
+                digest,
+            } => service.refine_source(
+                &day,
+                revision,
+                &source,
+                &digest,
+                &registry,
+                &cancelled_for_worker,
+                commit,
+            ),
+        }
+    });
+    let result = match tokio::time::timeout(Duration::from_secs(120), &mut task).await {
+        Ok(result) => result,
+        Err(_) => {
+            cancelled.store(true, Ordering::Release);
+            if commit_state
+                .compare_exchange(
+                    COMMIT_ACTIVE,
+                    COMMIT_CANCELLED,
+                    Ordering::AcqRel,
+                    Ordering::Acquire,
+                )
+                .is_ok()
+            {
+                drop(permit);
+                fail_job(&state, &job_id, "assistant-timeout");
+                return;
+            }
+            task.await
+        }
+    };
+    drop(permit);
+    match result {
+        Ok(Ok(workflow)) => {
+            finish_job(&state, &job_id, Some(result_handle), None);
+            publish_event(
+                &state,
+                "workflow.changed",
+                Some(workflow_id),
+                Some(workflow.revision()),
+                Some(job_id),
+                Some(100),
+            );
+        }
+        Ok(Err(error)) => fail_job(&state, &job_id, error.code()),
+        Err(_) => fail_job(&state, &job_id, "internal-failure"),
+    }
+}
+
+fn assistant_job_state(state: &AppState, id: &str) -> Option<(Arc<AtomicU8>, Arc<AtomicBool>)> {
+    let jobs = state.0.jobs.lock().ok()?;
+    let job = jobs.jobs.get(id)?;
+    Some((Arc::clone(&job.commit_state), Arc::clone(&job.cancelled)))
 }
 
 async fn run_prepare_job(
@@ -1896,6 +2724,7 @@ mod tests {
                 error_code: None,
                 expires_at_ms: 10,
                 commit_state: Arc::new(AtomicU8::new(COMMIT_ACTIVE)),
+                cancelled: Arc::new(AtomicBool::new(false)),
             },
         );
         state.jobs.insert(
@@ -1910,6 +2739,7 @@ mod tests {
                 error_code: None,
                 expires_at_ms: 10,
                 commit_state: Arc::new(AtomicU8::new(COMMIT_ACTIVE)),
+                cancelled: Arc::new(AtomicBool::new(false)),
             },
         );
         state.preparations.insert(

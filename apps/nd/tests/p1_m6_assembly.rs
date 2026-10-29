@@ -1,20 +1,24 @@
 #![forbid(unsafe_code)]
 
+use std::collections::BTreeSet;
 use std::fs;
 use std::io::{Read, Write};
 use std::net::TcpStream;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use diary_connectors::SqliteStore;
 use diary_control::{CommandError, CommandService, ServerConfig, serve};
 use diary_core::{
-    CatalogRequest, Clock, DateEvidence, DestinationKind, DestinationPlan, DiaryDay, Digest,
-    FreshnessOutcome, FreshnessStamp, IntentTerminal, OperationIntent, OperationLog, Preferences,
-    SelectedSource, SourceAccessError, SourceAvailability, SourceCandidate, SourceCatalog,
-    SourceDiscovery, SourceReadOutcome, SourceReader, SourceRef, SourceSnapshot, Timestamp,
-    WorkflowStore, WritingLanguage, WritingStyle,
+    AssistantAction, AssistantBackendDescriptor, AssistantBackendId, AssistantRequest,
+    AssistantResponse, AssistantSelection, CatalogRequest, Clock, CompositionPath, DateEvidence,
+    DestinationKind, DestinationPlan, DiaryDay, Digest, DraftAssistant, DraftAssistantError,
+    DraftAssistantRegistry, DraftEntryResult, FreshnessOutcome, FreshnessStamp, IntentTerminal,
+    MemoryCandidate, MemoryExtractionResult, OperationIntent, OperationLog, ParagraphReviewResult,
+    Preferences, ReflectionRange, SelectedSource, SourceAccessError, SourceAvailability,
+    SourceCandidate, SourceCatalog, SourceDiscovery, SourceReadOutcome, SourceReader, SourceRef,
+    SourceSnapshot, SuggestionResolution, Timestamp, WorkflowStore, WritingLanguage, WritingStyle,
 };
 use tokio::net::TcpListener;
 use tokio::sync::oneshot;
@@ -187,6 +191,132 @@ fn cancelled_discovery_does_not_commit_a_late_result() {
 }
 
 #[test]
+fn synthetic_assistant_flow_is_guarded_persisted_and_restart_recoverable() {
+    let scratch = Scratch::new("assistant-flow");
+    let database = scratch.path().join("state.sqlite3");
+    let store = Arc::new(SqliteStore::open(&database).unwrap());
+    let source = Arc::new(PreparedSources);
+    let service = CommandService::new(store.clone(), source.clone(), source, Arc::new(FixedClock));
+    let day = DiaryDay::parse("2026-10-29").unwrap();
+    let mut workflow = match service.start_workflow(Some(day.clone())).unwrap() {
+        diary_core::StartOutcome::Created(workflow) => workflow,
+        _ => panic!("synthetic workflow should be created"),
+    };
+    workflow = service.discover(&day, workflow.revision(), None).unwrap();
+    let prepared = service
+        .prepare_sources(
+            &day,
+            workflow.revision(),
+            &[workflow.candidates()[0].source.clone()],
+        )
+        .unwrap();
+    workflow = service
+        .confirm_selection(&day, workflow.revision(), prepared)
+        .unwrap();
+
+    let backend_id = AssistantBackendId::parse("synthetic-assistant").unwrap();
+    let selection = AssistantSelection::new(backend_id.clone(), CompositionPath::Hosted);
+    workflow = service
+        .set_writing_settings(
+            &day,
+            workflow.revision(),
+            WritingLanguage::KoKr,
+            WritingStyle::Reflective,
+            Some(selection),
+        )
+        .unwrap();
+    workflow = service
+        .begin_manual_composition(&day, workflow.revision())
+        .unwrap();
+    let registry =
+        DraftAssistantRegistry::new(vec![Arc::new(SyntheticAssistant::new(backend_id))], None)
+            .unwrap();
+
+    assert_eq!(
+        service.extract_memories(
+            &day,
+            workflow.revision(),
+            "cancelled-memory".to_owned(),
+            &registry,
+            &AtomicBool::new(false),
+            || false,
+        ),
+        Err(CommandError::Cancelled)
+    );
+    assert!(
+        store
+            .load(&day)
+            .unwrap()
+            .unwrap()
+            .memory_candidate_sets()
+            .is_empty()
+    );
+
+    workflow = service
+        .extract_memories(
+            &day,
+            workflow.revision(),
+            "memory-set".to_owned(),
+            &registry,
+            &AtomicBool::new(false),
+            || true,
+        )
+        .unwrap();
+    workflow = service
+        .replace_reviewed_memory(
+            &day,
+            workflow.revision(),
+            "reviewed-memory".to_owned(),
+            "memory-set",
+            "Human-reviewed walk".to_owned(),
+        )
+        .unwrap();
+    workflow = service
+        .draft_entry(
+            &day,
+            workflow.revision(),
+            "draft-result".to_owned(),
+            false,
+            &registry,
+            &AtomicBool::new(false),
+            || true,
+        )
+        .unwrap();
+    assert_eq!(workflow.entry().text, "Synthetic draft.");
+
+    workflow = service
+        .review_paragraph(
+            &day,
+            workflow.revision(),
+            "suggestion".to_owned(),
+            ReflectionRange {
+                start: 0,
+                end: workflow.entry().text.len(),
+            },
+            &registry,
+            &AtomicBool::new(false),
+            || true,
+        )
+        .unwrap();
+    workflow = service
+        .resolve_paragraph_suggestion(
+            &day,
+            workflow.revision(),
+            "suggestion",
+            SuggestionResolution::Accepted,
+        )
+        .unwrap();
+    assert_eq!(workflow.entry().text, "Improved paragraph.");
+
+    let reopened = SqliteStore::open(database).unwrap();
+    let recovered = reopened.load(&day).unwrap().unwrap();
+    assert_eq!(recovered.entry().text, "Improved paragraph.");
+    assert_eq!(recovered.memory_candidate_sets().len(), 1);
+    assert_eq!(recovered.draft_proposals().len(), 1);
+    assert_eq!(recovered.paragraph_suggestions().len(), 1);
+}
+
+#[test]
 fn real_loopback_enforces_headers_authorization_and_conditional_mutations() {
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
@@ -209,6 +339,9 @@ fn real_loopback_enforces_headers_authorization_and_conditional_mutations() {
             commands: prepared_service(store),
             apple_helper_available: true,
             notion_configured: false,
+            assistant_registry: Arc::new(
+                diary_core::DraftAssistantRegistry::new(Vec::new(), None).unwrap(),
+            ),
             diagnostics: None,
             diagnostic_failure: None,
         };
@@ -219,7 +352,7 @@ fn real_loopback_enforces_headers_authorization_and_conditional_mutations() {
 
         let response = request(port, "GET", "/v1/health", "", &[], None).await;
         assert!(response.starts_with("HTTP/1.1 200"));
-        assert!(response.contains("\"contract_version\":2"));
+        assert!(response.contains("\"contract_version\":3"));
         assert!(
             response
                 .to_ascii_lowercase()
@@ -515,6 +648,67 @@ fn prepared_service(store: Arc<SqliteStore>) -> CommandService {
 }
 
 struct FixedClock;
+
+struct SyntheticAssistant {
+    descriptor: AssistantBackendDescriptor,
+}
+
+impl SyntheticAssistant {
+    fn new(id: AssistantBackendId) -> Self {
+        Self {
+            descriptor: AssistantBackendDescriptor::new(
+                id,
+                "Synthetic Assistant",
+                CompositionPath::Hosted,
+                true,
+                None,
+                BTreeSet::from([WritingLanguage::EnUs, WritingLanguage::KoKr]),
+                BTreeSet::from([
+                    AssistantAction::ExtractMemories,
+                    AssistantAction::DraftEntry,
+                    AssistantAction::ReviewParagraph,
+                ]),
+            )
+            .unwrap(),
+        }
+    }
+}
+
+impl DraftAssistant for SyntheticAssistant {
+    fn descriptor(&self) -> AssistantBackendDescriptor {
+        self.descriptor.clone()
+    }
+
+    fn invoke(
+        &self,
+        request: &AssistantRequest,
+        cancelled: &AtomicBool,
+    ) -> Result<AssistantResponse, DraftAssistantError> {
+        if cancelled.load(Ordering::Acquire) {
+            return Err(DraftAssistantError::Cancelled);
+        }
+        match request {
+            AssistantRequest::ExtractMemories(request) => Ok(AssistantResponse::Memories(
+                MemoryExtractionResult::new(vec![
+                    MemoryCandidate::new("walk", vec![1], request.sources().len()).unwrap(),
+                ])
+                .unwrap(),
+            )),
+            AssistantRequest::DraftEntry(_) => Ok(AssistantResponse::EntryDraft(
+                DraftEntryResult::new("Synthetic draft.", vec![]).unwrap(),
+            )),
+            AssistantRequest::ReviewParagraph(_) => Ok(AssistantResponse::ParagraphReview(
+                ParagraphReviewResult::new(
+                    "Improved paragraph.",
+                    vec![],
+                    Some("clearer".to_owned()),
+                )
+                .unwrap(),
+            )),
+            AssistantRequest::RefineSource(_) => Err(DraftAssistantError::UnsupportedAction),
+        }
+    }
+}
 
 impl Clock for FixedClock {
     fn now(&self) -> Timestamp {

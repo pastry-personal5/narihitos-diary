@@ -10,11 +10,17 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use diary_core::{DiaryDay, SourceAccessError, SourceRef, Timestamp};
+use diary_core::{
+    AssistantAction, AssistantBackendDescriptor, AssistantBackendId, AssistantRequest,
+    AssistantResponse, CompositionPath, DiaryDay, DraftAssistant, DraftAssistantError,
+    DraftEntryResult, MemoryCandidate, MemoryExtractionResult, ParagraphReviewResult,
+    ReflectionRange, SourceAccessError, SourceRef, SourceRefinementResult, Timestamp,
+    WritingLanguage,
+};
 
 use crate::ayumi::MAX_SOURCE_BYTES;
 
-const MAX_FRAME_BYTES: usize = 64 * 1024;
+const MAX_FRAME_BYTES: usize = 20 * 1024 * 1024;
 const MAX_DIAGNOSTIC_BYTES: usize = 4 * 1024;
 const CONNECTOR: &str = "ayumi";
 static REQUEST_SEQUENCE: AtomicU64 = AtomicU64::new(1);
@@ -259,14 +265,20 @@ impl AppleBridgeClient {
             ));
         }
         payload.push('}');
-        let frame = format!(
-            "{{\"protocol_version\":1,\"request_id\":{},\"command\":{},\"payload\":{payload}}}\n",
+        let body = format!(
+            "{{\"protocol_version\":2,\"request_id\":{},\"command\":{},\"payload\":{payload}}}",
             json_string(&request_id),
             json_string(command)
         );
-        if frame.len() > MAX_FRAME_BYTES {
+        if body.len() > MAX_FRAME_BYTES {
             return Err(SourceAccessError::InvalidConfiguration);
         }
+        let frame = encode_frame(body.as_bytes())?;
+        let output = self.execute(&frame, cancelled)?;
+        parse_response(&output, &request_id)
+    }
+
+    fn execute(&self, frame: &[u8], cancelled: &AtomicBool) -> Result<Vec<u8>, SourceAccessError> {
         let mut child = Command::new(&self.executable)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
@@ -283,7 +295,7 @@ impl AppleBridgeClient {
             .stdin
             .take()
             .ok_or(SourceAccessError::HelperCrashed)?
-            .write_all(frame.as_bytes())
+            .write_all(frame)
             .map_err(|_| SourceAccessError::HelperCrashed)?;
         let started = Instant::now();
         loop {
@@ -306,13 +318,32 @@ impl AppleBridgeClient {
         let output = child
             .wait_with_output()
             .map_err(|_| SourceAccessError::HelperCrashed)?;
-        if output.stdout.len() > MAX_FRAME_BYTES || output.stderr.len() > MAX_DIAGNOSTIC_BYTES {
+        if output.stdout.len() > MAX_FRAME_BYTES + 4 || output.stderr.len() > MAX_DIAGNOSTIC_BYTES {
             return Err(SourceAccessError::HelperProtocol);
         }
         if output.stdout.is_empty() && !output.status.success() {
             return Err(SourceAccessError::HelperCrashed);
         }
-        parse_response(&output.stdout, &request_id)
+        Ok(output.stdout)
+    }
+
+    fn assistant_call(
+        &self,
+        command: &str,
+        payload: &str,
+        cancelled: &AtomicBool,
+    ) -> Result<JsonValue, BridgeResponseError> {
+        let request_id = format!("nd-{}", REQUEST_SEQUENCE.fetch_add(1, Ordering::Relaxed));
+        let body = format!(
+            "{{\"protocol_version\":2,\"request_id\":{},\"command\":{},\"payload\":{payload}}}",
+            json_string(&request_id),
+            json_string(command),
+        );
+        let frame = encode_frame(body.as_bytes()).map_err(|_| BridgeResponseError::Protocol)?;
+        let output = self
+            .execute(&frame, cancelled)
+            .map_err(BridgeResponseError::Transport)?;
+        parse_response_with_code(&output, &request_id)
     }
 
     fn cleanup_orphans(&self) -> Result<(), SourceAccessError> {
@@ -346,6 +377,247 @@ impl AppleBridgeClient {
         }
         Ok(())
     }
+}
+
+#[derive(Clone, Debug)]
+pub struct AppleFoundationAssistant {
+    bridge: AppleBridgeClient,
+    available: Arc<AtomicBool>,
+}
+
+impl AppleFoundationAssistant {
+    #[must_use]
+    pub fn new(bridge: AppleBridgeClient, helper_available: bool) -> Self {
+        let adapter = Self {
+            bridge,
+            available: Arc::new(AtomicBool::new(false)),
+        };
+        let available = helper_available
+            && adapter.model_available(WritingLanguage::EnUs, &AtomicBool::new(false))
+            && adapter.model_available(WritingLanguage::KoKr, &AtomicBool::new(false));
+        adapter.available.store(available, Ordering::Release);
+        adapter
+    }
+
+    fn model_available(&self, locale: WritingLanguage, cancelled: &AtomicBool) -> bool {
+        let payload = format!("{{\"locale\":{}}}", json_string(locale.as_str()));
+        self.bridge
+            .assistant_call("assistant-availability", &payload, cancelled)
+            .ok()
+            .and_then(|value| object_string(&value, "status").ok().map(str::to_owned))
+            .is_some_and(|status| status == "available")
+    }
+}
+
+impl DraftAssistant for AppleFoundationAssistant {
+    fn descriptor(&self) -> AssistantBackendDescriptor {
+        let available = self.available.load(Ordering::Acquire);
+        AssistantBackendDescriptor::new(
+            AssistantBackendId::parse("apple-foundation-models")
+                .expect("static Apple backend ID is valid"),
+            "Apple On-Device",
+            CompositionPath::AppleOnDevice,
+            available,
+            (!available).then(|| "apple-model-unavailable".to_owned()),
+            [WritingLanguage::EnUs, WritingLanguage::KoKr]
+                .into_iter()
+                .collect(),
+            [
+                AssistantAction::ExtractMemories,
+                AssistantAction::DraftEntry,
+                AssistantAction::ReviewParagraph,
+                AssistantAction::RefineSource,
+            ]
+            .into_iter()
+            .collect(),
+        )
+        .expect("static Apple descriptor is valid")
+    }
+
+    fn invoke(
+        &self,
+        request: &AssistantRequest,
+        cancelled: &AtomicBool,
+    ) -> Result<AssistantResponse, DraftAssistantError> {
+        let locale = match request {
+            AssistantRequest::ExtractMemories(_) => WritingLanguage::EnUs,
+            AssistantRequest::DraftEntry(request) => request.language(),
+            AssistantRequest::ReviewParagraph(request) => request.language(),
+            AssistantRequest::RefineSource(_) => WritingLanguage::EnUs,
+        };
+        let available = self.model_available(locale, cancelled);
+        self.available.store(available, Ordering::Release);
+        if !available {
+            return Err(if cancelled.load(Ordering::Acquire) {
+                DraftAssistantError::Cancelled
+            } else {
+                DraftAssistantError::Unavailable
+            });
+        }
+        let (command, payload) = match request {
+            AssistantRequest::ExtractMemories(request) => {
+                let sources = request
+                    .sources()
+                    .iter()
+                    .map(|source| {
+                        format!(
+                            "{{\"ordinal\":{},\"body\":{}}}",
+                            source.ordinal(),
+                            json_string(source.body())
+                        )
+                    })
+                    .collect::<Vec<_>>()
+                    .join(",");
+                (
+                    "assistant-extract-memories",
+                    format!("{{\"locale\":\"en-US\",\"sources\":[{sources}]}}"),
+                )
+            }
+            AssistantRequest::DraftEntry(request) => (
+                "assistant-draft-entry",
+                format!(
+                    "{{\"locale\":{},\"prior_draft\":{},\"reviewed_memory\":{},\"style\":{}}}",
+                    json_string(request.language().as_str()),
+                    request
+                        .prior_draft()
+                        .map(json_string)
+                        .unwrap_or_else(|| "null".to_owned()),
+                    json_string(request.reviewed_memory()),
+                    json_string(request.style().as_str()),
+                ),
+            ),
+            AssistantRequest::ReviewParagraph(request) => (
+                "assistant-review-paragraph",
+                format!(
+                    "{{\"locale\":{},\"paragraph\":{},\"style\":{}}}",
+                    json_string(request.language().as_str()),
+                    json_string(request.paragraph()),
+                    json_string(request.style().as_str()),
+                ),
+            ),
+            AssistantRequest::RefineSource(request) => (
+                "assistant-refine-source",
+                format!(
+                    "{{\"locale\":\"en-US\",\"body\":{}}}",
+                    json_string(request.body()),
+                ),
+            ),
+        };
+        let output = self
+            .bridge
+            .assistant_call(command, &payload, cancelled)
+            .map_err(map_assistant_bridge_error)?;
+        parse_assistant_output(request, &output)
+    }
+}
+
+fn map_assistant_bridge_error(error: BridgeResponseError) -> DraftAssistantError {
+    match error {
+        BridgeResponseError::Protocol => DraftAssistantError::InvalidOutput,
+        BridgeResponseError::Remote(code) => match code.as_str() {
+            "unsupported_locale" => DraftAssistantError::UnsupportedLanguage,
+            "refusal" => DraftAssistantError::Refused,
+            "context_overflow" | "frame_too_large" => DraftAssistantError::ContextOverflow,
+            "invalid_output" | "malformed_input" => DraftAssistantError::InvalidOutput,
+            "timed_out" => DraftAssistantError::TimedOut,
+            "cancelled" => DraftAssistantError::Cancelled,
+            _ => DraftAssistantError::Unavailable,
+        },
+        BridgeResponseError::Transport(SourceAccessError::TimedOut) => {
+            DraftAssistantError::TimedOut
+        }
+        BridgeResponseError::Transport(SourceAccessError::Cancelled) => {
+            DraftAssistantError::Cancelled
+        }
+        BridgeResponseError::Transport(_) => DraftAssistantError::Unavailable,
+    }
+}
+
+fn parse_assistant_output(
+    request: &AssistantRequest,
+    output: &JsonValue,
+) -> Result<AssistantResponse, DraftAssistantError> {
+    match request {
+        AssistantRequest::ExtractMemories(request) => {
+            let candidates = object_array(output, "candidates")
+                .map_err(|_| DraftAssistantError::InvalidOutput)?
+                .iter()
+                .map(|candidate| {
+                    let text = object_string(candidate, "text")?.to_owned();
+                    let ordinals = object_array(candidate, "source_ordinals")?
+                        .iter()
+                        .map(|value| match value {
+                            JsonValue::Number(value) => {
+                                u16::try_from(*value).map_err(|_| SourceAccessError::HelperProtocol)
+                            }
+                            _ => Err(SourceAccessError::HelperProtocol),
+                        })
+                        .collect::<Result<Vec<_>, _>>()?;
+                    MemoryCandidate::new(text, ordinals, request.sources().len())
+                        .map_err(|_| SourceAccessError::HelperProtocol)
+                })
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(|_| DraftAssistantError::InvalidOutput)?;
+            MemoryExtractionResult::new(candidates)
+                .map(AssistantResponse::Memories)
+                .map_err(|_| DraftAssistantError::InvalidOutput)
+        }
+        AssistantRequest::DraftEntry(_) => {
+            let text =
+                object_string(output, "text").map_err(|_| DraftAssistantError::InvalidOutput)?;
+            let ranges = assistant_ranges(output)?;
+            DraftEntryResult::new(text, ranges)
+                .map(AssistantResponse::EntryDraft)
+                .map_err(|_| DraftAssistantError::InvalidOutput)
+        }
+        AssistantRequest::ReviewParagraph(_) => {
+            let replacement = object_string(output, "replacement")
+                .map_err(|_| DraftAssistantError::InvalidOutput)?;
+            let explanation = match as_object(output)
+                .map_err(|_| DraftAssistantError::InvalidOutput)?
+                .get("explanation")
+            {
+                Some(JsonValue::String(value)) => Some(value.clone()),
+                Some(JsonValue::Null) => None,
+                _ => return Err(DraftAssistantError::InvalidOutput),
+            };
+            ParagraphReviewResult::new(replacement, assistant_ranges(output)?, explanation)
+                .map(AssistantResponse::ParagraphReview)
+                .map_err(|_| DraftAssistantError::InvalidOutput)
+        }
+        AssistantRequest::RefineSource(_) => {
+            let body =
+                object_string(output, "body").map_err(|_| DraftAssistantError::InvalidOutput)?;
+            SourceRefinementResult::new(body)
+                .map(AssistantResponse::SourceRefinement)
+                .map_err(|_| DraftAssistantError::InvalidOutput)
+        }
+    }
+}
+
+fn object_array<'a>(value: &'a JsonValue, key: &str) -> Result<&'a [JsonValue], SourceAccessError> {
+    match as_object(value)?.get(key) {
+        Some(JsonValue::Array(values)) => Ok(values),
+        _ => Err(SourceAccessError::HelperProtocol),
+    }
+}
+
+fn assistant_ranges(output: &JsonValue) -> Result<Vec<ReflectionRange>, DraftAssistantError> {
+    object_array(output, "reflection_ranges")
+        .map_err(|_| DraftAssistantError::InvalidOutput)?
+        .iter()
+        .map(|range| {
+            let start = object_i64(range, "start")
+                .ok()
+                .and_then(|value| usize::try_from(value).ok())
+                .ok_or(DraftAssistantError::InvalidOutput)?;
+            let end = object_i64(range, "end")
+                .ok()
+                .and_then(|value| usize::try_from(value).ok())
+                .ok_or(DraftAssistantError::InvalidOutput)?;
+            Ok(ReflectionRange { start, end })
+        })
+        .collect()
 }
 
 fn prepare_handoff_directory(path: &Path) -> Result<(), SourceAccessError> {
@@ -521,45 +793,88 @@ enum JsonValue {
     Bool(bool),
     Number(i64),
     String(String),
+    Array(Vec<JsonValue>),
     Object(BTreeMap<String, JsonValue>),
 }
 
 fn parse_response(bytes: &[u8], request_id: &str) -> Result<JsonValue, SourceAccessError> {
-    if bytes.last() != Some(&b'\n') || bytes[..bytes.len().saturating_sub(1)].contains(&b'\n') {
-        return Err(SourceAccessError::HelperProtocol);
+    match parse_response_with_code(bytes, request_id) {
+        Ok(value) => Ok(value),
+        Err(BridgeResponseError::Protocol) => Err(SourceAccessError::HelperProtocol),
+        Err(BridgeResponseError::Transport(error)) => Err(error),
+        Err(BridgeResponseError::Remote(code)) => match code.as_str() {
+            "cancelled" => Err(SourceAccessError::Cancelled),
+            "permission_denied" => Err(SourceAccessError::PermissionDenied),
+            "needs_download" => Err(SourceAccessError::NeedsDownload),
+            "not_found" => Err(SourceAccessError::NotFound),
+            "oversize" | "frame_too_large" => Err(SourceAccessError::Oversized),
+            "unsupported_version" | "malformed_input" | "unknown_command" => {
+                Err(SourceAccessError::HelperProtocol)
+            }
+            _ => Err(SourceAccessError::Unavailable),
+        },
     }
-    let text = std::str::from_utf8(&bytes[..bytes.len() - 1])
-        .map_err(|_| SourceAccessError::HelperProtocol)?;
-    let root = JsonParser::new(text).parse()?;
-    let object = as_object(&root)?;
-    if object_i64(&root, "protocol_version")? != 1
-        || object_string(&root, "request_id")? != request_id
+}
+
+#[derive(Debug)]
+enum BridgeResponseError {
+    Protocol,
+    Remote(String),
+    Transport(SourceAccessError),
+}
+
+fn parse_response_with_code(
+    bytes: &[u8],
+    request_id: &str,
+) -> Result<JsonValue, BridgeResponseError> {
+    let body = decode_frame(bytes).map_err(|_| BridgeResponseError::Protocol)?;
+    let text = std::str::from_utf8(body).map_err(|_| BridgeResponseError::Protocol)?;
+    let root = JsonParser::new(text)
+        .parse()
+        .map_err(|_| BridgeResponseError::Protocol)?;
+    let object = as_object(&root).map_err(|_| BridgeResponseError::Protocol)?;
+    if object_i64(&root, "protocol_version").map_err(|_| BridgeResponseError::Protocol)? != 2
+        || object_string(&root, "request_id").map_err(|_| BridgeResponseError::Protocol)?
+            != request_id
     {
-        return Err(SourceAccessError::HelperProtocol);
+        return Err(BridgeResponseError::Protocol);
     }
     match object.get("ok") {
         Some(JsonValue::Bool(true)) => object
             .get("value")
             .cloned()
-            .ok_or(SourceAccessError::HelperProtocol),
+            .ok_or(BridgeResponseError::Protocol),
         Some(JsonValue::Bool(false)) => {
-            let error = object
-                .get("error")
-                .ok_or(SourceAccessError::HelperProtocol)?;
-            match object_string(error, "code")? {
-                "cancelled" => Err(SourceAccessError::Cancelled),
-                "permission_denied" => Err(SourceAccessError::PermissionDenied),
-                "needs_download" => Err(SourceAccessError::NeedsDownload),
-                "not_found" => Err(SourceAccessError::NotFound),
-                "oversize" => Err(SourceAccessError::Oversized),
-                "unsupported_version" | "malformed_input" | "unknown_command" => {
-                    Err(SourceAccessError::HelperProtocol)
-                }
-                _ => Err(SourceAccessError::Unavailable),
-            }
+            let error = object.get("error").ok_or(BridgeResponseError::Protocol)?;
+            let code = object_string(error, "code").map_err(|_| BridgeResponseError::Protocol)?;
+            Err(BridgeResponseError::Remote(code.to_owned()))
         }
-        _ => Err(SourceAccessError::HelperProtocol),
+        _ => Err(BridgeResponseError::Protocol),
     }
+}
+
+fn encode_frame(body: &[u8]) -> Result<Vec<u8>, SourceAccessError> {
+    if body.is_empty() || body.len() > MAX_FRAME_BYTES {
+        return Err(SourceAccessError::HelperProtocol);
+    }
+    let length = u32::try_from(body.len()).map_err(|_| SourceAccessError::HelperProtocol)?;
+    let mut frame = Vec::with_capacity(body.len() + 4);
+    frame.extend_from_slice(&length.to_be_bytes());
+    frame.extend_from_slice(body);
+    Ok(frame)
+}
+
+fn decode_frame(frame: &[u8]) -> Result<&[u8], SourceAccessError> {
+    let header: [u8; 4] = frame
+        .get(..4)
+        .and_then(|bytes| bytes.try_into().ok())
+        .ok_or(SourceAccessError::HelperProtocol)?;
+    let length = usize::try_from(u32::from_be_bytes(header))
+        .map_err(|_| SourceAccessError::HelperProtocol)?;
+    if length == 0 || length > MAX_FRAME_BYTES || frame.len() != length + 4 {
+        return Err(SourceAccessError::HelperProtocol);
+    }
+    Ok(&frame[4..])
 }
 
 fn as_object(value: &JsonValue) -> Result<&BTreeMap<String, JsonValue>, SourceAccessError> {
@@ -615,12 +930,38 @@ impl<'a> JsonParser<'a> {
         self.whitespace();
         match self.peek() {
             Some(b'{') => self.object(),
+            Some(b'[') => self.array(),
             Some(b'"') => self.string().map(JsonValue::String),
             Some(b't') if self.literal(b"true") => Ok(JsonValue::Bool(true)),
             Some(b'f') if self.literal(b"false") => Ok(JsonValue::Bool(false)),
             Some(b'n') if self.literal(b"null") => Ok(JsonValue::Null),
             Some(b'-' | b'0'..=b'9') => self.number().map(JsonValue::Number),
             _ => Err(SourceAccessError::HelperProtocol),
+        }
+    }
+
+    fn array(&mut self) -> Result<JsonValue, SourceAccessError> {
+        self.offset += 1;
+        let mut values = Vec::new();
+        loop {
+            self.whitespace();
+            if self.peek() == Some(b']') {
+                self.offset += 1;
+                return Ok(JsonValue::Array(values));
+            }
+            values.push(self.value()?);
+            self.whitespace();
+            match self.peek() {
+                Some(b',') => {
+                    self.offset += 1;
+                    self.whitespace();
+                    if self.peek() == Some(b']') {
+                        return Err(SourceAccessError::HelperProtocol);
+                    }
+                }
+                Some(b']') => {}
+                _ => return Err(SourceAccessError::HelperProtocol),
+            }
         }
     }
 
@@ -664,10 +1005,13 @@ impl<'a> JsonParser<'a> {
         self.offset += 1;
         let mut output = String::new();
         while let Some(byte) = self.peek() {
-            self.offset += 1;
             match byte {
-                b'"' => return Ok(output),
+                b'"' => {
+                    self.offset += 1;
+                    return Ok(output);
+                }
                 b'\\' => {
+                    self.offset += 1;
                     let escaped = self.peek().ok_or(SourceAccessError::HelperProtocol)?;
                     self.offset += 1;
                     output.push(match escaped {
@@ -682,10 +1026,23 @@ impl<'a> JsonParser<'a> {
                         _ => return Err(SourceAccessError::HelperProtocol),
                     });
                 }
-                value if value < 0x20 || !value.is_ascii() => {
+                value if value < 0x20 => {
                     return Err(SourceAccessError::HelperProtocol);
                 }
-                value => output.push(char::from(value)),
+                value if value.is_ascii() => {
+                    self.offset += 1;
+                    output.push(char::from(value));
+                }
+                _ => {
+                    let remaining = std::str::from_utf8(&self.bytes[self.offset..])
+                        .map_err(|_| SourceAccessError::HelperProtocol)?;
+                    let character = remaining
+                        .chars()
+                        .next()
+                        .ok_or(SourceAccessError::HelperProtocol)?;
+                    self.offset += character.len_utf8();
+                    output.push(character);
+                }
             }
         }
         Err(SourceAccessError::HelperProtocol)
@@ -744,43 +1101,34 @@ mod tests {
 
     #[test]
     fn strict_response_parser_rejects_extra_frames_and_mismatched_ids() {
-        let valid =
-            br#"{"ok":true,"protocol_version":1,"request_id":"r","value":{"status":"resident"}}
-"#;
+        let valid = encode_frame(
+            br#"{"ok":true,"protocol_version":2,"request_id":"r","value":{"status":"resident"}}"#,
+        )
+        .unwrap();
         assert_eq!(
-            object_string(&parse_response(valid, "r").unwrap(), "status"),
+            object_string(&parse_response(&valid, "r").unwrap(), "status"),
             Ok("resident")
         );
+        let mut extra = valid.clone();
+        extra.extend_from_slice(&encode_frame(b"{}").unwrap());
         assert_eq!(
-            parse_response(b"{}\n{}\n", "r"),
+            parse_response(&extra, "r"),
             Err(SourceAccessError::HelperProtocol)
         );
         assert_eq!(
-            parse_response(valid, "other"),
+            parse_response(&valid, "other"),
             Err(SourceAccessError::HelperProtocol)
         );
         assert_eq!(
-            parse_response(
-                br#"{"ok":true,"protocol_version":1,"request_id":"r","value":{"status":"resident",}}
-"#,
-                "r"
-            ),
+            parse_response(&encode_frame(br#"{"ok":true,"protocol_version":2,"request_id":"r","value":{"status":"resident",}}"#).unwrap(), "r"),
             Err(SourceAccessError::HelperProtocol)
         );
         assert_eq!(
-            parse_response(
-                br#"{"error":{"code":"permission_denied","message":"request rejected"},"ok":false,"protocol_version":1,"request_id":"r"}
-"#,
-                "r"
-            ),
+            parse_response(&encode_frame(br#"{"error":{"code":"permission_denied","message":"request rejected"},"ok":false,"protocol_version":2,"request_id":"r"}"#).unwrap(), "r"),
             Err(SourceAccessError::PermissionDenied)
         );
         assert_eq!(
-            parse_response(
-                br#"{"error":{"code":"oversize","message":"request rejected"},"ok":false,"protocol_version":1,"request_id":"r"}
-"#,
-                "r"
-            ),
+            parse_response(&encode_frame(br#"{"error":{"code":"oversize","message":"request rejected"},"ok":false,"protocol_version":2,"request_id":"r"}"#).unwrap(), "r"),
             Err(SourceAccessError::Oversized)
         );
     }
@@ -853,9 +1201,11 @@ mod tests {
         let success = script(
             &scratch,
             "success.sh",
-            r#"input=$(cat)
+            r#"input=$(tail -c +5)
 id=$(printf '%s' "$input" | sed -n 's/.*"request_id":"\([^"]*\)".*/\1/p')
-printf '{"ok":true,"protocol_version":1,"request_id":"%s","value":{"status":"resident"}}\n' "$id"
+body=$(printf '{"ok":true,"protocol_version":2,"request_id":"%s","value":{"status":"resident"}}' "$id")
+length=${#body}
+printf '%b%b%b%b%s' "\\$(printf '%03o' $(((length >> 24) & 255)))" "\\$(printf '%03o' $(((length >> 16) & 255)))" "\\$(printf '%03o' $(((length >> 8) & 255)))" "\\$(printf '%03o' $((length & 255)))" "$body"
 "#,
         );
         let client =
@@ -869,7 +1219,7 @@ printf '{"ok":true,"protocol_version":1,"request_id":"%s","value":{"status":"res
         let malformed = script(
             &scratch,
             "malformed.sh",
-            "cat >/dev/null\nprintf '{}\\n{}\\n'\n",
+            "cat >/dev/null\nprintf '\\000\\000\\000\\002{}\\000\\000\\000\\002{}'\n",
         );
         let malformed_client =
             AppleBridgeClient::new(malformed, "Ayumi", &handoff, Duration::from_secs(5), 1)
@@ -921,12 +1271,14 @@ printf '{"ok":true,"protocol_version":1,"request_id":"%s","value":{"status":"res
         let reader = script(
             &scratch,
             "reader.sh",
-            r#"input=$(cat)
+            r#"input=$(tail -c +5)
 id=$(printf '%s' "$input" | sed -n 's/.*"request_id":"\([^"]*\)".*/\1/p')
 directory=$(printf '%s' "$input" | sed -n 's/.*"handoff_directory":"\([^"]*\)".*/\1/p')
 dd if=/dev/zero of="$directory/nd-source-fake.bin" bs=70000 count=1 2>/dev/null
 chmod 600 "$directory/nd-source-fake.bin"
-printf '{"ok":true,"protocol_version":1,"request_id":"%s","value":{"file_identity":"9:7","handoff_name":"nd-source-fake.bin","modified_at":123,"size":70000}}\n' "$id"
+body=$(printf '{"ok":true,"protocol_version":2,"request_id":"%s","value":{"file_identity":"9:7","handoff_name":"nd-source-fake.bin","modified_at":123,"size":70000}}' "$id")
+length=${#body}
+printf '%b%b%b%b%s' "\\$(printf '%03o' $(((length >> 24) & 255)))" "\\$(printf '%03o' $(((length >> 16) & 255)))" "\\$(printf '%03o' $(((length >> 8) & 255)))" "\\$(printf '%03o' $((length & 255)))" "$body"
 "#,
         );
         let client =
@@ -968,7 +1320,7 @@ printf '{}\n{}\n'
             &scratch,
             "concurrent-reader.sh",
             &format!(
-                r#"input=$(cat)
+                r#"input=$(tail -c +5)
 id=$(printf '%s' "$input" | sed -n 's/.*"request_id":"\([^"]*\)".*/\1/p')
 directory=$(printf '%s' "$input" | sed -n 's/.*"handoff_directory":"\([^"]*\)".*/\1/p')
 file="$directory/nd-source-fake.bin"
@@ -978,7 +1330,9 @@ if printf '%s' "$input" | grep -q 'slow.md'; then
   touch '{}'
   sleep 0.2
 fi
-printf '{{"ok":true,"protocol_version":1,"request_id":"%s","value":{{"file_identity":"9:7","handoff_name":"nd-source-fake.bin","modified_at":123,"size":4}}}}\n' "$id"
+body=$(printf '{{"ok":true,"protocol_version":2,"request_id":"%s","value":{{"file_identity":"9:7","handoff_name":"nd-source-fake.bin","modified_at":123,"size":4}}}}' "$id")
+length=${{#body}}
+printf '%b%b%b%b%s' "\\$(printf '%03o' $(((length >> 24) & 255)))" "\\$(printf '%03o' $(((length >> 16) & 255)))" "\\$(printf '%03o' $(((length >> 8) & 255)))" "\\$(printf '%03o' $((length & 255)))" "$body"
 "#,
                 marker.display()
             ),
@@ -1015,10 +1369,12 @@ printf '{{"ok":true,"protocol_version":1,"request_id":"%s","value":{{"file_ident
         let helper = script(
             &scratch,
             "download.sh",
-            r#"input=$(cat)
+            r#"input=$(tail -c +5)
 id=$(printf '%s' "$input" | sed -n 's/.*"request_id":"\([^"]*\)".*/\1/p')
 if ! printf '%s' "$input" | grep -q '"timeout_milliseconds":60000'; then exit 9; fi
-printf '{"ok":true,"protocol_version":1,"request_id":"%s","value":{"status":"resident"}}\n' "$id"
+body=$(printf '{"ok":true,"protocol_version":2,"request_id":"%s","value":{"status":"resident"}}' "$id")
+length=${#body}
+printf '%b%b%b%b%s' "\\$(printf '%03o' $(((length >> 24) & 255)))" "\\$(printf '%03o' $(((length >> 16) & 255)))" "\\$(printf '%03o' $(((length >> 8) & 255)))" "\\$(printf '%03o' $((length & 255)))" "$body"
 "#,
         );
         let client = AppleBridgeClient::new(
@@ -1035,6 +1391,99 @@ printf '{"ok":true,"protocol_version":1,"request_id":"%s","value":{"status":"res
                 &AtomicBool::new(false),
             )
             .unwrap();
+        let _ = fs::remove_dir_all(scratch);
+    }
+
+    #[test]
+    fn fake_helper_qualifies_all_apple_assistant_actions_and_cancellation() {
+        let scratch = scratch("assistant-actions");
+        let helper = script(
+            &scratch,
+            "assistant.sh",
+            r#"input=$(tail -c +5)
+id=$(printf '%s' "$input" | sed -n 's/.*"request_id":"\([^"]*\)".*/\1/p')
+case "$input" in
+  *assistant-availability*) value='{"status":"available"}' ;;
+  *assistant-extract-memories*) value='{"candidates":[{"text":"walk","source_ordinals":[1]}]}' ;;
+  *assistant-draft-entry*) value='{"text":"draft","reflection_ranges":[]}' ;;
+  *assistant-review-paragraph*) value='{"replacement":"better","reflection_ranges":[],"explanation":"clearer"}' ;;
+  *assistant-refine-source*) value='{"body":"refined source"}' ;;
+  *) exit 3 ;;
+esac
+body=$(printf '{"ok":true,"protocol_version":2,"request_id":"%s","value":%s}' "$id" "$value")
+length=${#body}
+printf '%b%b%b%b%s' "\\$(printf '%03o' $(((length >> 24) & 255)))" "\\$(printf '%03o' $(((length >> 16) & 255)))" "\\$(printf '%03o' $(((length >> 8) & 255)))" "\\$(printf '%03o' $((length & 255)))" "$body"
+"#,
+        );
+        let bridge = AppleBridgeClient::new(
+            helper,
+            "Ayumi",
+            scratch.join("handoff"),
+            Duration::from_secs(2),
+            1,
+        )
+        .unwrap();
+        let adapter = AppleFoundationAssistant::new(bridge, true);
+        assert!(adapter.descriptor().available);
+
+        let memories = adapter
+            .invoke(
+                &AssistantRequest::ExtractMemories(
+                    diary_core::MemoryExtractionRequest::new(vec!["source".to_owned()]).unwrap(),
+                ),
+                &AtomicBool::new(false),
+            )
+            .unwrap();
+        assert!(matches!(memories, AssistantResponse::Memories(_)));
+
+        let draft = adapter
+            .invoke(
+                &AssistantRequest::DraftEntry(
+                    diary_core::DraftEntryRequest::new(
+                        "memory",
+                        None,
+                        WritingLanguage::KoKr,
+                        diary_core::WritingStyle::Reflective,
+                    )
+                    .unwrap(),
+                ),
+                &AtomicBool::new(false),
+            )
+            .unwrap();
+        assert!(matches!(draft, AssistantResponse::EntryDraft(_)));
+
+        let review = adapter
+            .invoke(
+                &AssistantRequest::ReviewParagraph(
+                    diary_core::ParagraphReviewRequest::new(
+                        "paragraph",
+                        WritingLanguage::EnUs,
+                        diary_core::WritingStyle::Standard,
+                    )
+                    .unwrap(),
+                ),
+                &AtomicBool::new(false),
+            )
+            .unwrap();
+        assert!(matches!(review, AssistantResponse::ParagraphReview(_)));
+        let refinement = adapter
+            .invoke(
+                &AssistantRequest::RefineSource(
+                    diary_core::SourceRefinementRequest::new("source").unwrap(),
+                ),
+                &AtomicBool::new(false),
+            )
+            .unwrap();
+        assert!(matches!(refinement, AssistantResponse::SourceRefinement(_)));
+        assert_eq!(
+            adapter.invoke(
+                &AssistantRequest::ExtractMemories(
+                    diary_core::MemoryExtractionRequest::new(vec!["source".to_owned()]).unwrap(),
+                ),
+                &AtomicBool::new(true),
+            ),
+            Err(DraftAssistantError::Cancelled)
+        );
         let _ = fs::remove_dir_all(scratch);
     }
 

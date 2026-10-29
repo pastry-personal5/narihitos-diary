@@ -5,13 +5,23 @@
 use serde::{Deserialize, Serialize};
 
 pub const API_VERSION: &str = "v1";
-pub const CONTRACT_VERSION: u32 = 2;
-pub const MAX_REQUEST_BYTES: usize = 1024 * 1024;
+pub const CONTRACT_VERSION: u32 = 3;
+/// Covers one maximum-size source body plus a bounded JSON envelope. Individual
+/// routes still enforce their narrower action-specific limits.
+pub const MAX_REQUEST_BYTES: usize = 8 * 1024 * 1024 + 64 * 1024;
 pub const MAX_ENTRY_BYTES: usize = 512 * 1024;
 pub const MAX_STRING_BYTES: usize = 4 * 1024;
 pub const MAX_COLLECTION_ITEMS: usize = 256;
 pub const MAX_CANDIDATES: usize = 512;
 pub const MAX_SELECTED_SOURCES: usize = 64;
+pub const MAX_MEMORY_CANDIDATES: usize = 128;
+pub const MAX_MEMORY_CANDIDATE_BYTES: usize = MAX_STRING_BYTES;
+pub const MAX_REVIEWED_MEMORY_BYTES: usize = MAX_ENTRY_BYTES;
+pub const MAX_SOURCE_ORDINALS: usize = MAX_SELECTED_SOURCES;
+pub const MAX_DRAFT_RESULT_BYTES: usize = MAX_ENTRY_BYTES;
+pub const MAX_PARAGRAPH_BYTES: usize = MAX_STRING_BYTES * 8;
+pub const MAX_SUGGESTION_EXPLANATION_BYTES: usize = MAX_STRING_BYTES;
+pub const MAX_REFLECTION_RANGES: usize = 32;
 pub const MAX_PREPARED_BYTES: usize = 16 * 1024 * 1024;
 pub const MAX_SOURCE_BYTES: usize = 8 * 1024 * 1024;
 pub const MAX_RESPONSE_BYTES: usize = 2 * 1024 * 1024;
@@ -49,6 +59,12 @@ pub const ROUTES: &[RouteSpec] = &[
     RouteSpec {
         method: "GET",
         path: "/v1/setup-check",
+        capability: Some("read"),
+        authenticated: true,
+    },
+    RouteSpec {
+        method: "GET",
+        path: "/v1/assistant-backends",
         capability: Some("read"),
         authenticated: true,
     },
@@ -108,6 +124,36 @@ pub const ROUTES: &[RouteSpec] = &[
     },
     RouteSpec {
         method: "POST",
+        path: "/v1/workflows/{id}/sources/{source_id}/refine-requests",
+        capability: Some("workflow:write"),
+        authenticated: true,
+    },
+    RouteSpec {
+        method: "GET",
+        path: "/v1/workflows/{id}/sources/{source_id}/refine-suggestion",
+        capability: Some("read"),
+        authenticated: true,
+    },
+    RouteSpec {
+        method: "PUT",
+        path: "/v1/workflows/{id}/sources/{source_id}/refine-suggestion/resolution",
+        capability: Some("workflow:write"),
+        authenticated: true,
+    },
+    RouteSpec {
+        method: "PUT",
+        path: "/v1/workflows/{id}/sources/{source_id}/body",
+        capability: Some("workflow:write"),
+        authenticated: true,
+    },
+    RouteSpec {
+        method: "DELETE",
+        path: "/v1/workflows/{id}/sources/{source_id}",
+        capability: Some("workflow:write"),
+        authenticated: true,
+    },
+    RouteSpec {
+        method: "POST",
         path: "/v1/workflows/{id}/sources/prepare",
         capability: Some("source:read"),
         authenticated: true,
@@ -127,6 +173,72 @@ pub const ROUTES: &[RouteSpec] = &[
     RouteSpec {
         method: "PUT",
         path: "/v1/workflows/{id}/writing-settings",
+        capability: Some("workflow:write"),
+        authenticated: true,
+    },
+    RouteSpec {
+        method: "GET",
+        path: "/v1/workflows/{id}/assistant-selection",
+        capability: Some("read"),
+        authenticated: true,
+    },
+    RouteSpec {
+        method: "PUT",
+        path: "/v1/workflows/{id}/assistant-selection",
+        capability: Some("workflow:write"),
+        authenticated: true,
+    },
+    RouteSpec {
+        method: "POST",
+        path: "/v1/workflows/{id}/memory-extractions",
+        capability: Some("workflow:write"),
+        authenticated: true,
+    },
+    RouteSpec {
+        method: "GET",
+        path: "/v1/workflows/{id}/memory-review",
+        capability: Some("read"),
+        authenticated: true,
+    },
+    RouteSpec {
+        method: "PUT",
+        path: "/v1/workflows/{id}/memory-review",
+        capability: Some("workflow:write"),
+        authenticated: true,
+    },
+    RouteSpec {
+        method: "POST",
+        path: "/v1/workflows/{id}/draft-requests",
+        capability: Some("workflow:write"),
+        authenticated: true,
+    },
+    RouteSpec {
+        method: "GET",
+        path: "/v1/workflows/{id}/draft-result",
+        capability: Some("read"),
+        authenticated: true,
+    },
+    RouteSpec {
+        method: "POST",
+        path: "/v1/workflows/{id}/paragraph-review-requests",
+        capability: Some("workflow:write"),
+        authenticated: true,
+    },
+    RouteSpec {
+        method: "GET",
+        path: "/v1/workflows/{id}/paragraph-suggestions",
+        capability: Some("read"),
+        authenticated: true,
+    },
+    RouteSpec {
+        method: "GET",
+        path: "/v1/workflows/{id}/paragraph-suggestions/{suggestion_id}",
+        capability: Some("read"),
+        authenticated: true,
+    },
+    RouteSpec {
+        method: "PUT",
+        path: "/v1/workflows/{id}/paragraph-suggestions/{suggestion_id}/resolution",
         capability: Some("workflow:write"),
         authenticated: true,
     },
@@ -205,6 +317,25 @@ dto!(
         pub reason_code: Option<String>,
         pub supported_languages: Vec<String>,
         pub supported_actions: Vec<String>,
+    }
+);
+
+dto!(
+    pub struct AssistantBackendListDto {
+        pub backends: Vec<AssistantBackendDto>,
+    }
+);
+
+dto!(
+    pub struct AssistantSelectionDto {
+        pub backend_id: Option<String>,
+        pub composition_path: Option<String>,
+    }
+);
+
+dto!(
+    pub struct PutAssistantSelectionRequest {
+        pub backend_id: Option<String>,
     }
 );
 
@@ -364,6 +495,37 @@ dto!(
 );
 
 dto!(
+    pub struct RefineSourceRequest {
+        pub content_digest: String,
+    }
+);
+dto!(
+    pub struct SourceRefineSuggestionDto {
+        pub source_id: String,
+        pub original_body: String,
+        pub suggested_body: String,
+        pub binding_digest: String,
+    }
+);
+dto!(
+    pub struct ResolveSourceRefineRequest {
+        pub accept: bool,
+        pub binding_digest: String,
+    }
+);
+dto!(
+    pub struct EditSourceBodyRequest {
+        pub text: String,
+        pub expected_content_digest: String,
+    }
+);
+dto!(
+    pub struct DeleteSourceRequest {
+        pub confirm: bool,
+    }
+);
+
+dto!(
     pub struct StartWorkflowRequest {
         pub diary_day: Option<String>,
     }
@@ -399,6 +561,101 @@ dto!(
 dto!(
     pub struct ConfirmEntryRequest {
         pub buffer_etag: String,
+    }
+);
+dto!(
+    pub struct StartMemoryExtractionRequest {}
+);
+dto!(
+    pub struct MemoryCandidateDto {
+        pub id: String,
+        pub text: String,
+        pub source_snapshot_digests: Vec<String>,
+        pub stale: bool,
+    }
+);
+dto!(
+    pub struct MemoryReviewDto {
+        pub candidate_set_id: Option<String>,
+        pub candidates: Vec<MemoryCandidateDto>,
+        pub reviewed_memory: String,
+        pub reviewed_memory_revision: u64,
+        pub stale: bool,
+    }
+);
+dto!(
+    pub struct PutMemoryReviewRequest {
+        pub candidate_set_id: String,
+        pub reviewed_memory: String,
+    }
+);
+dto!(
+    pub struct StartDraftRequest {
+        pub include_prior_draft: bool,
+    }
+);
+dto!(
+    pub struct ReflectionRangeDto {
+        pub start: usize,
+        pub end: usize,
+    }
+);
+dto!(
+    pub struct DraftResultDto {
+        pub id: String,
+        pub backend_id: String,
+        pub composition_path: String,
+        pub text: String,
+        pub reflection_ranges: Vec<ReflectionRangeDto>,
+        pub stale: bool,
+        pub populated_buffer_version: Option<u64>,
+    }
+);
+dto!(
+    pub struct StartParagraphReviewRequest {
+        pub buffer_etag: String,
+        pub range_start: usize,
+        pub range_end: usize,
+        pub selected_text_digest: String,
+    }
+);
+dto!(
+    pub struct ParagraphSuggestionSummaryDto {
+        pub id: String,
+        pub backend_id: String,
+        pub composition_path: String,
+        pub stale: bool,
+        pub resolution: Option<String>,
+    }
+);
+dto!(
+    pub struct ParagraphSuggestionListDto {
+        pub suggestions: Vec<ParagraphSuggestionSummaryDto>,
+    }
+);
+dto!(
+    pub struct ParagraphSuggestionDto {
+        pub id: String,
+        pub backend_id: String,
+        pub composition_path: String,
+        pub replacement: String,
+        pub reflection_ranges: Vec<ReflectionRangeDto>,
+        pub explanation: Option<String>,
+        pub buffer_version: u64,
+        pub range_start: usize,
+        pub range_end: usize,
+        pub selected_text_digest: String,
+        pub stale: bool,
+        pub resolution: Option<String>,
+    }
+);
+dto!(
+    pub struct ResolveParagraphSuggestionRequest {
+        pub resolution: String,
+        pub buffer_etag: String,
+        pub range_start: usize,
+        pub range_end: usize,
+        pub selected_text_digest: String,
     }
 );
 dto!(
@@ -601,16 +858,36 @@ mod tests {
     }
 
     #[test]
-    fn route_table_excludes_later_milestones() {
+    fn route_table_contains_m8_resources_and_excludes_later_milestones() {
         assert!(ROUTES.iter().all(|route| {
             !route.path.contains("mcp")
                 && !route.path.contains("publication")
                 && !route.path.contains("amend")
-                && !route.path.contains("draft")
         }));
+        for path in [
+            "/v1/assistant-backends",
+            "/v1/workflows/{id}/memory-extractions",
+            "/v1/workflows/{id}/draft-result",
+            "/v1/workflows/{id}/paragraph-suggestions/{suggestion_id}/resolution",
+        ] {
+            assert!(ROUTES.iter().any(|route| route.path == path));
+        }
         assert_eq!(
             ROUTES.iter().filter(|route| !route.authenticated).count(),
             1
         );
+    }
+
+    #[test]
+    fn m8_request_dtos_reject_unknown_fields() {
+        assert!(serde_json::from_str::<StartMemoryExtractionRequest>("{}").is_ok());
+        assert!(
+            serde_json::from_str::<StartMemoryExtractionRequest>(r#"{"unexpected":true}"#).is_err()
+        );
+        let request: ResolveParagraphSuggestionRequest = serde_json::from_str(
+            r#"{"resolution":"accept","buffer_etag":"\"buf-3\"","range_start":0,"range_end":4,"selected_text_digest":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}"#,
+        )
+        .unwrap();
+        assert_eq!(request.resolution, "accept");
     }
 }

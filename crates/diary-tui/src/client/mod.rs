@@ -17,10 +17,15 @@ pub use transport::{
 };
 
 use diary_control_contract::{
-    CapabilitiesDto, ConfirmEntryRequest, ConfirmSelectionRequest, DiscoveryRequest, HealthDto,
-    JobAcceptedDto, JobDto, MAX_RESPONSE_BYTES, MAX_SOURCE_BYTES, PreferencesDto,
-    PrepareSourcesRequest, SaveEntryRequest, SetupCheckDto, SourceDetailDto, SourceListDto,
-    WorkflowDto, WorkflowListDto, WritingSettingsRequest, buffer_etag, workflow_etag,
+    AssistantBackendListDto, CapabilitiesDto, ConfirmEntryRequest, ConfirmSelectionRequest,
+    DeleteSourceRequest, DiscoveryRequest, DraftResultDto, EditSourceBodyRequest, HealthDto,
+    JobAcceptedDto, JobDto, MAX_RESPONSE_BYTES, MAX_SOURCE_BYTES, MemoryReviewDto,
+    ParagraphSuggestionDto, ParagraphSuggestionListDto, PreferencesDto, PrepareSourcesRequest,
+    PutAssistantSelectionRequest, PutMemoryReviewRequest, RefineSourceRequest,
+    ResolveParagraphSuggestionRequest, ResolveSourceRefineRequest, SaveEntryRequest, SetupCheckDto,
+    SourceDetailDto, SourceListDto, SourceRefineSuggestionDto, StartDraftRequest,
+    StartMemoryExtractionRequest, StartParagraphReviewRequest, WorkflowDto, WorkflowListDto,
+    WritingSettingsRequest, buffer_etag, workflow_etag,
 };
 
 const SOURCE_DETAIL_RESPONSE_BYTES: usize = MAX_SOURCE_BYTES + 64 * 1024;
@@ -71,6 +76,185 @@ impl<T: Transport> ApiClient<T> {
 
     pub fn setup_check(&self, attachment: &Attachment) -> ClientOutcome<SetupCheckDto> {
         self.get_json("/v1/setup-check", MAX_RESPONSE_BYTES, attachment)
+    }
+
+    pub fn assistant_backends(
+        &self,
+        attachment: &Attachment,
+    ) -> ClientOutcome<AssistantBackendListDto> {
+        self.get_json("/v1/assistant-backends", MAX_RESPONSE_BYTES, attachment)
+    }
+
+    pub fn set_assistant_selection(
+        &self,
+        attachment: &Attachment,
+        workflow_id: &str,
+        revision: u64,
+        backend_id: Option<String>,
+    ) -> ClientOutcome<WorkflowDto> {
+        self.send_json(
+            "PUT",
+            &format!("/v1/workflows/{workflow_id}/assistant-selection"),
+            Some(
+                serde_json::to_vec(&PutAssistantSelectionRequest { backend_id })
+                    .unwrap_or_default(),
+            ),
+            Some(workflow_etag(revision)),
+            MAX_RESPONSE_BYTES,
+            attachment,
+        )
+    }
+
+    pub fn start_memory_extraction(
+        &self,
+        attachment: &Attachment,
+        workflow_id: &str,
+        revision: u64,
+    ) -> ClientOutcome<JobAcceptedDto> {
+        self.send_json(
+            "POST",
+            &format!("/v1/workflows/{workflow_id}/memory-extractions"),
+            Some(serde_json::to_vec(&StartMemoryExtractionRequest {}).unwrap_or_default()),
+            Some(workflow_etag(revision)),
+            MAX_RESPONSE_BYTES,
+            attachment,
+        )
+    }
+
+    pub fn memory_review(
+        &self,
+        attachment: &Attachment,
+        workflow_id: &str,
+    ) -> ClientOutcome<MemoryReviewDto> {
+        self.get_json(
+            &format!("/v1/workflows/{workflow_id}/memory-review"),
+            MAX_RESPONSE_BYTES,
+            attachment,
+        )
+    }
+
+    pub fn save_memory_review(
+        &self,
+        attachment: &Attachment,
+        workflow_id: &str,
+        revision: u64,
+        candidate_set_id: String,
+        reviewed_memory: String,
+    ) -> ClientOutcome<WorkflowDto> {
+        self.send_json(
+            "PUT",
+            &format!("/v1/workflows/{workflow_id}/memory-review"),
+            Some(
+                serde_json::to_vec(&PutMemoryReviewRequest {
+                    candidate_set_id,
+                    reviewed_memory,
+                })
+                .unwrap_or_default(),
+            ),
+            Some(workflow_etag(revision)),
+            MAX_RESPONSE_BYTES,
+            attachment,
+        )
+    }
+
+    pub fn start_draft(
+        &self,
+        attachment: &Attachment,
+        workflow_id: &str,
+        revision: u64,
+        include_prior_draft: bool,
+    ) -> ClientOutcome<JobAcceptedDto> {
+        self.send_json(
+            "POST",
+            &format!("/v1/workflows/{workflow_id}/draft-requests"),
+            Some(
+                serde_json::to_vec(&StartDraftRequest {
+                    include_prior_draft,
+                })
+                .unwrap_or_default(),
+            ),
+            Some(workflow_etag(revision)),
+            MAX_RESPONSE_BYTES,
+            attachment,
+        )
+    }
+
+    pub fn draft_result(
+        &self,
+        attachment: &Attachment,
+        workflow_id: &str,
+    ) -> ClientOutcome<DraftResultDto> {
+        self.get_json(
+            &format!("/v1/workflows/{workflow_id}/draft-result"),
+            MAX_RESPONSE_BYTES,
+            attachment,
+        )
+    }
+
+    pub fn start_paragraph_review(
+        &self,
+        attachment: &Attachment,
+        workflow_id: &str,
+        revision: u64,
+        request: &StartParagraphReviewRequest,
+    ) -> ClientOutcome<JobAcceptedDto> {
+        self.send_json(
+            "POST",
+            &format!("/v1/workflows/{workflow_id}/paragraph-review-requests"),
+            Some(serde_json::to_vec(request).unwrap_or_default()),
+            Some(workflow_etag(revision)),
+            MAX_RESPONSE_BYTES,
+            attachment,
+        )
+    }
+
+    pub fn paragraph_suggestions(
+        &self,
+        attachment: &Attachment,
+        workflow_id: &str,
+    ) -> ClientOutcome<ParagraphSuggestionListDto> {
+        self.get_json(
+            &format!("/v1/workflows/{workflow_id}/paragraph-suggestions"),
+            MAX_RESPONSE_BYTES,
+            attachment,
+        )
+    }
+
+    pub fn paragraph_suggestion(
+        &self,
+        attachment: &Attachment,
+        workflow_id: &str,
+        suggestion_id: &str,
+    ) -> ClientOutcome<ParagraphSuggestionDto> {
+        self.get_json(
+            &format!("/v1/workflows/{workflow_id}/paragraph-suggestions/{suggestion_id}"),
+            MAX_RESPONSE_BYTES,
+            attachment,
+        )
+    }
+
+    pub fn resolve_paragraph_suggestion(
+        &self,
+        attachment: &Attachment,
+        workflow_id: &str,
+        suggestion_id: &str,
+        revision: u64,
+        request: &ResolveParagraphSuggestionRequest,
+    ) -> ClientOutcome<WorkflowDto> {
+        self.send_json(
+            "PUT",
+            &format!(
+                "/v1/workflows/{workflow_id}/paragraph-suggestions/{suggestion_id}/resolution"
+            ),
+            Some(serde_json::to_vec(request).unwrap_or_default()),
+            Some(workflow_etag(revision)),
+            MAX_RESPONSE_BYTES,
+            attachment,
+        )
+    }
+
+    pub fn cancel_job(&self, attachment: &Attachment, job_id: &str) -> ClientOutcome<()> {
+        self.send_empty("DELETE", &format!("/v1/jobs/{job_id}"), None, attachment)
     }
 
     pub fn save_preferences(
@@ -187,6 +371,109 @@ impl<T: Transport> ApiClient<T> {
         self.get_json(
             &format!("/v1/workflows/{workflow_id}/sources/{source_id}"),
             SOURCE_DETAIL_RESPONSE_BYTES,
+            attachment,
+        )
+    }
+
+    pub fn start_source_refine(
+        &self,
+        attachment: &Attachment,
+        workflow_id: &str,
+        source_id: &str,
+        revision: u64,
+        digest: &str,
+    ) -> ClientOutcome<JobAcceptedDto> {
+        let body = serde_json::to_vec(&RefineSourceRequest {
+            content_digest: digest.to_owned(),
+        })
+        .unwrap_or_default();
+        self.send_json(
+            "POST",
+            &format!("/v1/workflows/{workflow_id}/sources/{source_id}/refine-requests"),
+            Some(body),
+            Some(workflow_etag(revision)),
+            MAX_RESPONSE_BYTES,
+            attachment,
+        )
+    }
+
+    pub fn source_refine_suggestion(
+        &self,
+        attachment: &Attachment,
+        workflow_id: &str,
+        source_id: &str,
+    ) -> ClientOutcome<SourceRefineSuggestionDto> {
+        self.get_json(
+            &format!("/v1/workflows/{workflow_id}/sources/{source_id}/refine-suggestion"),
+            SOURCE_DETAIL_RESPONSE_BYTES * 2,
+            attachment,
+        )
+    }
+
+    pub fn resolve_source_refine(
+        &self,
+        attachment: &Attachment,
+        workflow_id: &str,
+        source_id: &str,
+        revision: u64,
+        accept: bool,
+        digest: &str,
+    ) -> ClientOutcome<WorkflowDto> {
+        let body = serde_json::to_vec(&ResolveSourceRefineRequest {
+            accept,
+            binding_digest: digest.to_owned(),
+        })
+        .unwrap_or_default();
+        self.send_json(
+            "PUT",
+            &format!(
+                "/v1/workflows/{workflow_id}/sources/{source_id}/refine-suggestion/resolution"
+            ),
+            Some(body),
+            Some(workflow_etag(revision)),
+            MAX_RESPONSE_BYTES,
+            attachment,
+        )
+    }
+
+    pub fn edit_source_body(
+        &self,
+        attachment: &Attachment,
+        workflow_id: &str,
+        source_id: &str,
+        revision: u64,
+        text: &str,
+        digest: &str,
+    ) -> ClientOutcome<WorkflowDto> {
+        let body = serde_json::to_vec(&EditSourceBodyRequest {
+            text: text.to_owned(),
+            expected_content_digest: digest.to_owned(),
+        })
+        .unwrap_or_default();
+        self.send_json(
+            "PUT",
+            &format!("/v1/workflows/{workflow_id}/sources/{source_id}/body"),
+            Some(body),
+            Some(workflow_etag(revision)),
+            MAX_RESPONSE_BYTES,
+            attachment,
+        )
+    }
+
+    pub fn delete_source(
+        &self,
+        attachment: &Attachment,
+        workflow_id: &str,
+        source_id: &str,
+        revision: u64,
+    ) -> ClientOutcome<WorkflowDto> {
+        let body = serde_json::to_vec(&DeleteSourceRequest { confirm: true }).unwrap_or_default();
+        self.send_json(
+            "DELETE",
+            &format!("/v1/workflows/{workflow_id}/sources/{source_id}"),
+            Some(body),
+            Some(workflow_etag(revision)),
+            MAX_RESPONSE_BYTES,
             attachment,
         )
     }

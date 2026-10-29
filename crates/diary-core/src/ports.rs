@@ -1,13 +1,14 @@
 //! Inward-facing ports implemented by outer adapters.
 
 use std::fmt;
+use std::sync::atomic::AtomicBool;
 
 use crate::{
-    AssistantAction, AssistantBackendDescriptor, CatalogRequest, DiaryDay, DraftAssistantError,
-    DraftAssistantRequest, DraftAssistantResponse, FreshnessCheckpoint, FreshnessOutcome,
-    InspectionOutcome, OperationIntent, Preferences, Receipt, ReconciliationGate,
-    SourceAccessError, SourceDiscovery, SourceReadOutcome, SourceSnapshot, Timestamp, Workflow,
-    WorkflowError, WorkflowSummary, WriteOutcome,
+    AssistantBackendDescriptor, AssistantRequest, AssistantResponse, CatalogRequest, DiaryDay,
+    DraftAssistantError, FreshnessCheckpoint, FreshnessOutcome, InspectionOutcome, OperationIntent,
+    Preferences, Receipt, ReconciliationGate, SourceAccessError, SourceDiscovery,
+    SourceReadOutcome, SourceSnapshot, Timestamp, Workflow, WorkflowError, WorkflowSummary,
+    WriteOutcome,
 };
 
 pub trait Clock {
@@ -129,16 +130,35 @@ pub trait SourceReader {
     fn request_download(&self, source: &crate::SourceRef) -> Result<(), SourceAccessError>;
 }
 
+pub trait SourceWriter {
+    fn overwrite_body(
+        &self,
+        source: &crate::SourceRef,
+        new_body: &str,
+        expected_digest: &crate::Digest,
+    ) -> Result<crate::FreshnessStamp, SourceWriteError>;
+
+    fn delete_source(&self, source: &crate::SourceRef) -> Result<(), SourceWriteError>;
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum SourceWriteError {
+    Stale,
+    UnsafePath,
+    PartialFailure,
+    Unavailable,
+}
+
 /// One assistant backend. The port exposes no filesystem, connector, workflow,
 /// confirmation, approval, publication, or shell capability.
-pub trait DraftAssistant {
+pub trait DraftAssistant: Send + Sync {
     fn descriptor(&self) -> AssistantBackendDescriptor;
 
     fn invoke(
         &self,
-        action: AssistantAction,
-        request: &DraftAssistantRequest,
-    ) -> Result<DraftAssistantResponse, DraftAssistantError>;
+        request: &AssistantRequest,
+        cancelled: &AtomicBool,
+    ) -> Result<AssistantResponse, DraftAssistantError>;
 }
 
 pub fn revalidate_workflow_sources(

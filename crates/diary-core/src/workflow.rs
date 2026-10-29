@@ -5,11 +5,16 @@ use std::fmt;
 
 use crate::digest::push_framed;
 use crate::{
-    Approval, AssistantSelection, CompositionPath, DestinationKind, DestinationProgress,
-    DestinationStatus, DiaryDay, Digest, DraftAssistantRequest, EntryBuffer, EntryConfirmation,
-    FreshnessCheckpoint, FreshnessOutcome, InvalidationReason, JobStatus, OutputPlan, Preferences,
-    SelectedSource, SourceCandidate, SourceSnapshot, Timestamp, WorkflowState, WritingLanguage,
-    WritingStyle, source_note_name_is_valid,
+    Approval, ArtifactProvenance, AssistantSelection, CompositionPath, DestinationKind,
+    DestinationProgress, DestinationStatus, DiaryDay, Digest, DraftEntryRequest, DraftEntryResult,
+    DraftProposal, DraftProposalBinding, EntryBuffer, EntryConfirmation, FreshnessCheckpoint,
+    FreshnessOutcome, InvalidationReason, JobStatus, MemoryCandidateArtifact,
+    MemoryCandidateBinding, MemoryCandidateSet, MemoryExtractionRequest, MemoryExtractionResult,
+    OutputPlan, ParagraphReviewRequest, ParagraphReviewResult, ParagraphSuggestion,
+    ParagraphSuggestionBinding, Preferences, ReflectionRange, ReviewedMemoryArtifact,
+    ReviewedMemoryBinding, SelectedSource, SourceCandidate, SourceRefineSuggestion, SourceSnapshot,
+    SuggestionResolution, Timestamp, WorkflowState, WritingLanguage, WritingStyle,
+    source_note_name_is_valid,
 };
 
 /// Reserved markers used around assistant-inferred reflection text.
@@ -49,6 +54,11 @@ pub struct Workflow {
     reviewed_memories: Vec<String>,
     assistant_draft: Option<String>,
     assistant_material_stale: bool,
+    memory_candidate_sets: Vec<MemoryCandidateSet>,
+    reviewed_memory_artifact: Option<ReviewedMemoryArtifact>,
+    draft_proposals: Vec<DraftProposal>,
+    paragraph_suggestions: Vec<ParagraphSuggestion>,
+    source_refine_suggestions: Vec<SourceRefineSuggestion>,
     entry: EntryBuffer,
     output_plan: Option<OutputPlan>,
     approval: Option<Approval>,
@@ -78,6 +88,11 @@ pub struct PersistedWorkflow {
     pub reviewed_memories: Vec<String>,
     pub assistant_draft: Option<String>,
     pub assistant_material_stale: bool,
+    pub memory_candidate_sets: Vec<MemoryCandidateSet>,
+    pub reviewed_memory_artifact: Option<ReviewedMemoryArtifact>,
+    pub draft_proposals: Vec<DraftProposal>,
+    pub paragraph_suggestions: Vec<ParagraphSuggestion>,
+    pub source_refine_suggestions: Vec<SourceRefineSuggestion>,
     pub entry: EntryBuffer,
     pub output_plan: Option<OutputPlan>,
     pub approval: Option<Approval>,
@@ -107,6 +122,11 @@ impl Workflow {
             reviewed_memories: Vec::new(),
             assistant_draft: None,
             assistant_material_stale: false,
+            memory_candidate_sets: Vec::new(),
+            reviewed_memory_artifact: None,
+            draft_proposals: Vec::new(),
+            paragraph_suggestions: Vec::new(),
+            source_refine_suggestions: Vec::new(),
             entry: EntryBuffer::default(),
             output_plan: None,
             approval: None,
@@ -135,6 +155,11 @@ impl Workflow {
             reviewed_memories: record.reviewed_memories,
             assistant_draft: record.assistant_draft,
             assistant_material_stale: record.assistant_material_stale,
+            memory_candidate_sets: record.memory_candidate_sets,
+            reviewed_memory_artifact: record.reviewed_memory_artifact,
+            draft_proposals: record.draft_proposals,
+            paragraph_suggestions: record.paragraph_suggestions,
+            source_refine_suggestions: record.source_refine_suggestions,
             entry: record.entry,
             output_plan: record.output_plan,
             approval: record.approval,
@@ -166,6 +191,11 @@ impl Workflow {
             reviewed_memories: self.reviewed_memories.clone(),
             assistant_draft: self.assistant_draft.clone(),
             assistant_material_stale: self.assistant_material_stale,
+            memory_candidate_sets: self.memory_candidate_sets.clone(),
+            reviewed_memory_artifact: self.reviewed_memory_artifact.clone(),
+            draft_proposals: self.draft_proposals.clone(),
+            paragraph_suggestions: self.paragraph_suggestions.clone(),
+            source_refine_suggestions: self.source_refine_suggestions.clone(),
             entry: self.entry.clone(),
             output_plan: self.output_plan.clone(),
             approval: self.approval.clone(),
@@ -463,25 +493,489 @@ impl Workflow {
             )
     }
 
-    pub fn assistant_request(&self) -> Result<DraftAssistantRequest, WorkflowError> {
+    pub fn memory_extraction_request(&self) -> Result<MemoryExtractionRequest, WorkflowError> {
         if !self.assistant_actions_available() {
             return Err(WorkflowError::AssistantActionsDisabled);
         }
-        let language = self.language.ok_or(WorkflowError::LanguageRequired)?;
-        Ok(DraftAssistantRequest {
-            readable_note_bodies: self
-                .snapshots
+        MemoryExtractionRequest::new(
+            self.snapshots
                 .iter()
                 .map(|snapshot| snapshot.body.clone())
                 .collect(),
-            reviewed_memories: self.reviewed_memories.clone(),
-            prior_draft: self.assistant_draft.clone(),
-            edited_entry: (!self.entry.text.is_empty()).then(|| self.entry.text.clone()),
-            focused_paragraph: None,
-            source_body: None,
-            language,
-            style: self.style,
-        })
+        )
+        .map_err(|_| WorkflowError::AssistantRequestInvalid)
+    }
+
+    #[must_use]
+    pub fn memory_candidate_sets(&self) -> &[MemoryCandidateSet] {
+        &self.memory_candidate_sets
+    }
+
+    #[must_use]
+    pub fn reviewed_memory_artifact(&self) -> Option<&ReviewedMemoryArtifact> {
+        self.reviewed_memory_artifact.as_ref()
+    }
+
+    #[must_use]
+    pub fn draft_proposals(&self) -> &[DraftProposal] {
+        &self.draft_proposals
+    }
+
+    #[must_use]
+    pub fn paragraph_suggestions(&self) -> &[ParagraphSuggestion] {
+        &self.paragraph_suggestions
+    }
+
+    #[must_use]
+    pub fn source_refine_suggestion(
+        &self,
+        source: &crate::SourceRef,
+    ) -> Option<&SourceRefineSuggestion> {
+        self.source_refine_suggestions
+            .iter()
+            .find(|value| &value.source == source)
+    }
+
+    #[must_use]
+    pub fn source_refine_suggestions(&self) -> &[SourceRefineSuggestion] {
+        &self.source_refine_suggestions
+    }
+
+    pub fn record_source_refine_suggestion(
+        &mut self,
+        source: &crate::SourceRef,
+        original_body: String,
+        suggested_body: String,
+        binding_digest: Digest,
+        provenance: ArtifactProvenance,
+        now: Timestamp,
+    ) -> Result<(), WorkflowError> {
+        if !self
+            .candidates
+            .iter()
+            .any(|candidate| &candidate.source == source)
+        {
+            return Err(WorkflowError::UnknownSource);
+        }
+        self.source_refine_suggestions
+            .retain(|value| &value.source != source);
+        self.source_refine_suggestions.push(SourceRefineSuggestion {
+            source: source.clone(),
+            original_body,
+            suggested_body,
+            binding_digest,
+            provenance,
+            created_at: now,
+        });
+        self.bump(now);
+        Ok(())
+    }
+
+    pub fn take_source_refine_suggestion(
+        &mut self,
+        expected_revision: u64,
+        source: &crate::SourceRef,
+        binding_digest: &Digest,
+        accept: bool,
+        now: Timestamp,
+    ) -> Result<Option<String>, WorkflowError> {
+        self.expect_revision(expected_revision)?;
+        let index = self
+            .source_refine_suggestions
+            .iter()
+            .position(|value| &value.source == source)
+            .ok_or(WorkflowError::AssistantArtifactNotFound)?;
+        if &self.source_refine_suggestions[index].binding_digest != binding_digest {
+            return Err(WorkflowError::AssistantBindingStale);
+        }
+        let suggestion = self.source_refine_suggestions.remove(index);
+        self.bump(now);
+        Ok(accept.then_some(suggestion.suggested_body))
+    }
+
+    pub fn source_body_changed(
+        &mut self,
+        expected_revision: u64,
+        source: &crate::SourceRef,
+        now: Timestamp,
+    ) -> Result<(), WorkflowError> {
+        self.expect_revision(expected_revision)?;
+        if !self
+            .candidates
+            .iter()
+            .any(|candidate| &candidate.source == source)
+        {
+            return Err(WorkflowError::UnknownSource);
+        }
+        self.source_refine_suggestions
+            .retain(|value| &value.source != source);
+        if self
+            .snapshots
+            .iter()
+            .any(|snapshot| &snapshot.source == source)
+        {
+            self.invalidate_sources(InvalidationReason::SourceChanged(source.clone()), now);
+        } else {
+            self.bump(now);
+        }
+        Ok(())
+    }
+
+    pub fn source_deleted(
+        &mut self,
+        expected_revision: u64,
+        source: &crate::SourceRef,
+        now: Timestamp,
+    ) -> Result<(), WorkflowError> {
+        self.expect_revision(expected_revision)?;
+        if !self
+            .candidates
+            .iter()
+            .any(|candidate| &candidate.source == source)
+        {
+            return Err(WorkflowError::UnknownSource);
+        }
+        let was_selected = self
+            .snapshots
+            .iter()
+            .any(|snapshot| &snapshot.source == source);
+        self.candidates
+            .retain(|candidate| &candidate.source != source);
+        self.source_refine_suggestions
+            .retain(|value| &value.source != source);
+        if was_selected {
+            self.invalidate_sources(InvalidationReason::SourceChanged(source.clone()), now);
+        } else {
+            self.bump(now);
+        }
+        Ok(())
+    }
+
+    pub fn commit_memory_extraction(
+        &mut self,
+        artifact_id: String,
+        provenance: ArtifactProvenance,
+        captured_source_digest: &Digest,
+        result: &MemoryExtractionResult,
+        now: Timestamp,
+    ) -> Result<(), WorkflowError> {
+        validate_artifact_id(&artifact_id)?;
+        if self.selection_digest.as_ref() != Some(captured_source_digest) {
+            return Err(WorkflowError::AssistantBindingStale);
+        }
+        let candidates = result
+            .candidates()
+            .iter()
+            .enumerate()
+            .map(|(index, candidate)| {
+                let source_snapshot_digests = candidate
+                    .source_ordinals()
+                    .iter()
+                    .map(|ordinal| {
+                        self.snapshots
+                            .get(usize::from(*ordinal).saturating_sub(1))
+                            .map(|snapshot| snapshot.stamp.content_digest.clone())
+                            .ok_or(WorkflowError::AssistantRequestInvalid)
+                    })
+                    .collect::<Result<Vec<_>, _>>()?;
+                Ok(MemoryCandidateArtifact {
+                    id: format!("{artifact_id}-{}", index + 1),
+                    text: candidate.text().to_owned(),
+                    source_snapshot_digests,
+                })
+            })
+            .collect::<Result<Vec<_>, WorkflowError>>()?;
+        let mut digest_input = Vec::new();
+        for candidate in &candidates {
+            push_framed(&mut digest_input, candidate.text.as_bytes());
+            for digest in &candidate.source_snapshot_digests {
+                push_framed(&mut digest_input, digest.as_str().as_bytes());
+            }
+        }
+        for set in &mut self.memory_candidate_sets {
+            set.stale = true;
+        }
+        if let Some(reviewed) = &mut self.reviewed_memory_artifact {
+            reviewed.stale = true;
+        }
+        self.memory_candidate_sets.push(MemoryCandidateSet {
+            id: artifact_id,
+            provenance,
+            created_at: now,
+            content_digest: Digest::of_bytes(&digest_input),
+            binding: MemoryCandidateBinding {
+                source_selection_digest: captured_source_digest.clone(),
+            },
+            candidates,
+            stale: false,
+        });
+        self.bump(now);
+        Ok(())
+    }
+
+    pub fn replace_reviewed_memory(
+        &mut self,
+        expected_revision: u64,
+        artifact_id: String,
+        candidate_set_id: &str,
+        text: String,
+        now: Timestamp,
+    ) -> Result<(), WorkflowError> {
+        self.expect_revision(expected_revision)?;
+        validate_artifact_id(&artifact_id)?;
+        if text.len() > crate::MAX_REVIEWED_MEMORY_BYTES {
+            return Err(WorkflowError::AssistantRequestInvalid);
+        }
+        let candidate_set = self
+            .memory_candidate_sets
+            .iter()
+            .find(|set| set.id == candidate_set_id)
+            .ok_or(WorkflowError::AssistantArtifactNotFound)?;
+        if candidate_set.stale
+            || Some(&candidate_set.binding.source_selection_digest)
+                != self.selection_digest.as_ref()
+        {
+            return Err(WorkflowError::AssistantBindingStale);
+        }
+        let revision = self
+            .reviewed_memory_artifact
+            .as_ref()
+            .map_or(0, |artifact| artifact.revision.saturating_add(1));
+        self.reviewed_memory_artifact = Some(ReviewedMemoryArtifact {
+            id: artifact_id,
+            provenance: Some(candidate_set.provenance.clone()),
+            created_at: now,
+            content_digest: Digest::of_bytes(text.as_bytes()),
+            binding: Some(ReviewedMemoryBinding {
+                candidate_set_digest: candidate_set.content_digest.clone(),
+            }),
+            revision,
+            text,
+            stale: false,
+        });
+        for draft in &mut self.draft_proposals {
+            draft.stale = true;
+        }
+        self.bump(now);
+        Ok(())
+    }
+
+    pub fn draft_entry_request(
+        &self,
+        include_prior_draft: bool,
+    ) -> Result<(DraftEntryRequest, DraftProposalBinding), WorkflowError> {
+        let selection = self
+            .assistant_selection
+            .as_ref()
+            .ok_or(WorkflowError::AssistantBackendRequired)?;
+        let source_selection_digest = self
+            .selection_digest
+            .clone()
+            .ok_or(WorkflowError::AssistantActionsDisabled)?;
+        let reviewed = self
+            .reviewed_memory_artifact
+            .as_ref()
+            .filter(|artifact| !artifact.stale)
+            .ok_or(WorkflowError::ReviewedMemoryRequired)?;
+        let language = self.language.ok_or(WorkflowError::LanguageRequired)?;
+        let prior_draft = include_prior_draft
+            .then(|| self.draft_proposals.last())
+            .flatten()
+            .map(|draft| draft.text.clone());
+        let request =
+            DraftEntryRequest::new(reviewed.text.clone(), prior_draft, language, self.style)
+                .map_err(|_| WorkflowError::AssistantRequestInvalid)?;
+        Ok((
+            request,
+            DraftProposalBinding {
+                source_selection_digest,
+                language,
+                style: self.style,
+                backend_id: selection.backend_id.clone(),
+                reviewed_memory_digest: reviewed.content_digest.clone(),
+                reviewed_memory_revision: reviewed.revision,
+                captured_buffer_version: self.entry.version,
+            },
+        ))
+    }
+
+    pub fn commit_draft_proposal(
+        &mut self,
+        artifact_id: String,
+        provenance: ArtifactProvenance,
+        binding: DraftProposalBinding,
+        result: &DraftEntryResult,
+        now: Timestamp,
+    ) -> Result<bool, WorkflowError> {
+        validate_artifact_id(&artifact_id)?;
+        let rendered = result
+            .rendered_text()
+            .map_err(|_| WorkflowError::AssistantRequestInvalid)?;
+        let fresh = self.draft_binding_matches(&binding);
+        let populated_buffer_version = if fresh {
+            self.entry.text = rendered.clone();
+            self.entry.version = self.entry.version.saturating_add(1);
+            self.entry.confirmed = None;
+            Some(self.entry.version)
+        } else {
+            None
+        };
+        self.draft_proposals.push(DraftProposal {
+            id: artifact_id,
+            provenance: Some(provenance),
+            created_at: now,
+            content_digest: Digest::of_bytes(rendered.as_bytes()),
+            binding: Some(binding),
+            text: rendered,
+            reflection_ranges: result.reflection_ranges().to_vec(),
+            stale: !fresh,
+            populated_buffer_version,
+        });
+        self.assistant_draft = self.draft_proposals.last().map(|draft| draft.text.clone());
+        self.state = WorkflowState::Composing;
+        self.bump(now);
+        Ok(fresh)
+    }
+
+    fn draft_binding_matches(&self, binding: &DraftProposalBinding) -> bool {
+        self.selection_digest.as_ref() == Some(&binding.source_selection_digest)
+            && self.language == Some(binding.language)
+            && self.style == binding.style
+            && self
+                .assistant_selection
+                .as_ref()
+                .is_some_and(|selection| selection.backend_id == binding.backend_id)
+            && self.entry.version == binding.captured_buffer_version
+            && self
+                .reviewed_memory_artifact
+                .as_ref()
+                .is_some_and(|reviewed| {
+                    !reviewed.stale
+                        && reviewed.revision == binding.reviewed_memory_revision
+                        && reviewed.content_digest == binding.reviewed_memory_digest
+                })
+    }
+
+    pub fn paragraph_review_request(
+        &self,
+        range: ReflectionRange,
+    ) -> Result<(ParagraphReviewRequest, ParagraphSuggestionBinding), WorkflowError> {
+        if range.start >= range.end
+            || range.end > self.entry.text.len()
+            || !self.entry.text.is_char_boundary(range.start)
+            || !self.entry.text.is_char_boundary(range.end)
+        {
+            return Err(WorkflowError::AssistantRequestInvalid);
+        }
+        let paragraph = &self.entry.text[range.start..range.end];
+        let language = self.language.ok_or(WorkflowError::LanguageRequired)?;
+        let selection = self
+            .assistant_selection
+            .as_ref()
+            .ok_or(WorkflowError::AssistantBackendRequired)?;
+        let request = ParagraphReviewRequest::new(paragraph, language, self.style)
+            .map_err(|_| WorkflowError::AssistantRequestInvalid)?;
+        Ok((
+            request,
+            ParagraphSuggestionBinding {
+                source_selection_digest: self
+                    .selection_digest
+                    .clone()
+                    .ok_or(WorkflowError::AssistantActionsDisabled)?,
+                language,
+                style: self.style,
+                backend_id: selection.backend_id.clone(),
+                buffer_version: self.entry.version,
+                range,
+                selected_text_digest: Digest::of_bytes(paragraph.as_bytes()),
+            },
+        ))
+    }
+
+    pub fn commit_paragraph_suggestion(
+        &mut self,
+        suggestion_id: String,
+        provenance: ArtifactProvenance,
+        binding: ParagraphSuggestionBinding,
+        result: &ParagraphReviewResult,
+        now: Timestamp,
+    ) -> Result<(), WorkflowError> {
+        validate_artifact_id(&suggestion_id)?;
+        let replacement = result
+            .rendered_replacement()
+            .map_err(|_| WorkflowError::AssistantRequestInvalid)?;
+        let stale = !self.paragraph_binding_matches(&binding);
+        self.paragraph_suggestions.push(ParagraphSuggestion {
+            id: suggestion_id,
+            provenance,
+            created_at: now,
+            content_digest: Digest::of_bytes(replacement.as_bytes()),
+            binding,
+            replacement,
+            reflection_ranges: result.reflection_ranges().to_vec(),
+            explanation: result.explanation().map(str::to_owned),
+            stale,
+            resolution: None,
+            resolved_at: None,
+        });
+        self.bump(now);
+        Ok(())
+    }
+
+    pub fn resolve_paragraph_suggestion(
+        &mut self,
+        expected_revision: u64,
+        suggestion_id: &str,
+        resolution: SuggestionResolution,
+        now: Timestamp,
+    ) -> Result<(), WorkflowError> {
+        self.expect_revision(expected_revision)?;
+        let index = self
+            .paragraph_suggestions
+            .iter()
+            .position(|suggestion| suggestion.id == suggestion_id)
+            .ok_or(WorkflowError::AssistantArtifactNotFound)?;
+        if self.paragraph_suggestions[index].resolution.is_some() {
+            return Err(WorkflowError::AssistantSuggestionAlreadyResolved);
+        }
+        let binding = self.paragraph_suggestions[index].binding.clone();
+        if self.paragraph_suggestions[index].stale || !self.paragraph_binding_matches(&binding) {
+            return Err(WorkflowError::AssistantBindingStale);
+        }
+        if resolution == SuggestionResolution::Accepted {
+            self.entry.text.replace_range(
+                binding.range.start..binding.range.end,
+                &self.paragraph_suggestions[index].replacement,
+            );
+            self.entry.version = self.entry.version.saturating_add(1);
+            for (other, suggestion) in self.paragraph_suggestions.iter_mut().enumerate() {
+                if other != index {
+                    suggestion.stale = true;
+                }
+            }
+        }
+        self.paragraph_suggestions[index].resolution = Some(resolution);
+        self.paragraph_suggestions[index].resolved_at = Some(now);
+        self.bump(now);
+        Ok(())
+    }
+
+    fn paragraph_binding_matches(&self, binding: &ParagraphSuggestionBinding) -> bool {
+        self.selection_digest.as_ref() == Some(&binding.source_selection_digest)
+            && self.language == Some(binding.language)
+            && self.style == binding.style
+            && self
+                .assistant_selection
+                .as_ref()
+                .is_some_and(|selection| selection.backend_id == binding.backend_id)
+            && self.entry.version == binding.buffer_version
+            && self
+                .entry
+                .text
+                .get(binding.range.start..binding.range.end)
+                .is_some_and(|text| {
+                    Digest::of_bytes(text.as_bytes()) == binding.selected_text_digest
+                })
     }
 
     pub fn set_language(
@@ -574,6 +1068,9 @@ impl Workflow {
         let invalidates_confirmation = self.entry.confirmed.is_some();
         self.entry.text = text;
         self.entry.version += 1;
+        for suggestion in &mut self.paragraph_suggestions {
+            suggestion.stale = true;
+        }
         self.updated_at = now;
         if invalidates_confirmation {
             self.entry.confirmed = None;
@@ -1033,6 +1530,11 @@ impl Workflow {
         }
         self.reviewed_memories.clear();
         self.assistant_draft = None;
+        self.memory_candidate_sets.clear();
+        self.reviewed_memory_artifact = None;
+        self.draft_proposals.clear();
+        self.paragraph_suggestions.clear();
+        self.source_refine_suggestions.clear();
         self.entry.confirmed = None;
         self.clear_plan_and_approval();
         if !completed {
@@ -1084,9 +1586,19 @@ impl Workflow {
     }
 
     fn clear_after_selection(&mut self) {
-        self.reviewed_memories.clear();
-        self.assistant_draft = None;
-        self.assistant_material_stale = false;
+        for candidates in &mut self.memory_candidate_sets {
+            candidates.stale = true;
+        }
+        if let Some(reviewed) = &mut self.reviewed_memory_artifact {
+            reviewed.stale = true;
+        }
+        for draft in &mut self.draft_proposals {
+            draft.stale = true;
+        }
+        for suggestion in &mut self.paragraph_suggestions {
+            suggestion.stale = true;
+        }
+        self.assistant_material_stale = true;
         self.entry.confirmed = None;
         self.clear_plan_and_approval();
     }
@@ -1110,6 +1622,12 @@ impl Workflow {
 
     fn invalidate_composition(&mut self, now: Timestamp) {
         self.assistant_material_stale = true;
+        for draft in &mut self.draft_proposals {
+            draft.stale = true;
+        }
+        for suggestion in &mut self.paragraph_suggestions {
+            suggestion.stale = true;
+        }
         self.entry.confirmed = None;
         self.clear_plan_and_approval();
         self.invalidation_reason = Some(InvalidationReason::CompositionChoiceChanged);
@@ -1197,6 +1715,52 @@ impl Workflow {
             }
         } else if !self.destination_progress.is_empty() {
             return Err(WorkflowError::InvalidPersistedState);
+        }
+
+        let mut artifact_ids = BTreeSet::new();
+        for set in &self.memory_candidate_sets {
+            let mut candidate_ids = BTreeSet::new();
+            if !artifact_ids.insert((&set.id, "memory-set"))
+                || set.candidates.len() > crate::MAX_MEMORY_CANDIDATES
+                || set.candidates.iter().any(|candidate| {
+                    !candidate_ids.insert(&candidate.id)
+                        || candidate.text.is_empty()
+                        || candidate.text.len() > crate::MAX_MEMORY_CANDIDATE_BYTES
+                        || candidate.source_snapshot_digests.is_empty()
+                        || candidate.source_snapshot_digests.len() > crate::MAX_SOURCE_ORDINALS
+                })
+            {
+                return Err(WorkflowError::InvalidPersistedState);
+            }
+        }
+        if let Some(reviewed) = &self.reviewed_memory_artifact
+            && (reviewed.text.len() > crate::MAX_REVIEWED_MEMORY_BYTES
+                || reviewed.content_digest != Digest::of_bytes(reviewed.text.as_bytes()))
+        {
+            return Err(WorkflowError::InvalidPersistedState);
+        }
+        for draft in &self.draft_proposals {
+            if draft.text.is_empty()
+                || draft.text.len() > crate::MAX_DRAFT_RESULT_BYTES
+                || draft.reflection_ranges.len() > crate::MAX_REFLECTION_RANGES
+                || draft.content_digest != Digest::of_bytes(draft.text.as_bytes())
+            {
+                return Err(WorkflowError::InvalidPersistedState);
+            }
+        }
+        for suggestion in &self.paragraph_suggestions {
+            if suggestion.replacement.is_empty()
+                || suggestion.replacement.len() > crate::MAX_PARAGRAPH_BYTES
+                || suggestion.reflection_ranges.len() > crate::MAX_REFLECTION_RANGES
+                || suggestion
+                    .explanation
+                    .as_ref()
+                    .is_some_and(|value| value.len() > crate::MAX_SUGGESTION_EXPLANATION_BYTES)
+                || suggestion.content_digest != Digest::of_bytes(suggestion.replacement.as_bytes())
+                || suggestion.resolution.is_some() != suggestion.resolved_at.is_some()
+            {
+                return Err(WorkflowError::InvalidPersistedState);
+            }
         }
 
         let stripped_completed = self.state == WorkflowState::Completed
@@ -1353,6 +1917,18 @@ fn selection_digest(snapshots: &[SourceSnapshot]) -> Digest {
     Digest::of_bytes(&binding)
 }
 
+fn validate_artifact_id(value: &str) -> Result<(), WorkflowError> {
+    if value.is_empty()
+        || value.len() > 128
+        || !value.bytes().all(|byte| {
+            byte.is_ascii_lowercase() || byte.is_ascii_digit() || matches!(byte, b'-' | b'_')
+        })
+    {
+        return Err(WorkflowError::AssistantRequestInvalid);
+    }
+    Ok(())
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum WorkflowError {
     StaleRevision { expected: u64, actual: u64 },
@@ -1366,6 +1942,12 @@ pub enum WorkflowError {
     PermissionDeniedSource,
     UnreadableSource,
     AssistantActionsDisabled,
+    AssistantRequestInvalid,
+    AssistantBackendRequired,
+    ReviewedMemoryRequired,
+    AssistantArtifactNotFound,
+    AssistantBindingStale,
+    AssistantSuggestionAlreadyResolved,
     LanguageRequired,
     BlankEntry,
     UnresolvedInferenceMarker,
@@ -1397,6 +1979,18 @@ impl fmt::Display for WorkflowError {
             Self::PermissionDeniedSource => formatter.write_str("source permission was denied"),
             Self::UnreadableSource => formatter.write_str("source is unreadable"),
             Self::AssistantActionsDisabled => formatter.write_str("assistant actions are disabled"),
+            Self::AssistantRequestInvalid => formatter.write_str("assistant request is invalid"),
+            Self::AssistantBackendRequired => formatter.write_str("assistant backend is required"),
+            Self::ReviewedMemoryRequired => formatter.write_str("reviewed memory is required"),
+            Self::AssistantArtifactNotFound => {
+                formatter.write_str("assistant artifact was not found")
+            }
+            Self::AssistantBindingStale => {
+                formatter.write_str("assistant artifact binding is stale")
+            }
+            Self::AssistantSuggestionAlreadyResolved => {
+                formatter.write_str("assistant suggestion is already resolved")
+            }
             Self::LanguageRequired => formatter.write_str("writing language is required"),
             Self::BlankEntry => formatter.write_str("blank entry cannot be confirmed"),
             Self::UnresolvedInferenceMarker => {
@@ -1568,7 +2162,7 @@ mod tests {
         empty.confirm_sources(1, Vec::new(), true, time(2)).unwrap();
         assert!(!empty.assistant_actions_available());
         assert_eq!(
-            empty.assistant_request(),
+            empty.memory_extraction_request(),
             Err(WorkflowError::AssistantActionsDisabled)
         );
         empty.begin_manual_composition(2, time(3)).unwrap();
@@ -1644,6 +2238,118 @@ mod tests {
             Some(&InvalidationReason::SelectionChanged)
         );
         assert!(!workflow.assistant_actions_available());
+    }
+
+    #[test]
+    fn assistant_artifacts_are_bound_guarded_and_paragraph_resolution_is_once_only() {
+        let mut workflow = composing_workflow();
+        let backend_id = crate::AssistantBackendId::parse("fake-one").unwrap();
+        workflow
+            .set_assistant_selection(
+                workflow.revision(),
+                Some(AssistantSelection::new(
+                    backend_id.clone(),
+                    CompositionPath::Hosted,
+                )),
+                time(5),
+            )
+            .unwrap();
+        let source_digest = workflow.selection_digest().unwrap().clone();
+        let extraction = MemoryExtractionResult::new(vec![
+            crate::MemoryCandidate::new("remembered", vec![1], 1).unwrap(),
+        ])
+        .unwrap();
+        let provenance = ArtifactProvenance {
+            backend_id: backend_id.clone(),
+            composition_path: CompositionPath::Hosted,
+        };
+        workflow
+            .commit_memory_extraction(
+                "memory-set-1".to_owned(),
+                provenance.clone(),
+                &source_digest,
+                &extraction,
+                time(6),
+            )
+            .unwrap();
+        assert_eq!(
+            workflow.memory_candidate_sets()[0].candidates[0].source_snapshot_digests,
+            [workflow.snapshots()[0].stamp.content_digest.clone()]
+        );
+        workflow
+            .replace_reviewed_memory(
+                workflow.revision(),
+                "reviewed-1".to_owned(),
+                "memory-set-1",
+                "human reviewed".to_owned(),
+                time(7),
+            )
+            .unwrap();
+
+        let (_, stale_binding) = workflow.draft_entry_request(false).unwrap();
+        workflow
+            .save_entry(0, "newer manual text".to_owned(), time(8))
+            .unwrap();
+        let draft = DraftEntryResult::new("late draft", vec![]).unwrap();
+        assert!(
+            !workflow
+                .commit_draft_proposal(
+                    "draft-1".to_owned(),
+                    provenance.clone(),
+                    stale_binding,
+                    &draft,
+                    time(9),
+                )
+                .unwrap()
+        );
+        assert_eq!(workflow.entry().text, "newer manual text");
+        assert!(workflow.draft_proposals()[0].stale);
+
+        let (_, current_binding) = workflow.draft_entry_request(false).unwrap();
+        let draft = DraftEntryResult::new("fresh paragraph", vec![]).unwrap();
+        assert!(
+            workflow
+                .commit_draft_proposal(
+                    "draft-2".to_owned(),
+                    provenance.clone(),
+                    current_binding,
+                    &draft,
+                    time(10),
+                )
+                .unwrap()
+        );
+        assert_eq!(workflow.entry().text, "fresh paragraph");
+
+        let range = ReflectionRange { start: 0, end: 5 };
+        let (_, paragraph_binding) = workflow.paragraph_review_request(range).unwrap();
+        let suggestion = ParagraphReviewResult::new("new", vec![], None).unwrap();
+        workflow
+            .commit_paragraph_suggestion(
+                "suggestion-1".to_owned(),
+                provenance,
+                paragraph_binding,
+                &suggestion,
+                time(11),
+            )
+            .unwrap();
+        workflow
+            .resolve_paragraph_suggestion(
+                workflow.revision(),
+                "suggestion-1",
+                SuggestionResolution::Accepted,
+                time(12),
+            )
+            .unwrap();
+        assert_eq!(workflow.entry().text, "new paragraph");
+        assert_eq!(
+            workflow.resolve_paragraph_suggestion(
+                workflow.revision(),
+                "suggestion-1",
+                SuggestionResolution::Rejected,
+                time(13),
+            ),
+            Err(WorkflowError::AssistantSuggestionAlreadyResolved)
+        );
     }
 
     #[test]
@@ -2238,6 +2944,52 @@ mod tests {
             )
             .unwrap();
         workflow
+    }
+
+    #[test]
+    fn source_refinement_is_digest_bound_and_reject_leaves_source_state_unchanged() {
+        let mut workflow = discovered_workflow();
+        let source = source("selected");
+        let digest = Digest::of_bytes(b"original");
+        workflow
+            .record_source_refine_suggestion(
+                &source,
+                "original".to_owned(),
+                "corrected".to_owned(),
+                digest.clone(),
+                ArtifactProvenance {
+                    backend_id: crate::AssistantBackendId::parse("codex.test").unwrap(),
+                    composition_path: CompositionPath::Hosted,
+                },
+                time(2),
+            )
+            .unwrap();
+        assert_eq!(
+            workflow
+                .take_source_refine_suggestion(
+                    workflow.revision(),
+                    &source,
+                    &digest,
+                    false,
+                    time(3),
+                )
+                .unwrap(),
+            None
+        );
+        assert!(workflow.source_refine_suggestion(&source).is_none());
+        assert_eq!(workflow.candidates().len(), 1);
+    }
+
+    #[test]
+    fn deleting_a_confirmed_source_removes_candidate_and_invalidates_selection() {
+        let mut workflow = composing_workflow();
+        let source = source("selected");
+        workflow
+            .source_deleted(workflow.revision(), &source, time(5))
+            .unwrap();
+        assert!(workflow.candidates().is_empty());
+        assert!(workflow.snapshots().is_empty());
+        assert_eq!(workflow.state(), WorkflowState::Discovered);
     }
 
     fn plan_for(workflow: &Workflow, id: &str) -> OutputPlan {

@@ -690,6 +690,37 @@ impl SourceReader for AyumiSource {
     }
 }
 
+impl diary_core::SourceWriter for AyumiSource {
+    fn overwrite_body(
+        &self,
+        source: &SourceRef,
+        new_body: &str,
+        expected_digest: &Digest,
+    ) -> Result<FreshnessStamp, diary_core::SourceWriteError> {
+        self.catalog
+            .overwrite_body(source, new_body, expected_digest)
+            .map_err(map_write_error)
+    }
+
+    fn delete_source(&self, source: &SourceRef) -> Result<(), diary_core::SourceWriteError> {
+        self.catalog
+            .delete_source(source)
+            .map(|_| ())
+            .map_err(map_write_error)
+    }
+}
+
+fn map_write_error(error: SourceWriteError) -> diary_core::SourceWriteError {
+    match error {
+        SourceWriteError::Stale => diary_core::SourceWriteError::Stale,
+        SourceWriteError::UnsafePath => diary_core::SourceWriteError::UnsafePath,
+        SourceWriteError::Io(deleted) if deleted.is_empty() => {
+            diary_core::SourceWriteError::Unavailable
+        }
+        SourceWriteError::Io(_) => diary_core::SourceWriteError::PartialFailure,
+    }
+}
+
 fn selected_source(
     source: &SourceRef,
     parsed: Parsed,
@@ -1400,11 +1431,11 @@ mod tests {
         fs::write(
             &helper,
             r#"#!/bin/sh
-input=$(cat)
+input=$(tail -c +5)
 id=$(printf '%s' "$input" | sed -n 's/.*"request_id":"\([^"]*\)".*/\1/p')
 if printf '%s' "$input" | grep -q 'icloud-availability'; then
   if printf '%s' "$input" | grep -q 'cloud.md'; then status=cloud-only; else status=resident; fi
-  printf '{"ok":true,"protocol_version":1,"request_id":"%s","value":{"status":"%s"}}\n' "$id" "$status"
+  body=$(printf '{"ok":true,"protocol_version":2,"request_id":"%s","value":{"status":"%s"}}' "$id" "$status")
 elif printf '%s' "$input" | grep -q 'icloud-coordinated-read'; then
   directory=$(printf '%s' "$input" | sed -n 's/.*"handoff_directory":"\([^"]*\)".*/\1/p')
   file="$directory/nd-source-selected.bin"
@@ -1415,10 +1446,12 @@ bridge body
 [audio](private.m4a)' > "$file"
   chmod 600 "$file"
   size=$(wc -c < "$file" | tr -d ' ')
-  printf '{"ok":true,"protocol_version":1,"request_id":"%s","value":{"file_identity":"4:5","handoff_name":"nd-source-selected.bin","modified_at":123,"size":%s}}\n' "$id" "$size"
+  body=$(printf '{"ok":true,"protocol_version":2,"request_id":"%s","value":{"file_identity":"4:5","handoff_name":"nd-source-selected.bin","modified_at":123,"size":%s}}' "$id" "$size")
 else
-  printf '{"ok":true,"protocol_version":1,"request_id":"%s","value":{"status":"resident"}}\n' "$id"
+  body=$(printf '{"ok":true,"protocol_version":2,"request_id":"%s","value":{"status":"resident"}}' "$id")
 fi
+length=${#body}
+printf '%b%b%b%b%s' "\\$(printf '%03o' $(((length >> 24) & 255)))" "\\$(printf '%03o' $(((length >> 16) & 255)))" "\\$(printf '%03o' $(((length >> 8) & 255)))" "\\$(printf '%03o' $((length & 255)))" "$body"
 "#,
         )
         .unwrap();

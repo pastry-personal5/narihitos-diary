@@ -12,8 +12,10 @@ use std::sync::mpsc::{Receiver, SyncSender, TrySendError, sync_channel};
 use std::thread::{self, JoinHandle};
 
 use diary_control_contract::{
-    CapabilitiesDto, JobAcceptedDto, JobDto, PreferencesDto, SetupCheckDto, SourceListDto,
-    WorkflowDto, WorkflowListDto,
+    AssistantBackendListDto, CapabilitiesDto, DraftResultDto, JobAcceptedDto, JobDto,
+    MemoryReviewDto, ParagraphSuggestionDto, ParagraphSuggestionListDto, PreferencesDto,
+    ResolveParagraphSuggestionRequest, SetupCheckDto, SourceListDto, SourceRefineSuggestionDto,
+    StartParagraphReviewRequest, WorkflowDto, WorkflowListDto,
 };
 
 use crate::client::{ApiClient, Attachment, ClientOutcome, SourceDetailResponse, Transport};
@@ -73,6 +75,35 @@ pub enum Intent {
         workflow_id: String,
         source_id: String,
     },
+    RefineSource {
+        workflow_id: String,
+        source_id: String,
+        revision: u64,
+        digest: String,
+    },
+    GetSourceRefineSuggestion {
+        workflow_id: String,
+        source_id: String,
+    },
+    ResolveSourceRefine {
+        workflow_id: String,
+        source_id: String,
+        revision: u64,
+        accept: bool,
+        digest: String,
+    },
+    EditSourceBody {
+        workflow_id: String,
+        source_id: String,
+        revision: u64,
+        text: String,
+        digest: String,
+    },
+    DeleteSource {
+        workflow_id: String,
+        source_id: String,
+        revision: u64,
+    },
     ConfirmSelection {
         workflow_id: String,
         revision: u64,
@@ -103,6 +134,54 @@ pub enum Intent {
         revision: u64,
         buffer_version: u64,
     },
+    GetAssistantBackends,
+    SelectAssistant {
+        workflow_id: String,
+        revision: u64,
+        backend_id: Option<String>,
+    },
+    ExtractMemories {
+        workflow_id: String,
+        revision: u64,
+    },
+    GetMemoryReview {
+        workflow_id: String,
+    },
+    SaveMemoryReview {
+        workflow_id: String,
+        revision: u64,
+        candidate_set_id: String,
+        reviewed_memory: String,
+    },
+    RequestDraft {
+        workflow_id: String,
+        revision: u64,
+        include_prior_draft: bool,
+    },
+    GetDraftResult {
+        workflow_id: String,
+    },
+    ReviewParagraph {
+        workflow_id: String,
+        revision: u64,
+        request: StartParagraphReviewRequest,
+    },
+    GetParagraphSuggestions {
+        workflow_id: String,
+    },
+    GetParagraphSuggestion {
+        workflow_id: String,
+        suggestion_id: String,
+    },
+    ResolveParagraphSuggestion {
+        workflow_id: String,
+        suggestion_id: String,
+        revision: u64,
+        request: ResolveParagraphSuggestionRequest,
+    },
+    CancelJob {
+        job_id: String,
+    },
 }
 
 /// The worker's reply, paired with the intent that produced it so the
@@ -125,12 +204,23 @@ pub enum WorkerResult {
     Sources(ClientOutcome<SourceListDto>),
     JobStatus(ClientOutcome<JobDto>),
     SourceDetail(Box<ClientOutcome<SourceDetailResponse>>),
+    SourceRefineSuggestion(ClientOutcome<SourceRefineSuggestionDto>),
+    SourceMutation(Box<ClientOutcome<WorkflowDto>>),
     SelectionConfirmed(Box<ClientOutcome<WorkflowDto>>),
     EmptySelectionConfirmed(Box<ClientOutcome<WorkflowDto>>),
     WritingSettingsSet(Box<ClientOutcome<WorkflowDto>>),
     ManualCompositionBegun(Box<ClientOutcome<WorkflowDto>>),
     EntrySaved(Box<ClientOutcome<WorkflowDto>>),
     EntryConfirmed(Box<ClientOutcome<WorkflowDto>>),
+    AssistantBackends(ClientOutcome<AssistantBackendListDto>),
+    AssistantSelected(Box<ClientOutcome<WorkflowDto>>),
+    MemoryReview(ClientOutcome<MemoryReviewDto>),
+    MemoryReviewSaved(Box<ClientOutcome<WorkflowDto>>),
+    DraftResult(ClientOutcome<DraftResultDto>),
+    ParagraphSuggestions(ClientOutcome<ParagraphSuggestionListDto>),
+    ParagraphSuggestion(ClientOutcome<ParagraphSuggestionDto>),
+    ParagraphSuggestionResolved(Box<ClientOutcome<WorkflowDto>>),
+    JobCancelled(ClientOutcome<()>),
 }
 
 /// Owns the single `ApiClient` and the one background thread that serves
@@ -191,6 +281,9 @@ impl Worker {
     ) -> WorkerResult {
         match intent {
             Intent::GetCapabilities => WorkerResult::Capabilities(client.capabilities(attachment)),
+            Intent::GetAssistantBackends => {
+                WorkerResult::AssistantBackends(client.assistant_backends(attachment))
+            }
             Intent::GetSetupCheck => WorkerResult::SetupCheck(client.setup_check(attachment)),
             Intent::GetPreferences => WorkerResult::Preferences(client.preferences(attachment)),
             Intent::SavePreferences {
@@ -270,6 +363,64 @@ impl Worker {
                     ClientOutcome::Transport(error) => ClientOutcome::Transport(error),
                 },
             )),
+            Intent::RefineSource {
+                workflow_id,
+                source_id,
+                revision,
+                digest,
+            } => WorkerResult::JobAccepted(client.start_source_refine(
+                attachment,
+                &workflow_id,
+                &source_id,
+                revision,
+                &digest,
+            )),
+            Intent::GetSourceRefineSuggestion {
+                workflow_id,
+                source_id,
+            } => WorkerResult::SourceRefineSuggestion(client.source_refine_suggestion(
+                attachment,
+                &workflow_id,
+                &source_id,
+            )),
+            Intent::ResolveSourceRefine {
+                workflow_id,
+                source_id,
+                revision,
+                accept,
+                digest,
+            } => WorkerResult::SourceMutation(Box::new(client.resolve_source_refine(
+                attachment,
+                &workflow_id,
+                &source_id,
+                revision,
+                accept,
+                &digest,
+            ))),
+            Intent::EditSourceBody {
+                workflow_id,
+                source_id,
+                revision,
+                text,
+                digest,
+            } => WorkerResult::SourceMutation(Box::new(client.edit_source_body(
+                attachment,
+                &workflow_id,
+                &source_id,
+                revision,
+                &text,
+                &digest,
+            ))),
+            Intent::DeleteSource {
+                workflow_id,
+                source_id,
+                revision,
+            } => WorkerResult::SourceMutation(Box::new(client.delete_source(
+                attachment,
+                &workflow_id,
+                &source_id,
+                revision,
+            ))),
             Intent::ConfirmSelection {
                 workflow_id,
                 revision,
@@ -330,6 +481,90 @@ impl Worker {
                 revision,
                 buffer_version,
             ))),
+            Intent::SelectAssistant {
+                workflow_id,
+                revision,
+                backend_id,
+            } => WorkerResult::AssistantSelected(Box::new(client.set_assistant_selection(
+                attachment,
+                &workflow_id,
+                revision,
+                backend_id,
+            ))),
+            Intent::ExtractMemories {
+                workflow_id,
+                revision,
+            } => WorkerResult::JobAccepted(client.start_memory_extraction(
+                attachment,
+                &workflow_id,
+                revision,
+            )),
+            Intent::GetMemoryReview { workflow_id } => {
+                WorkerResult::MemoryReview(client.memory_review(attachment, &workflow_id))
+            }
+            Intent::SaveMemoryReview {
+                workflow_id,
+                revision,
+                candidate_set_id,
+                reviewed_memory,
+            } => WorkerResult::MemoryReviewSaved(Box::new(client.save_memory_review(
+                attachment,
+                &workflow_id,
+                revision,
+                candidate_set_id,
+                reviewed_memory,
+            ))),
+            Intent::RequestDraft {
+                workflow_id,
+                revision,
+                include_prior_draft,
+            } => WorkerResult::JobAccepted(client.start_draft(
+                attachment,
+                &workflow_id,
+                revision,
+                include_prior_draft,
+            )),
+            Intent::GetDraftResult { workflow_id } => {
+                WorkerResult::DraftResult(client.draft_result(attachment, &workflow_id))
+            }
+            Intent::ReviewParagraph {
+                workflow_id,
+                revision,
+                request,
+            } => WorkerResult::JobAccepted(client.start_paragraph_review(
+                attachment,
+                &workflow_id,
+                revision,
+                &request,
+            )),
+            Intent::GetParagraphSuggestions { workflow_id } => WorkerResult::ParagraphSuggestions(
+                client.paragraph_suggestions(attachment, &workflow_id),
+            ),
+            Intent::GetParagraphSuggestion {
+                workflow_id,
+                suggestion_id,
+            } => WorkerResult::ParagraphSuggestion(client.paragraph_suggestion(
+                attachment,
+                &workflow_id,
+                &suggestion_id,
+            )),
+            Intent::ResolveParagraphSuggestion {
+                workflow_id,
+                suggestion_id,
+                revision,
+                request,
+            } => WorkerResult::ParagraphSuggestionResolved(Box::new(
+                client.resolve_paragraph_suggestion(
+                    attachment,
+                    &workflow_id,
+                    &suggestion_id,
+                    revision,
+                    &request,
+                ),
+            )),
+            Intent::CancelJob { job_id } => {
+                WorkerResult::JobCancelled(client.cancel_job(attachment, &job_id))
+            }
         }
     }
 

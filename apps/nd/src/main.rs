@@ -9,16 +9,23 @@ use std::process::{Command, ExitCode};
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use diary_connectors::{AppleBridgeClient, AyumiCatalog, AyumiSource, SqliteStore};
+use diary_connectors::{
+    AppleBridgeClient, AppleFoundationAssistant, AyumiCatalog, AyumiSource, SqliteStore,
+};
 use diary_control::{
-    CommandService, DiagnosticEvent, DiagnosticLevel, DiagnosticLog, LifecycleConfig,
-    LifecycleError, LogClock, RuntimeAdvertisement, ServerConfig, ServerLock, bind_loopback,
-    load_runtime_attachment, random_id, serve,
+    CodexAssistant, CommandService, DiagnosticEvent, DiagnosticLevel, DiagnosticLog,
+    LifecycleConfig, LifecycleError, LogClock, RuntimeAdvertisement, ServerConfig, ServerLock,
+    bind_loopback, load_runtime_attachment, random_id, serve,
 };
 use diary_control_contract::{
-    CONTRACT_VERSION, CapabilitiesDto, PreferencesDto, SetupCheckDto, SourceDetailDto, WorkflowDto,
+    CONTRACT_VERSION, CapabilitiesDto, PreferencesDto, ResolveParagraphSuggestionRequest,
+    SetupCheckDto, SourceDetailDto, StartParagraphReviewRequest, WorkflowDto, buffer_etag,
 };
-use diary_core::{Clock, DiaryDay, OperationLog, Timestamp, WorkflowStore};
+use diary_core::{
+    AssistantBackendId, Clock, DiaryDay, Digest, DraftAssistant, DraftAssistantRegistry,
+    OperationLog, Timestamp, WorkflowStore,
+};
+use diary_tui::assistant_view::{AssistantResource, AssistantViewModel};
 use diary_tui::client::{
     ApiClient, Attachment as ClientAttachment, AttachmentState, ClientOutcome, UreqTransport,
     verify_health,
@@ -148,12 +155,38 @@ async fn run_server() -> Result<(), &'static str> {
         4,
     )
     .map_err(|_| "helper-init-failed")?;
+    let apple_assistant = AppleFoundationAssistant::new(bridge.clone(), helper_available);
     let source = Arc::new(AyumiSource::new(catalog, bridge));
-    let commands = CommandService::new(store.clone(), source.clone(), source, clock.clone());
+    let commands = CommandService::new_with_writer(
+        store.clone(),
+        source.clone(),
+        source.clone(),
+        source,
+        clock.clone(),
+    );
 
     let (listener, port) = bind_loopback(lifecycle.port_fallback_count).await?;
     let instance_id = random_id("instance_").map_err(|_| "random-failed")?;
     let control_token = random_id("token_").map_err(|_| "random-failed")?;
+    let mut assistant_backends = lifecycle
+        .codex_profiles
+        .iter()
+        .map(|profile| {
+            CodexAssistant::production(profile, lifecycle.expected_uid)
+                .map(|adapter| Arc::new(adapter) as Arc<dyn DraftAssistant>)
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    assistant_backends.push(Arc::new(apple_assistant) as Arc<dyn DraftAssistant>);
+    let hosted_default = lifecycle
+        .codex_profiles
+        .first()
+        .map(|profile| AssistantBackendId::parse(format!("codex.{}", profile.alias)))
+        .transpose()
+        .map_err(|_| "assistant-registry-invalid")?;
+    let assistant_registry = Arc::new(
+        DraftAssistantRegistry::new(assistant_backends, hosted_default)
+            .map_err(|_| "assistant-registry-invalid")?,
+    );
     let config = ServerConfig {
         instance_id: instance_id.clone(),
         control_token: control_token.clone(),
@@ -161,6 +194,7 @@ async fn run_server() -> Result<(), &'static str> {
         commands,
         apple_helper_available: helper_available,
         notion_configured: lifecycle.notion_configured,
+        assistant_registry,
         diagnostics: Some(Arc::clone(&log)),
         diagnostic_failure: None,
     };
@@ -614,6 +648,7 @@ fn run_connected_session(
     let mut start_view = StartViewModel::default();
     let mut refresh_pending = worker.try_send(Intent::RefreshWorkflows).is_ok();
     let _ = worker.try_send(Intent::GetCapabilities);
+    let _ = worker.try_send(Intent::GetAssistantBackends);
     let _ = worker.try_send(Intent::GetSetupCheck);
     let _ = worker.try_send(Intent::GetPreferences);
     let mut recovery_list_required = false;
@@ -638,11 +673,19 @@ fn run_connected_session(
     let mut source_detail_pending_index: Option<usize> = None;
     let mut active_source_index: Option<usize> = None;
     let mut source_confirmation_pending = false;
+    let mut source_mutation_pending = false;
+    let mut source_editor_active = false;
     let mut empty_selection_confirmation = false;
     let mut source_date_editing = false;
     let mut source_date_draft = String::new();
     let mut explicit_source_day: Option<String> = None;
     let mut compose_view = ComposeViewModel::default();
+    let mut assistant_view = AssistantViewModel::default();
+    let mut pending_assistant_job_kind: Option<String> = None;
+    let mut assistant_job: Option<(String, String)> = None;
+    let mut assistant_job_poll_in_flight = false;
+    let mut assistant_selection_pending = false;
+    let mut memory_review_pending = false;
     let mut draft_editor = DraftEditor::new("");
     let mut editor_active = false;
     let mut compose_active_resource = 0usize;
@@ -734,6 +777,13 @@ fn run_connected_session(
                     ClientOutcome::Problem(problem) => feedback = Some(problem.safe_label()),
                     ClientOutcome::Transport(error) => {
                         feedback = Some(error.safe_label().to_owned())
+                    }
+                },
+                WorkerResult::AssistantBackends(outcome) => match outcome {
+                    ClientOutcome::Ok(value) => assistant_view.backends = value.backends,
+                    ClientOutcome::Problem(problem) => feedback = Some(problem.safe_label()),
+                    ClientOutcome::Transport(error) => {
+                        feedback = Some(error.safe_label().to_owned());
                     }
                 },
                 WorkerResult::SetupCheck(outcome) => match outcome {
@@ -856,7 +906,66 @@ fn run_connected_session(
                 }
                 WorkerResult::JobStatus(outcome) => {
                     let loaded = matches!(&outcome, ClientOutcome::Ok(_));
-                    if source_job_poll_in_flight {
+                    if assistant_job_poll_in_flight {
+                        assistant_job_poll_in_flight = false;
+                        match outcome {
+                            ClientOutcome::Ok(job) => {
+                                let terminal = matches!(
+                                    job.status.as_str(),
+                                    "succeeded" | "failed" | "cancelled" | "timed-out"
+                                );
+                                let succeeded = job.status == "succeeded";
+                                let kind = job.kind.clone();
+                                assistant_view.active_job = Some(job);
+                                if terminal {
+                                    assistant_job = None;
+                                }
+                                if succeeded && let Some(workflow) = &current_workflow {
+                                    let intent = match kind.as_str() {
+                                        "assistant-memory-extraction" => Intent::GetMemoryReview {
+                                            workflow_id: workflow.id.clone(),
+                                        },
+                                        "assistant-draft" => Intent::GetDraftResult {
+                                            workflow_id: workflow.id.clone(),
+                                        },
+                                        "assistant-paragraph-review" => {
+                                            Intent::GetParagraphSuggestions {
+                                                workflow_id: workflow.id.clone(),
+                                            }
+                                        }
+                                        "assistant-source-refine" => {
+                                            if let Some(detail) = &sources_view.active_detail {
+                                                Intent::GetSourceRefineSuggestion {
+                                                    workflow_id: workflow.id.clone(),
+                                                    source_id: detail.id.clone(),
+                                                }
+                                            } else {
+                                                Intent::GetWorkflow {
+                                                    workflow_id: workflow.id.clone(),
+                                                }
+                                            }
+                                        }
+                                        _ => Intent::GetWorkflow {
+                                            workflow_id: workflow.id.clone(),
+                                        },
+                                    };
+                                    let _ = worker.try_send(intent);
+                                    let _ = worker.try_send(Intent::GetWorkflow {
+                                        workflow_id: workflow.id.clone(),
+                                    });
+                                    feedback = Some("Assistant action complete".to_owned());
+                                } else if terminal {
+                                    feedback = Some("Assistant action did not complete; manual Draft remains available".to_owned());
+                                }
+                            }
+                            ClientOutcome::Problem(problem) => {
+                                feedback = Some(problem.safe_label())
+                            }
+                            ClientOutcome::Transport(error) => {
+                                feedback = Some(error.safe_label().to_owned());
+                            }
+                        }
+                    } else if source_job_poll_in_flight {
                         source_job_poll_in_flight = false;
                         let job_kind = match &outcome {
                             ClientOutcome::Ok(job) => Some(job.kind.clone()),
@@ -909,6 +1018,19 @@ fn run_connected_session(
                         if let Some(error) = &sources_view.last_error {
                             feedback = Some(error.safe_label());
                         }
+                    } else if let Some(kind) = pending_assistant_job_kind.take() {
+                        match outcome {
+                            ClientOutcome::Ok(accepted) => {
+                                assistant_job = Some((accepted.job_id, kind));
+                                feedback = Some("Assistant action started".to_owned());
+                            }
+                            ClientOutcome::Problem(problem) => {
+                                feedback = Some(problem.safe_label());
+                            }
+                            ClientOutcome::Transport(error) => {
+                                feedback = Some(error.safe_label().to_owned());
+                            }
+                        }
                     }
                 }
                 WorkerResult::Sources(outcome) => {
@@ -940,6 +1062,35 @@ fn run_connected_session(
                         }
                         if let Some(error) = &sources_view.last_error {
                             feedback = Some(error.safe_label());
+                        }
+                    }
+                }
+                WorkerResult::SourceRefineSuggestion(outcome) => match outcome {
+                    ClientOutcome::Ok(value) => {
+                        sources_view.active_refine_suggestion = Some(value);
+                        feedback =
+                            Some("Source refinement is ready for approval or rejection".to_owned());
+                    }
+                    ClientOutcome::Problem(problem) => feedback = Some(problem.safe_label()),
+                    ClientOutcome::Transport(error) => {
+                        feedback = Some(error.safe_label().to_owned())
+                    }
+                },
+                WorkerResult::SourceMutation(outcome) => {
+                    source_mutation_pending = false;
+                    match *outcome {
+                        ClientOutcome::Ok(workflow) => {
+                            sources_view.load_candidates_from(&workflow);
+                            sources_view.active_detail = None;
+                            sources_view.active_refine_suggestion = None;
+                            sources_view.pending_delete_confirmation = None;
+                            current_workflow = Some(workflow);
+                            source_editor_active = false;
+                            feedback = Some("Source change saved".to_owned());
+                        }
+                        ClientOutcome::Problem(problem) => feedback = Some(problem.safe_label()),
+                        ClientOutcome::Transport(error) => {
+                            feedback = Some(error.safe_label().to_owned())
                         }
                     }
                 }
@@ -1078,6 +1229,102 @@ fn run_connected_session(
                         }
                     }
                 }
+                WorkerResult::AssistantSelected(outcome) => {
+                    assistant_selection_pending = false;
+                    match *outcome {
+                        ClientOutcome::Ok(workflow) => {
+                            let backend = workflow.assistant_backend_id.clone();
+                            compose_view.load_from_canonical(&workflow);
+                            current_workflow = Some(workflow);
+                            let _ = worker.try_send(Intent::SavePreferences {
+                                last_language: preferences
+                                    .as_ref()
+                                    .and_then(|value| value.last_language.clone()),
+                                last_assistant_backend_id: backend,
+                            });
+                            feedback =
+                                Some("Assistant backend selected; no content was sent".to_owned());
+                        }
+                        ClientOutcome::Problem(problem) => feedback = Some(problem.safe_label()),
+                        ClientOutcome::Transport(error) => {
+                            feedback = Some(error.safe_label().to_owned())
+                        }
+                    }
+                }
+                WorkerResult::MemoryReview(outcome) => {
+                    memory_review_pending = false;
+                    match outcome {
+                        ClientOutcome::Ok(review) => assistant_view.load_memory_review(review),
+                        ClientOutcome::Problem(problem) => feedback = Some(problem.safe_label()),
+                        ClientOutcome::Transport(error) => {
+                            feedback = Some(error.safe_label().to_owned())
+                        }
+                    }
+                }
+                WorkerResult::MemoryReviewSaved(outcome) => {
+                    memory_review_pending = false;
+                    match *outcome {
+                        ClientOutcome::Ok(workflow) => {
+                            let workflow_id = workflow.id.clone();
+                            compose_view.load_from_canonical(&workflow);
+                            current_workflow = Some(workflow);
+                            let _ = worker.try_send(Intent::GetMemoryReview { workflow_id });
+                            feedback = Some("Reviewed memories confirmed".to_owned());
+                        }
+                        ClientOutcome::Problem(problem) => feedback = Some(problem.safe_label()),
+                        ClientOutcome::Transport(error) => {
+                            feedback = Some(error.safe_label().to_owned())
+                        }
+                    }
+                }
+                WorkerResult::DraftResult(outcome) => match outcome {
+                    ClientOutcome::Ok(draft) => {
+                        assistant_view.draft_result = Some(draft);
+                        feedback = Some("Assistant draft is available".to_owned());
+                    }
+                    ClientOutcome::Problem(problem) => feedback = Some(problem.safe_label()),
+                    ClientOutcome::Transport(error) => {
+                        feedback = Some(error.safe_label().to_owned())
+                    }
+                },
+                WorkerResult::ParagraphSuggestions(outcome) => match outcome {
+                    ClientOutcome::Ok(value) => assistant_view.suggestions = value.suggestions,
+                    ClientOutcome::Problem(problem) => feedback = Some(problem.safe_label()),
+                    ClientOutcome::Transport(error) => {
+                        feedback = Some(error.safe_label().to_owned())
+                    }
+                },
+                WorkerResult::ParagraphSuggestion(outcome) => match outcome {
+                    ClientOutcome::Ok(value) => assistant_view.active_suggestion = Some(value),
+                    ClientOutcome::Problem(problem) => feedback = Some(problem.safe_label()),
+                    ClientOutcome::Transport(error) => {
+                        feedback = Some(error.safe_label().to_owned())
+                    }
+                },
+                WorkerResult::ParagraphSuggestionResolved(outcome) => match *outcome {
+                    ClientOutcome::Ok(workflow) => {
+                        compose_view.load_from_canonical(&workflow);
+                        draft_editor = DraftEditor::new(&compose_view.text);
+                        let workflow_id = workflow.id.clone();
+                        current_workflow = Some(workflow);
+                        assistant_view.active_suggestion = None;
+                        let _ = worker.try_send(Intent::GetParagraphSuggestions { workflow_id });
+                        feedback = Some("Paragraph suggestion resolved".to_owned());
+                    }
+                    ClientOutcome::Problem(problem) => feedback = Some(problem.safe_label()),
+                    ClientOutcome::Transport(error) => {
+                        feedback = Some(error.safe_label().to_owned())
+                    }
+                },
+                WorkerResult::JobCancelled(outcome) => match outcome {
+                    ClientOutcome::Ok(()) => {
+                        feedback = Some("Assistant cancellation requested".to_owned())
+                    }
+                    ClientOutcome::Problem(problem) => feedback = Some(problem.safe_label()),
+                    ClientOutcome::Transport(error) => {
+                        feedback = Some(error.safe_label().to_owned())
+                    }
+                },
             }
         }
 
@@ -1106,6 +1353,7 @@ fn run_connected_session(
             *in_flight = true;
         }
         if !source_job_poll_in_flight
+            && !assistant_job_poll_in_flight
             && !recovery_job
                 .as_ref()
                 .is_some_and(|(_, in_flight)| *in_flight)
@@ -1121,12 +1369,37 @@ fn run_connected_session(
         {
             source_job_poll_in_flight = true;
         }
+        if !assistant_job_poll_in_flight
+            && !source_job_poll_in_flight
+            && let Some((job_id, _)) = &assistant_job
+            && worker
+                .try_send(Intent::PollJob {
+                    job_id: job_id.clone(),
+                })
+                .is_ok()
+        {
+            assistant_job_poll_in_flight = true;
+        }
 
         status_line.ime = ime_tracker.tick(std::time::Instant::now());
         status_line.diary_day = current_workflow
             .as_ref()
             .map(|workflow| workflow.diary_day.clone())
             .or_else(|| selected_day.clone());
+        let selected_backend_label = current_workflow
+            .as_ref()
+            .and_then(|workflow| workflow.assistant_backend_id.as_deref())
+            .and_then(|id| {
+                assistant_view
+                    .backends
+                    .iter()
+                    .find(|backend| backend.id == id)
+            })
+            .map_or_else(
+                || "manual".to_owned(),
+                |backend| format!("{} · {}", backend.display_label, backend.composition_path),
+            );
+        status_line.action_hint = Some(format!("{selected_backend_label} | Ctrl-D: quit"));
 
         let stage_model = map_workflow(current_workflow.as_ref(), false);
         let can_mutate = authority.mutations_enabled()
@@ -1172,8 +1445,8 @@ fn run_connected_session(
         if stage_model.progress_of(current_stage) == Progress::Locked {
             current_stage = stage_model.default_current;
         }
-        let compose_resources =
-            compose_resources(current_workflow.as_ref(), compose_view.is_dirty());
+        let (compose_resources, assistant_resources) =
+            assistant_view.resources(current_workflow.as_ref(), compose_view.is_dirty());
         let visible_resource_count = match current_stage {
             Stage::Start => start_view.workflows.len(),
             Stage::Sources => sources_view.candidates.len(),
@@ -1194,6 +1467,9 @@ fn run_connected_session(
         );
 
         let mut displayed_status = work_status.clone();
+        displayed_status.current_work = assistant_view
+            .job_label()
+            .or_else(|| Some(format!("Composition: {selected_backend_label}")));
         displayed_status.connection_and_save_safety = Some(if save_in_flight.is_some() {
             "Saving Draft...".to_owned()
         } else if compose_view.is_dirty() {
@@ -1211,6 +1487,15 @@ fn run_connected_session(
             format!("Extra source date: {source_date_draft}")
         } else if empty_selection_confirmation {
             "Continue without notes? Enter confirms; Esc cancels".to_owned()
+        } else if let Some(source_id) = &sources_view.pending_delete_confirmation {
+            let name = sources_view
+                .active_detail
+                .as_ref()
+                .filter(|detail| &detail.id == source_id)
+                .map_or(source_id.as_str(), |detail| {
+                    detail.source_note_name.as_str()
+                });
+            format!("Delete {name} and linked audio? Enter confirms; Esc cancels")
         } else if quit_confirmation {
             "Draft is not safely saved. Ctrl-D again to quit; Esc cancels".to_owned()
         } else if let Some(index) = discard_confirmation {
@@ -1257,6 +1542,8 @@ fn run_connected_session(
                 start_view.next_cursor.is_some(),
                 capabilities.as_ref(),
                 setup_check.as_ref(),
+                preferences.as_ref(),
+                &assistant_view,
                 authority.mutations_enabled(),
                 start_pending,
                 more_pending,
@@ -1278,6 +1565,8 @@ fn run_connected_session(
                 &focus,
                 current_workflow.as_ref(),
                 &compose_view,
+                &assistant_view,
+                assistant_resources.get(compose_active_resource),
                 confirmed_source_detail.as_ref(),
                 settings_pending,
                 manual_composition_pending,
@@ -1330,7 +1619,9 @@ fn run_connected_session(
             };
             let main_height = areas.main_pane.height.saturating_sub(2);
             main_scroll = ensure_selected_line_visible(&main_body, main_scroll, main_height);
-            if current_stage == Stage::Compose && editor_active && compose_active_resource == 0 {
+            if (current_stage == Stage::Compose && editor_active && compose_active_resource == 0)
+                || (current_stage == Stage::Sources && source_editor_active)
+            {
                 frame.render_widget(
                     DraftEditorPane::new(&draft_editor, focus.zone == FocusZone::Main)
                         .palette(palette),
@@ -1417,7 +1708,24 @@ fn run_connected_session(
                 current_stage = adjacent_accessible_stage(&stage_model, current_stage, true);
             }
             InputPoll::Ctrl('s') if !command_line_active => {
-                if current_stage == Stage::Compose && compose_view.is_dirty() {
+                if current_stage == Stage::Sources
+                    && source_editor_active
+                    && !source_mutation_pending
+                {
+                    if let (Some(workflow), Some(detail)) =
+                        (&current_workflow, &sources_view.active_detail)
+                    {
+                        source_mutation_pending = worker
+                            .try_send(Intent::EditSourceBody {
+                                workflow_id: workflow.id.clone(),
+                                source_id: detail.id.clone(),
+                                revision: workflow.revision,
+                                text: draft_editor.text().to_owned(),
+                                digest: detail.content_digest.clone(),
+                            })
+                            .is_ok();
+                    }
+                } else if current_stage == Stage::Compose && compose_view.is_dirty() {
                     save_requested = true;
                     feedback = Some("Draft save requested".to_owned());
                 } else {
@@ -1581,6 +1889,29 @@ fn run_connected_session(
                         .is_ok();
                 }
             }
+            InputPoll::Event(InputEvent::Enter)
+                if sources_view.pending_delete_confirmation.is_some() =>
+            {
+                let source_id = sources_view
+                    .pending_delete_confirmation
+                    .take()
+                    .unwrap_or_default();
+                if let Some(workflow) = &current_workflow {
+                    source_mutation_pending = worker
+                        .try_send(Intent::DeleteSource {
+                            workflow_id: workflow.id.clone(),
+                            source_id,
+                            revision: workflow.revision,
+                        })
+                        .is_ok();
+                }
+            }
+            InputPoll::Event(InputEvent::Esc)
+                if sources_view.pending_delete_confirmation.is_some() =>
+            {
+                sources_view.pending_delete_confirmation = None;
+                feedback = Some("Source deletion cancelled".to_owned());
+            }
             InputPoll::Event(InputEvent::Esc) if empty_selection_confirmation => {
                 empty_selection_confirmation = false;
                 feedback = Some("Continue without notes cancelled".to_owned());
@@ -1615,6 +1946,15 @@ fn run_connected_session(
                 editor_active = false;
                 save_requested = compose_view.is_dirty();
                 feedback = Some("Left Draft editor; pending edits will be flushed".to_owned());
+            }
+            InputPoll::Event(InputEvent::Esc)
+                if source_editor_active && current_stage == Stage::Sources =>
+            {
+                source_editor_active = false;
+                feedback = Some("Source edit cancelled".to_owned());
+            }
+            InputPoll::Event(event) if source_editor_active && current_stage == Stage::Sources => {
+                let _ = draft_editor.handle_input(&event);
             }
             InputPoll::Event(event) if editor_active && current_stage == Stage::Compose => {
                 let changed = draft_editor.handle_input(&event);
@@ -1700,40 +2040,113 @@ fn run_connected_session(
                 }
                 FocusZone::Resources if current_stage == Stage::Compose => {
                     compose_active_resource = focus.resource_index;
-                    if focus.resource_index == 0 {
-                        confirmed_source_detail = None;
-                        if current_workflow
-                            .as_ref()
-                            .is_some_and(|workflow| workflow.state == "composing")
-                        {
-                            editor_active = true;
-                            focus.zone = FocusZone::Main;
-                        } else if can_mutate
-                            && !manual_composition_pending
-                            && let Some(workflow) = &current_workflow
-                        {
-                            manual_composition_pending = worker
-                                .try_send(Intent::BeginManualComposition {
-                                    workflow_id: workflow.id.clone(),
-                                    revision: workflow.revision,
-                                })
-                                .is_ok();
+                    match assistant_resources.get(focus.resource_index) {
+                        Some(AssistantResource::Draft) => {
+                            confirmed_source_detail = None;
+                            assistant_view.active_suggestion = None;
+                            if current_workflow
+                                .as_ref()
+                                .is_some_and(|workflow| workflow.state == "composing")
+                            {
+                                editor_active = true;
+                                focus.zone = FocusZone::Main;
+                            } else if can_mutate
+                                && !manual_composition_pending
+                                && let Some(workflow) = &current_workflow
+                            {
+                                manual_composition_pending = worker
+                                    .try_send(Intent::BeginManualComposition {
+                                        workflow_id: workflow.id.clone(),
+                                        revision: workflow.revision,
+                                    })
+                                    .is_ok();
+                            }
                         }
-                    } else if !confirmed_source_pending
-                        && let (Some(workflow), Some(candidate)) = (
-                            current_workflow.as_ref(),
-                            confirmed_candidate_at(current_workflow.as_ref(), focus.resource_index),
-                        )
-                        && worker
-                            .try_send(Intent::ConfirmedSourceDetail {
-                                workflow_id: workflow.id.clone(),
-                                source_id: candidate.id.clone(),
-                            })
-                            .is_ok()
-                    {
-                        confirmed_source_pending = true;
-                        editor_active = false;
-                        save_requested = compose_view.is_dirty();
+                        Some(AssistantResource::MemoryReview) => {
+                            confirmed_source_detail = None;
+                            editor_active = false;
+                            if !memory_review_pending && let Some(workflow) = &current_workflow {
+                                memory_review_pending = worker
+                                    .try_send(Intent::GetMemoryReview {
+                                        workflow_id: workflow.id.clone(),
+                                    })
+                                    .is_ok();
+                            }
+                        }
+                        Some(AssistantResource::MemoryCandidate(index)) => {
+                            if let Some(id) = assistant_view
+                                .memory_review
+                                .as_ref()
+                                .and_then(|review| review.candidates.get(*index))
+                                .map(|candidate| candidate.id.clone())
+                            {
+                                assistant_view.toggle_memory(&id);
+                                feedback = Some(
+                                    "Memory inclusion changed; confirm review to persist"
+                                        .to_owned(),
+                                );
+                            }
+                        }
+                        Some(AssistantResource::Backend(index))
+                            if can_mutate && !assistant_selection_pending =>
+                        {
+                            if let (Some(workflow), Some(backend)) = (
+                                current_workflow.as_ref(),
+                                assistant_view.backends.get(*index),
+                            ) {
+                                if backend.available {
+                                    assistant_selection_pending = worker
+                                        .try_send(Intent::SelectAssistant {
+                                            workflow_id: workflow.id.clone(),
+                                            revision: workflow.revision,
+                                            backend_id: Some(backend.id.clone()),
+                                        })
+                                        .is_ok();
+                                } else {
+                                    feedback = Some(
+                                        "That backend is unavailable; nothing was sent".to_owned(),
+                                    );
+                                }
+                            }
+                        }
+                        Some(AssistantResource::ConfirmedSource(index))
+                            if !confirmed_source_pending =>
+                        {
+                            let candidate = current_workflow.as_ref().and_then(|workflow| {
+                                workflow
+                                    .candidates
+                                    .iter()
+                                    .filter(|candidate| candidate.selected)
+                                    .nth(*index)
+                            });
+                            if let (Some(workflow), Some(candidate)) =
+                                (current_workflow.as_ref(), candidate)
+                                && worker
+                                    .try_send(Intent::ConfirmedSourceDetail {
+                                        workflow_id: workflow.id.clone(),
+                                        source_id: candidate.id.clone(),
+                                    })
+                                    .is_ok()
+                            {
+                                confirmed_source_pending = true;
+                                editor_active = false;
+                                save_requested = compose_view.is_dirty();
+                            }
+                        }
+                        Some(AssistantResource::Suggestion(index)) => {
+                            if let (Some(workflow), Some(suggestion)) = (
+                                current_workflow.as_ref(),
+                                assistant_view.suggestions.get(*index),
+                            ) {
+                                let _ = worker.try_send(Intent::GetParagraphSuggestion {
+                                    workflow_id: workflow.id.clone(),
+                                    suggestion_id: suggestion.id.clone(),
+                                });
+                                editor_active = false;
+                                confirmed_source_detail = None;
+                            }
+                        }
+                        _ => {}
                     }
                 }
                 FocusZone::Main if current_stage == Stage::Start => {
@@ -1879,7 +2292,53 @@ fn run_connected_session(
                                 source_detail_pending_index = Some(focus.resource_index);
                             }
                         }
-                        6 if can_mutate
+                        6 if can_mutate && !source_mutation_pending && assistant_job.is_none() => {
+                            if let (Some(workflow), Some(detail)) =
+                                (&current_workflow, &sources_view.active_detail)
+                            {
+                                pending_assistant_job_kind =
+                                    Some("assistant-source-refine".to_owned());
+                                if worker
+                                    .try_send(Intent::RefineSource {
+                                        workflow_id: workflow.id.clone(),
+                                        source_id: detail.id.clone(),
+                                        revision: workflow.revision,
+                                        digest: detail.content_digest.clone(),
+                                    })
+                                    .is_err()
+                                {
+                                    pending_assistant_job_kind = None;
+                                }
+                            }
+                        }
+                        7 | 8 if can_mutate && !source_mutation_pending => {
+                            if let (Some(workflow), Some(suggestion)) =
+                                (&current_workflow, &sources_view.active_refine_suggestion)
+                            {
+                                source_mutation_pending = worker
+                                    .try_send(Intent::ResolveSourceRefine {
+                                        workflow_id: workflow.id.clone(),
+                                        source_id: suggestion.source_id.clone(),
+                                        revision: workflow.revision,
+                                        accept: focus.main_control_index == 7,
+                                        digest: suggestion.binding_digest.clone(),
+                                    })
+                                    .is_ok();
+                            }
+                        }
+                        9 if can_mutate && !source_mutation_pending => {
+                            if let Some(detail) = &sources_view.active_detail {
+                                draft_editor = DraftEditor::new(&detail.body);
+                                source_editor_active = true;
+                                focus.zone = FocusZone::Main;
+                            }
+                        }
+                        10 if can_mutate && !source_mutation_pending => {
+                            if let Some(detail) = &sources_view.active_detail {
+                                sources_view.pending_delete_confirmation = Some(detail.id.clone());
+                            }
+                        }
+                        11 if can_mutate
                             && no_source_job
                             && sources_view.all_included_reviewed()
                             && !source_confirmation_pending =>
@@ -1898,14 +2357,14 @@ fn run_connected_session(
                                     .is_ok();
                             }
                         }
-                        7 if can_mutate
+                        12 if can_mutate
                             && no_source_job
                             && sources_view.included.is_empty()
                             && !source_confirmation_pending =>
                         {
                             empty_selection_confirmation = true;
                         }
-                        8 if !source_page_pending => {
+                        13 if !source_page_pending => {
                             if let (Some(workflow), Some(cursor)) =
                                 (current_workflow.as_ref(), sources_view.next_cursor.clone())
                             {
@@ -1918,7 +2377,7 @@ fn run_connected_session(
                                     .is_ok();
                             }
                         }
-                        9 => current_stage = Stage::Start,
+                        14 => current_stage = Stage::Start,
                         _ => {
                             feedback =
                                 Some("That source action is currently unavailable".to_owned());
@@ -1984,6 +2443,146 @@ fn run_connected_session(
                             editor_active = false;
                             current_stage = Stage::Review;
                         }
+                        10 if can_mutate && assistant_job.is_none() => {
+                            if let Some(workflow) = &current_workflow {
+                                pending_assistant_job_kind =
+                                    Some("assistant-memory-extraction".to_owned());
+                                if worker
+                                    .try_send(Intent::ExtractMemories {
+                                        workflow_id: workflow.id.clone(),
+                                        revision: workflow.revision,
+                                    })
+                                    .is_err()
+                                {
+                                    pending_assistant_job_kind = None;
+                                }
+                            }
+                        }
+                        11 if can_mutate && !memory_review_pending => {
+                            if let (Some(workflow), Some(review)) =
+                                (&current_workflow, &assistant_view.memory_review)
+                                && let Some(candidate_set_id) = &review.candidate_set_id
+                            {
+                                memory_review_pending = worker
+                                    .try_send(Intent::SaveMemoryReview {
+                                        workflow_id: workflow.id.clone(),
+                                        revision: workflow.revision,
+                                        candidate_set_id: candidate_set_id.clone(),
+                                        reviewed_memory: assistant_view
+                                            .reviewed_memory_draft
+                                            .clone(),
+                                    })
+                                    .is_ok();
+                            }
+                        }
+                        12 if can_mutate && assistant_job.is_none() => {
+                            if compose_view.is_dirty() || save_in_flight.is_some() {
+                                save_requested = true;
+                                feedback = Some(
+                                    "Drafting waits until the local Draft is flushed; activate again after save"
+                                        .to_owned(),
+                                );
+                            } else if let Some(workflow) = &current_workflow {
+                                pending_assistant_job_kind = Some("assistant-draft".to_owned());
+                                if worker
+                                    .try_send(Intent::RequestDraft {
+                                        workflow_id: workflow.id.clone(),
+                                        revision: workflow.revision,
+                                        include_prior_draft: !compose_view.text.is_empty(),
+                                    })
+                                    .is_err()
+                                {
+                                    pending_assistant_job_kind = None;
+                                }
+                            }
+                        }
+                        13 if can_mutate && assistant_job.is_none() => {
+                            if compose_view.is_dirty() || save_in_flight.is_some() {
+                                save_requested = true;
+                                feedback = Some(
+                                    "Paragraph review waits until the local Draft is flushed; activate again after save"
+                                        .to_owned(),
+                                );
+                            } else if let (Some(workflow), Some((start, end, paragraph))) =
+                                (&current_workflow, draft_editor.focused_paragraph())
+                            {
+                                pending_assistant_job_kind =
+                                    Some("assistant-paragraph-review".to_owned());
+                                let request = StartParagraphReviewRequest {
+                                    buffer_etag: buffer_etag(compose_view.buffer_version),
+                                    range_start: start,
+                                    range_end: end,
+                                    selected_text_digest: Digest::of_bytes(paragraph.as_bytes())
+                                        .to_string(),
+                                };
+                                if worker
+                                    .try_send(Intent::ReviewParagraph {
+                                        workflow_id: workflow.id.clone(),
+                                        revision: workflow.revision,
+                                        request,
+                                    })
+                                    .is_err()
+                                {
+                                    pending_assistant_job_kind = None;
+                                }
+                            }
+                        }
+                        14 => {
+                            if let Some((job_id, _)) = &assistant_job {
+                                let _ = worker.try_send(Intent::CancelJob {
+                                    job_id: job_id.clone(),
+                                });
+                            } else {
+                                feedback = Some("No assistant action is running".to_owned());
+                            }
+                        }
+                        15 => {
+                            let _ = worker.try_send(Intent::GetAssistantBackends);
+                            if let Some(workflow) = &current_workflow {
+                                let _ = worker.try_send(Intent::GetMemoryReview {
+                                    workflow_id: workflow.id.clone(),
+                                });
+                                let _ = worker.try_send(Intent::GetDraftResult {
+                                    workflow_id: workflow.id.clone(),
+                                });
+                                let _ = worker.try_send(Intent::GetParagraphSuggestions {
+                                    workflow_id: workflow.id.clone(),
+                                });
+                            }
+                        }
+                        16..=17 if can_mutate => {
+                            if let (Some(workflow), Some(suggestion)) =
+                                (&current_workflow, &assistant_view.active_suggestion)
+                            {
+                                if suggestion.stale || suggestion.resolution.is_some() {
+                                    feedback = Some(
+                                        "That suggestion is stale or already resolved; it is inspect-only"
+                                            .to_owned(),
+                                    );
+                                } else {
+                                    let request = ResolveParagraphSuggestionRequest {
+                                        resolution: if focus.main_control_index == 16 {
+                                            "accept"
+                                        } else {
+                                            "reject"
+                                        }
+                                        .to_owned(),
+                                        buffer_etag: buffer_etag(suggestion.buffer_version),
+                                        range_start: suggestion.range_start,
+                                        range_end: suggestion.range_end,
+                                        selected_text_digest: suggestion
+                                            .selected_text_digest
+                                            .clone(),
+                                    };
+                                    let _ = worker.try_send(Intent::ResolveParagraphSuggestion {
+                                        workflow_id: workflow.id.clone(),
+                                        suggestion_id: suggestion.id.clone(),
+                                        revision: workflow.revision,
+                                        request,
+                                    });
+                                }
+                            }
+                        }
                         _ => feedback = Some("That Compose action is unavailable".to_owned()),
                     }
                 }
@@ -2032,50 +2631,17 @@ fn run_connected_session(
 }
 
 const START_CONTROL_COUNT: usize = 9;
-const SOURCES_CONTROL_COUNT: usize = 10;
-const COMPOSE_CONTROL_COUNT: usize = 10;
+const SOURCES_CONTROL_COUNT: usize = 15;
+const COMPOSE_CONTROL_COUNT: usize = 18;
 const REVIEW_CONTROL_COUNT: usize = 4;
-
-fn compose_resources(workflow: Option<&WorkflowDto>, dirty: bool) -> ResourcesSidebarModel {
-    let mut rows = vec![ResourceRow {
-        label: "Draft".to_owned(),
-        state: if dirty { "unsaved" } else { "saved" }.to_owned(),
-        indent: 0,
-    }];
-    if let Some(workflow) = workflow {
-        rows.extend(
-            workflow
-                .candidates
-                .iter()
-                .filter(|candidate| candidate.selected)
-                .map(|candidate| ResourceRow {
-                    label: candidate.source_note_name.clone(),
-                    state: "confirmed source".to_owned(),
-                    indent: 0,
-                }),
-        );
-    }
-    ResourcesSidebarModel { rows }
-}
-
-fn confirmed_candidate_at(
-    workflow: Option<&WorkflowDto>,
-    resource_index: usize,
-) -> Option<&diary_control_contract::SourceCandidateDto> {
-    resource_index.checked_sub(1).and_then(|source_index| {
-        workflow?
-            .candidates
-            .iter()
-            .filter(|candidate| candidate.selected)
-            .nth(source_index)
-    })
-}
 
 #[allow(clippy::too_many_arguments)]
 fn compose_screen_body(
     focus: &FocusModel,
     workflow: Option<&WorkflowDto>,
     compose: &ComposeViewModel,
+    assistant: &AssistantViewModel,
+    active_resource: Option<&AssistantResource>,
     source: Option<&SourceDetailDto>,
     settings_pending: bool,
     manual_pending: bool,
@@ -2099,6 +2665,12 @@ fn compose_screen_body(
         .unwrap_or("not selected");
     let style = workflow.map_or("concise", |value| value.style.as_str());
     let state = workflow.map_or("unavailable", |value| value.state.as_str());
+    let backend = workflow
+        .and_then(|value| value.assistant_backend_id.as_deref())
+        .unwrap_or("manual");
+    let path = workflow
+        .and_then(|value| value.composition_path.as_deref())
+        .unwrap_or("manual");
     let save = if save_pending {
         "saving"
     } else if compose.is_dirty() {
@@ -2107,7 +2679,7 @@ fn compose_screen_body(
         "saved"
     };
     let mut body = format!(
-        "Workflow: {state}\nWriting language: {language}\nStyle: {style}\nDraft: {save}\n\n{} Language: US English\n{} Language: South Korean Korean\n{} Style: concise\n{} Style: standard\n{} Style: reflective\n{} Open manual Draft editor{}\n{} Save/flush Draft\n{} Keep local Draft after conflict\n{} Use server Draft after conflict\n{} Review complete entry",
+        "Workflow: {state}\nWriting language: {language}\nStyle: {style}\nAssistant: {backend} · {path}\nDraft: {save}\n\n{} Language: US English\n{} Language: South Korean Korean\n{} Style: concise\n{} Style: standard\n{} Style: reflective\n{} Open manual Draft editor{}\n{} Save/flush Draft\n{} Keep local Draft after conflict\n{} Use server Draft after conflict\n{} Review complete entry\n{} Extract memories\n{} Confirm reviewed memories\n{} Draft with selected assistant\n{} Review focused paragraph\n{} Cancel assistant action\n{} Refresh assistant resources\n{} Accept current suggestion\n{} Reject current suggestion",
         marker(0),
         marker(1),
         marker(2),
@@ -2119,6 +2691,14 @@ fn compose_screen_body(
         marker(7),
         marker(8),
         marker(9),
+        marker(10),
+        marker(11),
+        marker(12),
+        marker(13),
+        marker(14),
+        marker(15),
+        marker(16),
+        marker(17),
     );
     if settings_pending {
         body.push_str("\n\nWriting settings are being saved.");
@@ -2131,6 +2711,29 @@ fn compose_screen_body(
         body.push_str("\n\nChoose Keep local or Use server; no merge or replay is automatic.");
     } else {
         body.push_str("\n\nEnter opens the selected control. Once the editor opens, Esc leaves it and flushes pending edits.");
+    }
+    if matches!(
+        active_resource,
+        Some(AssistantResource::MemoryReview | AssistantResource::MemoryCandidate(_))
+    ) {
+        body.push_str("\n\n--- Reviewed memories (editable selection) ---\n");
+        body.push_str(&assistant.reviewed_memory_draft);
+        body.push_str("\n\nActivate a candidate in Resources to include/exclude it, then Confirm reviewed memories.");
+    }
+    if let Some(draft) = &assistant.draft_result {
+        body.push_str("\n\n--- Current assistant draft artifact");
+        if draft.stale {
+            body.push_str(" (stale; inspect only)");
+        }
+        body.push_str(" ---\n");
+        body.push_str(&draft.text);
+    }
+    if let Some(suggestion) = &assistant.active_suggestion {
+        body.push_str("\n\n--- Paragraph suggestion ---\n");
+        body.push_str(&suggestion.replacement);
+        if suggestion.stale {
+            body.push_str("\n(stale; cannot apply)");
+        }
     }
     body
 }
@@ -2210,6 +2813,8 @@ fn start_screen_body(
     has_more: bool,
     capabilities: Option<&CapabilitiesDto>,
     setup: Option<&SetupCheckDto>,
+    preferences: Option<&PreferencesDto>,
+    assistant: &AssistantViewModel,
     mutations_enabled: bool,
     start_pending: bool,
     more_pending: bool,
@@ -2258,8 +2863,26 @@ fn start_screen_body(
     } else {
         "paused during canonical reload"
     };
+    let selected_assistant = preferences
+        .and_then(|value| value.last_assistant_backend_id.as_deref())
+        .and_then(|id| assistant.backends.iter().find(|backend| backend.id == id))
+        .map_or_else(
+            || "manual".to_owned(),
+            |backend| {
+                format!(
+                    "{} · {} ({})",
+                    backend.display_label,
+                    backend.composition_path,
+                    if backend.available {
+                        "available"
+                    } else {
+                        "unavailable"
+                    }
+                )
+            },
+        );
     let mut body = format!(
-        "Setup: {setup_label}\nManual workflow: {manual}\nActions: {action_state}\nSelected workflow: {selected}\n\n{} Day: {day}\n{} Start/resume chosen day{}\n{} Resume selected workflow\n{} Discard selected workflow{}\n{} Load more workflows{}\n{} Retry/refresh\n{} Help\n{} Save/flush (Compose only)\n{} Quit",
+        "Setup: {setup_label}\nManual workflow: {manual}\nAssistant: {selected_assistant}\nActions: {action_state}\nSelected workflow: {selected}\n\n{} Day: {day}\n{} Start/resume chosen day{}\n{} Resume selected workflow\n{} Discard selected workflow{}\n{} Load more workflows{}\n{} Retry/refresh\n{} Help\n{} Save/flush (Compose only)\n{} Quit",
         marker(0),
         marker(1),
         if start_pending { " (working)" } else { "" },
@@ -2339,7 +2962,7 @@ fn sources_screen_body(
         |percent| format!("{progress} · {percent}%"),
     );
     let mut body = format!(
-        "Active candidate: {active_name}\nDirectory date: {directory_day}\nHeader date: {header_day}\nAvailability: {availability}\nWarning: {warning}\nIncluded/reviewed: {}/{}\nWork: {progress}\n\n{} Discover three-day window\n{} Extra date: {extra_day}\n{} Discover extra date\n{} Include/exclude active candidate\n{} Prepare included sources\n{} Inspect active prepared source\n{} Confirm reviewed source set\n{} Continue without notes\n{} Load more candidates{}\n{} Back to Start",
+        "Active candidate: {active_name}\nDirectory date: {directory_day}\nHeader date: {header_day}\nAvailability: {availability}\nWarning: {warning}\nIncluded/reviewed: {}/{}\nWork: {progress}\n\n{} Discover three-day window\n{} Extra date: {extra_day}\n{} Discover extra date\n{} Include/exclude active candidate\n{} Prepare included sources\n{} Inspect active prepared source\n{} Refine inspected source with assistant\n{} Approve refinement\n{} Reject refinement\n{} Edit inspected source (Ctrl-S saves)\n{} Delete inspected source and linked audio\n{} Confirm reviewed source set\n{} Continue without notes\n{} Load more candidates{}\n{} Back to Start",
         sources.included.len(),
         sources.reviewed.len(),
         marker(0),
@@ -2351,16 +2974,25 @@ fn sources_screen_body(
         marker(6),
         marker(7),
         marker(8),
+        marker(9),
+        marker(10),
+        marker(11),
+        marker(12),
+        marker(13),
         if sources.next_cursor.is_some() {
             ""
         } else {
             " (no more)"
         },
-        marker(9),
+        marker(14),
     );
     if let Some(detail) = &sources.active_detail {
-        body.push_str("\n\n--- Read-only source text ---\n");
+        body.push_str("\n\n--- Source text ---\n");
         body.push_str(&detail.body);
+    }
+    if let Some(suggestion) = &sources.active_refine_suggestion {
+        body.push_str("\n\n--- Suggested refinement ---\n");
+        body.push_str(&suggestion.suggested_body);
     }
     body
 }
@@ -2448,6 +3080,8 @@ mod start_screen_tests {
             false,
             Some(&capabilities),
             Some(&setup),
+            None,
+            &AssistantViewModel::default(),
             true,
             false,
             false,
@@ -2518,6 +3152,9 @@ mod start_screen_tests {
         assert!(body.contains("Header date: 2026-10-28"));
         assert!(body.contains("Included/reviewed: 1/1"));
         assert!(body.contains("synthetic source text"));
+        for action in ["Refine", "Approve", "Reject", "Edit", "Delete"] {
+            assert!(body.contains(action), "missing Sources action: {action}");
+        }
         assert!(sources.included.contains("src_1"));
     }
 
@@ -2563,15 +3200,12 @@ mod start_screen_tests {
     #[test]
     fn compose_resources_list_the_draft_and_only_confirmed_sources() {
         let workflow = composing_workflow();
-        let resources = compose_resources(Some(&workflow), true);
-        assert_eq!(resources.rows.len(), 2);
+        let (resources, kinds) = AssistantViewModel::default().resources(Some(&workflow), true);
+        assert_eq!(resources.rows.len(), 3);
         assert_eq!(resources.rows[0].label, "Draft");
         assert_eq!(resources.rows[0].state, "unsaved");
-        assert_eq!(resources.rows[1].label, "selected.md");
-        assert_eq!(
-            confirmed_candidate_at(Some(&workflow), 1).unwrap().id,
-            "selected"
-        );
+        assert_eq!(resources.rows[2].label, "selected.md");
+        assert!(matches!(kinds[2], AssistantResource::ConfirmedSource(0)));
     }
 
     #[test]
@@ -2589,6 +3223,8 @@ mod start_screen_tests {
             &FocusModel::default(),
             Some(&newer),
             &compose,
+            &AssistantViewModel::default(),
+            Some(&AssistantResource::Draft),
             None,
             false,
             false,
