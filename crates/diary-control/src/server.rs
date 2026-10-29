@@ -1584,7 +1584,7 @@ async fn get_job(
     let record = jobs
         .jobs
         .get(&id)
-        .ok_or_else(|| ApiError::new(StatusCode::NOT_FOUND, "job-not-found"))?;
+        .ok_or_else(|| ApiError::new(StatusCode::NOT_FOUND, JOB_NOT_FOUND))?;
     Ok(Json(job_dto(record)))
 }
 
@@ -1596,15 +1596,15 @@ async fn cancel_job(
     let record = jobs
         .jobs
         .get_mut(&id)
-        .ok_or_else(|| ApiError::new(StatusCode::NOT_FOUND, "job-not-found"))?;
-    if record.status == "queued" {
+        .ok_or_else(|| ApiError::new(StatusCode::NOT_FOUND, JOB_NOT_FOUND))?;
+    if record.status == job_status::QUEUED {
         record.cancelled.store(true, Ordering::Release);
         record
             .commit_state
             .store(COMMIT_CANCELLED, Ordering::Release);
-        record.status = "cancelled";
+        record.status = job_status::CANCELLED;
         record.expires_at_ms = now_ms().saturating_add(JOB_EXPIRY_MS);
-    } else if record.status == "running"
+    } else if record.status == job_status::RUNNING
         && record
             .commit_state
             .compare_exchange(
@@ -1616,7 +1616,7 @@ async fn cancel_job(
             .is_ok()
     {
         record.cancelled.store(true, Ordering::Release);
-        record.status = "cancellation-requested";
+        record.status = job_status::CANCELLATION_REQUESTED;
     }
     if let Some(handle) = record.result_handle.take() {
         jobs.preparations.remove(&handle);
@@ -1817,13 +1817,13 @@ fn new_job(state: &AppState, kind: &'static str, workflow_id: &str) -> Result<St
     let active = jobs
         .jobs
         .values()
-        .filter(|job| matches!(job.status, "queued" | "running" | "cancellation-requested"))
+        .filter(|job| job_status::is_active(job.status))
         .count();
     if is_assistant_job(kind)
         && jobs.jobs.values().any(|job| {
             job.workflow_id == workflow_id
                 && is_assistant_job(job.kind)
-                && matches!(job.status, "queued" | "running" | "cancellation-requested")
+                && job_status::is_active(job.status)
         })
     {
         return Err(ApiError::new(
@@ -1843,7 +1843,7 @@ fn new_job(state: &AppState, kind: &'static str, workflow_id: &str) -> Result<St
         JobRecord {
             id: id.clone(),
             kind,
-            status: "queued",
+            status: job_status::QUEUED,
             workflow_id: workflow_id.to_owned(),
             progress: 0,
             result_handle: None,
@@ -1880,7 +1880,7 @@ fn ensure_no_assistant_job(state: &AppState, workflow_id: &str) -> Result<(), Ap
     if jobs.jobs.values().any(|job| {
         job.workflow_id == workflow_id
             && is_assistant_job(job.kind)
-            && matches!(job.status, "queued" | "running" | "cancellation-requested")
+            && job_status::is_active(job.status)
     }) {
         Err(ApiError::new(
             StatusCode::CONFLICT,
@@ -2155,17 +2155,14 @@ async fn run_prepare_job(
                 }
             };
             let expires = now_ms().saturating_add(JOB_EXPIRY_MS);
-            let mut jobs = match state.0.jobs.lock() {
-                Ok(jobs) => jobs,
-                Err(_) => return,
-            };
+            let mut jobs = lock_job_transitions(&state);
             if jobs
                 .jobs
                 .get(&job_id)
-                .is_some_and(|job| job.status == "cancellation-requested")
+                .is_some_and(|job| job.status == job_status::CANCELLATION_REQUESTED)
             {
                 if let Some(job) = jobs.jobs.get_mut(&job_id) {
-                    job.status = "cancelled";
+                    job.status = job_status::CANCELLED;
                     job.expires_at_ms = now_ms().saturating_add(JOB_EXPIRY_MS);
                 }
                 drop(jobs);
@@ -2190,7 +2187,7 @@ async fn run_prepare_job(
                 },
             );
             if let Some(job) = jobs.jobs.get_mut(&job_id) {
-                job.status = "completed";
+                job.status = job_status::COMPLETED;
                 job.progress = 100;
                 job.result_handle = Some(handle);
                 job.expires_at_ms = expires;
@@ -2215,22 +2212,22 @@ async fn run_prepare_job(
             );
         }
         Ok(Ok(Err(error))) => fail_job(&state, &job_id, error.code()),
-        _ => fail_job(&state, &job_id, "job-timeout"),
+        // The blocking task panicked or was aborted: not a timeout.
+        Ok(Err(_)) => fail_job(&state, &job_id, "internal-failure"),
+        Err(_) => fail_job(&state, &job_id, "job-timeout"),
     }
 }
 
 fn mark_running(state: &AppState, id: &str) -> bool {
     let kind = {
-        let Ok(mut jobs) = state.0.jobs.lock() else {
-            return false;
-        };
+        let mut jobs = lock_job_transitions(state);
         let Some(job) = jobs.jobs.get_mut(id) else {
             return false;
         };
-        if job.status != "queued" {
+        if job.status != job_status::QUEUED {
             return false;
         }
-        job.status = "running";
+        job.status = job_status::RUNNING;
         job.progress = 1;
         job.kind
     };
@@ -2258,22 +2255,20 @@ fn job_commit_state(state: &AppState, id: &str) -> Option<Arc<AtomicU8>> {
 
 fn finish_job(state: &AppState, id: &str, handle: Option<String>, error: Option<&'static str>) {
     let outcome = {
-        let Ok(mut jobs) = state.0.jobs.lock() else {
-            return;
-        };
+        let mut jobs = lock_job_transitions(state);
         let Some(job) = jobs.jobs.get_mut(id) else {
             return;
         };
-        if job.status == "cancellation-requested" {
-            job.status = "cancelled";
+        if job.status == job_status::CANCELLATION_REQUESTED {
+            job.status = job_status::CANCELLED;
             job.result_handle = None;
             job.expires_at_ms = now_ms().saturating_add(JOB_EXPIRY_MS);
             (job.kind, "cancelled")
         } else {
             let event = if error.is_some() {
-                "failed"
+                job_status::FAILED
             } else {
-                "completed"
+                job_status::COMPLETED
             };
             job.status = event;
             job.progress = 100;
@@ -2297,6 +2292,17 @@ fn fail_job(state: &AppState, id: &str, code: &'static str) {
     finish_job(state, id, None, Some(code));
 }
 
+/// Locks the job table for a lifecycle transition, recovering a poisoned
+/// guard. Giving up instead would strand the job `queued`/`running`, states
+/// `cleanup_job_state` never evicts, so it would hold capacity forever.
+fn lock_job_transitions(state: &AppState) -> std::sync::MutexGuard<'_, JobState> {
+    state
+        .0
+        .jobs
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
 fn cleanup_jobs(state: &AppState) {
     let now = now_ms();
     let Ok(mut jobs) = state.0.jobs.lock() else {
@@ -2315,10 +2321,8 @@ fn cleanup_job_state(jobs: &mut JobState, now: i64) {
     for handle in expired_handles {
         jobs.preparations.remove(&handle);
     }
-    jobs.jobs.retain(|_, job| {
-        job.expires_at_ms > now
-            || matches!(job.status, "queued" | "running" | "cancellation-requested")
-    });
+    jobs.jobs
+        .retain(|_, job| job.expires_at_ms > now || job_status::is_active(job.status));
 }
 
 fn take_preparation(

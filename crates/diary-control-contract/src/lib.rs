@@ -35,6 +35,35 @@ pub const MAX_SUBSCRIBERS: usize = 16;
 pub const EVENT_REPLAY_CAPACITY: usize = 256;
 pub const SUBSCRIBER_QUEUE_CAPACITY: usize = 64;
 
+/// The `JobDto::status` values the server emits. Clients branch on these
+/// constants rather than literals so a renamed status fails to compile
+/// instead of silently never matching. Timeouts are `failed` with an
+/// `error_code`, never a separate status.
+pub mod job_status {
+    pub const QUEUED: &str = "queued";
+    pub const RUNNING: &str = "running";
+    pub const CANCELLATION_REQUESTED: &str = "cancellation-requested";
+    pub const COMPLETED: &str = "completed";
+    pub const FAILED: &str = "failed";
+    pub const CANCELLED: &str = "cancelled";
+
+    /// Whether a job in `status` will never change again.
+    #[must_use]
+    pub fn is_terminal(status: &str) -> bool {
+        matches!(status, COMPLETED | FAILED | CANCELLED)
+    }
+
+    /// Whether a job in `status` still occupies queue or worker capacity.
+    #[must_use]
+    pub fn is_active(status: &str) -> bool {
+        matches!(status, QUEUED | RUNNING | CANCELLATION_REQUESTED)
+    }
+}
+
+/// The `ProblemDto::code` for a job ID the server does not (or no longer)
+/// knows, e.g. after its terminal result expired.
+pub const JOB_NOT_FOUND: &str = "job-not-found";
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct RouteSpec {
     pub method: &'static str,
@@ -753,6 +782,23 @@ fn parse_etag(value: &str, prefix: &str) -> Option<u64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn every_job_status_is_exactly_one_of_active_or_terminal() {
+        use job_status::*;
+        for status in [
+            QUEUED,
+            RUNNING,
+            CANCELLATION_REQUESTED,
+            COMPLETED,
+            FAILED,
+            CANCELLED,
+        ] {
+            assert_ne!(is_active(status), is_terminal(status), "{status}");
+        }
+        assert!(!is_terminal("timed-out"));
+        assert!(!is_active("timed-out"));
+    }
 
     #[test]
     fn ids_and_strong_etags_have_frozen_grammar() {

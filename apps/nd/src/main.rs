@@ -18,8 +18,9 @@ use diary_control::{
     bind_loopback, load_runtime_attachment, random_id, serve,
 };
 use diary_control_contract::{
-    CONTRACT_VERSION, CapabilitiesDto, PreferencesDto, ResolveParagraphSuggestionRequest,
-    SetupCheckDto, SourceDetailDto, StartParagraphReviewRequest, WorkflowDto, buffer_etag,
+    CONTRACT_VERSION, CapabilitiesDto, JOB_NOT_FOUND, PreferencesDto,
+    ResolveParagraphSuggestionRequest, SetupCheckDto, SourceDetailDto, StartParagraphReviewRequest,
+    WorkflowDto, buffer_etag, job_status,
 };
 use diary_core::{
     AssistantBackendId, Clock, DiaryDay, Digest, DraftAssistant, DraftAssistantRegistry,
@@ -683,7 +684,12 @@ fn run_connected_session(
     let _ = worker.try_send(Intent::GetPreferences);
     let mut recovery_list_required = false;
     let mut recovery_workflow: Option<(String, bool)> = None;
-    let mut recovery_job: Option<(String, bool)> = None;
+    let mut recovery_job: Option<String> = None;
+    // The one job whose `PollJob` is in flight. The worker answers in FIFO
+    // order without echoing a job ID on failure, so polls are serialized
+    // and each reply is routed by this ID, never by which caller asked.
+    let mut job_poll_in_flight: Option<String> = None;
+    let mut prefer_assistant_poll = false;
     let mut capabilities: Option<CapabilitiesDto> = None;
     let mut setup_check: Option<SetupCheckDto> = None;
     let mut preferences: Option<PreferencesDto> = None;
@@ -697,7 +703,6 @@ fn run_connected_session(
     let mut help_open = false;
     let mut sources_view = SourcesViewModel::default();
     let mut pending_source_job_kind: Option<SourceJobKind> = None;
-    let mut source_job_poll_in_flight = false;
     let mut source_page_pending = false;
     let mut source_page_append = false;
     let mut source_detail_pending = false;
@@ -713,7 +718,6 @@ fn run_connected_session(
     let mut assistant_view = AssistantViewModel::default();
     let mut pending_assistant_job_kind: Option<String> = None;
     let mut assistant_job: Option<(String, String)> = None;
-    let mut assistant_job_poll_in_flight = false;
     let mut assistant_selection_pending = false;
     let mut memory_review_pending = false;
     let mut draft_editor = DraftEditor::new("");
@@ -795,7 +799,7 @@ fn run_connected_session(
                         recovery_workflow = Some((workflow_id, false));
                     }
                     if let Some(job_id) = job_id {
-                        recovery_job = Some((job_id, false));
+                        recovery_job = Some(job_id);
                     }
                 }
             }
@@ -932,18 +936,36 @@ fn run_connected_session(
                     }
                 }
                 WorkerResult::JobStatus(outcome) => {
-                    let loaded = matches!(&outcome, ClientOutcome::Ok(_));
-                    if assistant_job_poll_in_flight {
-                        assistant_job_poll_in_flight = false;
+                    let polled_id = job_poll_in_flight.take();
+                    let job_id = match &outcome {
+                        ClientOutcome::Ok(job) => Some(job.id.clone()),
+                        _ => polled_id,
+                    };
+                    let job_lost = matches!(
+                        &outcome,
+                        ClientOutcome::Problem(problem) if problem.code == JOB_NOT_FOUND
+                    );
+                    let is_recovery = job_id.is_some() && recovery_job == job_id;
+                    let is_assistant = job_id.is_some()
+                        && assistant_job.as_ref().map(|(id, _)| id) == job_id.as_ref();
+                    let is_source = job_id
+                        .as_deref()
+                        .is_some_and(|id| sources_view.is_pending_job(id));
+                    if is_recovery && (job_lost || matches!(&outcome, ClientOutcome::Ok(_))) {
+                        // A vanished job has no canonical state left to reload.
+                        recovery_job = None;
+                        authority.canonical_job_loaded();
+                    }
+                    if is_assistant {
                         match outcome {
                             ClientOutcome::Ok(job) => {
-                                let terminal = matches!(
-                                    job.status.as_str(),
-                                    "completed" | "failed" | "cancelled" | "timed-out"
-                                );
-                                let succeeded = job.status == "completed";
+                                let terminal = job_status::is_terminal(&job.status);
+                                let succeeded = job.status == job_status::COMPLETED;
                                 let kind = job.kind.clone();
                                 let error_code = job.error_code.clone();
+                                // The server reports a refinement's opaque
+                                // source ID as its result handle.
+                                let refined_source_id = job.result_handle.clone();
                                 assistant_view.active_job = Some(job);
                                 if terminal {
                                     assistant_job = None;
@@ -962,10 +984,17 @@ fn run_connected_session(
                                             }
                                         }
                                         "assistant-source-refine" => {
-                                            if let Some(detail) = &sources_view.active_detail {
+                                            if let Some(source_id) =
+                                                refined_source_id.or_else(|| {
+                                                    sources_view
+                                                        .active_detail
+                                                        .as_ref()
+                                                        .map(|detail| detail.id.clone())
+                                                })
+                                            {
                                                 Intent::GetSourceRefineSuggestion {
                                                     workflow_id: workflow.id.clone(),
-                                                    source_id: detail.id.clone(),
+                                                    source_id,
                                                 }
                                             } else {
                                                 Intent::GetWorkflow {
@@ -991,6 +1020,15 @@ fn run_connected_session(
                                     });
                                 }
                             }
+                            ClientOutcome::Problem(_) if job_lost => {
+                                // Polling a 404 forever would also keep every
+                                // assistant action disabled.
+                                assistant_job = None;
+                                feedback = Some(
+                                    "Assistant job is no longer known to the server; manual Draft remains available"
+                                        .to_owned(),
+                                );
+                            }
                             ClientOutcome::Problem(problem) => {
                                 feedback = Some(problem.safe_label())
                             }
@@ -998,14 +1036,17 @@ fn run_connected_session(
                                 feedback = Some(error.safe_label().to_owned());
                             }
                         }
-                    } else if source_job_poll_in_flight {
-                        source_job_poll_in_flight = false;
+                    } else if is_source && job_lost {
+                        if let Some(job_id) = &job_id {
+                            sources_view.forget_job(job_id);
+                        }
+                        feedback = Some(
+                            "Source job is no longer known to the server; review and retry"
+                                .to_owned(),
+                        );
+                    } else if is_source {
                         let job_kind = match &outcome {
                             ClientOutcome::Ok(job) => Some(job.kind.clone()),
-                            _ => None,
-                        };
-                        let job_id = match &outcome {
-                            ClientOutcome::Ok(job) => Some(job.id.clone()),
                             _ => None,
                         };
                         let is_preview_job = job_id.is_some()
@@ -1064,15 +1105,9 @@ fn run_connected_session(
                             }
                             _ => {}
                         }
-                    } else {
-                        // A recovery-only job read has no Sources-stage state to apply.
                     }
-                    if loaded {
-                        recovery_job = None;
-                        authority.canonical_job_loaded();
-                    } else if let Some((_, in_flight)) = &mut recovery_job {
-                        *in_flight = false;
-                    }
+                    // Otherwise a recovery-only read with no stage state to
+                    // apply; a failed one stays in `recovery_job` and is retried.
                 }
                 WorkerResult::JobAccepted(outcome) => {
                     if let Some(kind) = pending_source_job_kind.take() {
@@ -1415,45 +1450,30 @@ fn run_connected_session(
         {
             *in_flight = true;
         }
-        if let Some((job_id, in_flight)) = &mut recovery_job
-            && !*in_flight
-            && !source_job_poll_in_flight
+        if job_poll_in_flight.is_none()
+            && let Some(job_id) = next_job_poll(
+                recovery_job.as_deref(),
+                sources_view
+                    .pending_discovery_job
+                    .as_deref()
+                    .or(sources_view.pending_preparation_job.as_deref())
+                    .or(sources_view.pending_preview_job.as_deref()),
+                assistant_job.as_ref().map(|(job_id, _)| job_id.as_str()),
+                prefer_assistant_poll,
+            )
+            .map(str::to_owned)
             && worker
                 .try_send(Intent::PollJob {
                     job_id: job_id.clone(),
                 })
                 .is_ok()
         {
-            *in_flight = true;
-        }
-        if !source_job_poll_in_flight
-            && !assistant_job_poll_in_flight
-            && !recovery_job
-                .as_ref()
-                .is_some_and(|(_, in_flight)| *in_flight)
-            && let Some(job_id) = sources_view
-                .pending_discovery_job
-                .as_ref()
-                .or(sources_view.pending_preparation_job.as_ref())
-                .or(sources_view.pending_preview_job.as_ref())
-            && worker
-                .try_send(Intent::PollJob {
-                    job_id: job_id.clone(),
-                })
-                .is_ok()
-        {
-            source_job_poll_in_flight = true;
-        }
-        if !assistant_job_poll_in_flight
-            && !source_job_poll_in_flight
-            && let Some((job_id, _)) = &assistant_job
-            && worker
-                .try_send(Intent::PollJob {
-                    job_id: job_id.clone(),
-                })
-                .is_ok()
-        {
-            assistant_job_poll_in_flight = true;
+            if assistant_job.as_ref().is_some_and(|(id, _)| *id == job_id) {
+                prefer_assistant_poll = false;
+            } else if sources_view.is_pending_job(&job_id) {
+                prefer_assistant_poll = true;
+            }
+            job_poll_in_flight = Some(job_id);
         }
 
         status_line.ime = ime_tracker.tick(std::time::Instant::now());
@@ -2922,6 +2942,22 @@ fn focused_source_id(
         .map(|candidate| candidate.id.clone())
 }
 
+/// Picks the one job to poll next. Recovery reads come first because
+/// mutations stay disabled until they land; source and assistant jobs then
+/// alternate so one long-running job cannot starve the other's polling.
+fn next_job_poll<'a>(
+    recovery: Option<&'a str>,
+    source: Option<&'a str>,
+    assistant: Option<&'a str>,
+    prefer_assistant: bool,
+) -> Option<&'a str> {
+    recovery.or(if prefer_assistant {
+        assistant.or(source)
+    } else {
+        source.or(assistant)
+    })
+}
+
 /// Keeps the Resources Sidebar cursor on the same source after a canonical
 /// reload or page response replaces the candidate vector. If that source was
 /// removed, or another stage is shown (no focused source), focus is left
@@ -3375,6 +3411,27 @@ mod start_screen_tests {
 
         assert_eq!(focus.resource_index, 1);
         assert_eq!(sources.candidates[focus.resource_index].id, "src_1");
+    }
+
+    #[test]
+    fn job_polls_put_recovery_first_and_alternate_source_and_assistant() {
+        assert_eq!(
+            next_job_poll(Some("recovery"), Some("source"), Some("assistant"), true),
+            Some("recovery")
+        );
+        assert_eq!(
+            next_job_poll(None, Some("source"), Some("assistant"), false),
+            Some("source")
+        );
+        assert_eq!(
+            next_job_poll(None, Some("source"), Some("assistant"), true),
+            Some("assistant")
+        );
+        assert_eq!(
+            next_job_poll(None, Some("source"), None, true),
+            Some("source")
+        );
+        assert_eq!(next_job_poll(None, None, None, false), None);
     }
 
     #[test]

@@ -1460,7 +1460,9 @@ printf '%b%b%b%b%s' "\\$(printf '%03o' $(((length >> 24) & 255)))" "\\$(printf '
             &helper,
             "Ayumi",
             root.join("handoff"),
-            Duration::from_secs(2),
+            // Generous: the fake helper is a multi-process sh script, and under a
+            // fully parallel test run a 2 s budget intermittently timed out.
+            Duration::from_secs(10),
             2,
         )
         .unwrap();

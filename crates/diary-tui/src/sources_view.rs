@@ -8,7 +8,7 @@ use std::collections::BTreeSet;
 
 use diary_control_contract::{
     JobAcceptedDto, JobDto, SourceCandidateDto, SourceDetailDto, SourceListDto,
-    SourceRefineSuggestionDto, WorkflowDto,
+    SourceRefineSuggestionDto, WorkflowDto, job_status,
 };
 
 use crate::client::{
@@ -149,11 +149,7 @@ impl SourcesViewModel {
             ClientOutcome::Ok(job) => {
                 self.last_error = None;
                 self.job_progress_percent = Some(job.progress_percent);
-                match job.status.as_str() {
-                    "completed" => Some(JobPhase::Succeeded),
-                    "failed" | "cancelled" | "expired" => Some(JobPhase::Failed),
-                    _ => Some(JobPhase::Running),
-                }
+                Some(job_phase(&job.status))
             }
             ClientOutcome::Problem(problem) => {
                 self.last_error = Some(SourcesError::Problem(problem));
@@ -246,11 +242,7 @@ impl SourcesViewModel {
         match outcome {
             ClientOutcome::Ok(job) => {
                 self.last_error = None;
-                let phase = match job.status.as_str() {
-                    "completed" => JobPhase::Succeeded,
-                    "failed" | "cancelled" | "expired" => JobPhase::Failed,
-                    _ => JobPhase::Running,
-                };
+                let phase = job_phase(&job.status);
                 if phase != JobPhase::Running {
                     self.job_progress_percent = None;
                     if self.pending_preparation_job.as_deref() == Some(job.id.as_str()) {
@@ -282,6 +274,44 @@ impl SourcesViewModel {
                 self.last_error = Some(SourcesError::Transport(error));
                 None
             }
+        }
+    }
+
+    /// Whether `job_id` is one of this ViewModel's in-flight source jobs.
+    #[must_use]
+    pub fn is_pending_job(&self, job_id: &str) -> bool {
+        [
+            &self.pending_discovery_job,
+            &self.pending_preparation_job,
+            &self.pending_preview_job,
+        ]
+        .into_iter()
+        .any(|pending| pending.as_deref() == Some(job_id))
+    }
+
+    /// Drops a pending job the server no longer knows (`job-not-found`, e.g.
+    /// its terminal result expired before it was observed). Without this the
+    /// job would stay pending forever, keeping every Sources action busy and
+    /// re-polling a 404 each tick. It produced no handle, so none is kept.
+    pub fn forget_job(&mut self, job_id: &str) {
+        let mut forgot = false;
+        for pending in [
+            &mut self.pending_discovery_job,
+            &mut self.pending_preparation_job,
+        ] {
+            if pending.as_deref() == Some(job_id) {
+                *pending = None;
+                forgot = true;
+            }
+        }
+        if self.pending_preview_job.as_deref() == Some(job_id) {
+            self.pending_preview_job = None;
+            self.preview_source_id = None;
+            self.preview_handle = None;
+            forgot = true;
+        }
+        if forgot {
+            self.job_progress_percent = None;
         }
     }
 
@@ -485,6 +515,16 @@ impl SourcesViewModel {
         self.candidates
             .iter()
             .position(|candidate| &candidate.id == active_id)
+    }
+}
+
+/// Maps a server job status to a phase. Anything not terminal (queued,
+/// running, cancellation-requested) is still running.
+fn job_phase(status: &str) -> JobPhase {
+    match status {
+        job_status::COMPLETED => JobPhase::Succeeded,
+        status if job_status::is_terminal(status) => JobPhase::Failed,
+        _ => JobPhase::Running,
     }
 }
 
@@ -836,7 +876,10 @@ mod tests {
         for (status, expected) in [
             ("completed", JobPhase::Succeeded),
             ("failed", JobPhase::Failed),
+            ("cancelled", JobPhase::Failed),
+            ("queued", JobPhase::Running),
             ("running", JobPhase::Running),
+            ("cancellation-requested", JobPhase::Running),
         ] {
             let transport = FakeTransport::new();
             transport.push(
@@ -865,6 +908,31 @@ mod tests {
                 Some(expected)
             );
         }
+    }
+
+    #[test]
+    fn a_job_the_server_forgot_stops_being_pending_without_touching_others() {
+        let mut view = SourcesViewModel {
+            pending_discovery_job: Some("discovery_job".to_owned()),
+            pending_preview_job: Some("preview_job".to_owned()),
+            preview_source_id: Some("src_1".to_owned()),
+            latest_preparation_handle: Some("bulk_handle".to_owned()),
+            job_progress_percent: Some(40),
+            ..SourcesViewModel::default()
+        };
+        assert!(view.is_pending_job("preview_job"));
+        assert!(!view.is_pending_job("unknown_job"));
+
+        view.forget_job("preview_job");
+
+        assert!(!view.is_pending_job("preview_job"));
+        assert_eq!(view.preview_source_id, None);
+        assert_eq!(view.job_progress_percent, None);
+        assert!(view.is_pending_job("discovery_job"));
+        assert_eq!(
+            view.latest_preparation_handle.as_deref(),
+            Some("bulk_handle")
+        );
     }
 
     #[test]
