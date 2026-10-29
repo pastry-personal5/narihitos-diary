@@ -6,6 +6,23 @@ This changelog records owner decisions and material plan changes for Phase 1.
 
 ## Entries
 
+- 2026-10-29 — Owner decision — M8 Apple on-device packet — The owner approved
+  the Apple on-device production-adapter packet, the last of M8's five gating
+  packets. Deployment target: the latest stable macOS/Foundation Models SDK
+  only, with no older-OS floor pinned. Production-adapter scope: all three
+  assistant actions (memory extraction, two-pass drafting, paragraph review)
+  for both `en-US` and `ko-KR`, matching the Codex hosted default's action and
+  language coverage — not a drafting-only slice. Payload transport: request
+  and response bodies, including a drafted entry approaching the existing
+  512 KiB entry bound, travel over the Swift bridge's existing in-band JSON
+  frame with its cap raised to cover that bound, in both directions; this
+  does not reuse or extend the P1-M5 private handoff-file transport, and the
+  bridge's framing is reimplemented as needed to carry the raised cap safely.
+  Separately, the AGENTS.md "Undecided" item about Ayumi language metadata is
+  closed without adding a front-matter field: Ayumi source notes are always
+  en-US (already recorded in `docs/product-behavior.md`), so no metadata-based
+  language rejection is needed; the `ko-KR` output option is a translation
+  choice made at Compose time, not a property read from source notes.
 - 2026-10-29 — Owner decision — M8 hosted-default provider, Codex adapter
   merge, and packet scope — The owner approved OpenAI's Codex as the Phase 1
   hosted-default assistant provider, reached exclusively through the

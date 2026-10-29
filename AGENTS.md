@@ -24,6 +24,7 @@ Each decision is recorded in full in the doc that owns its topic; this is the in
 
 - **Stack and server architecture:** Rust + one Swift helper process; a local Control API Server owns workflows and connectors; Tokio async server with a synchronous TUI; the single binary is `nd` (`nd serve` starts the server, `nd` opens the TUI). See [docs/architecture.md](docs/architecture.md).
 - **Hosted assistant provider:** the Phase 1 hosted default is OpenAI's Codex, reached only through the `codex app-server` JSON-RPC surface over stdio (never the TypeScript SDK, never bare `codex exec` flags). One registry member per configured `codex_home` profile; the first-listed profile is the default when more than one is configured. Each job spawns and kills its own `codex app-server` process, with a per-turn restricted sandbox (no readable roots, no network, no MCP servers, no web search, approval never, no history/rollout persistence). The account credential lives inside each profile's own `codex_home`; Rust never reads it. See [docs/architecture.md](docs/architecture.md) "Composition and egress" and [docs/phase-1/milestone-08-draft-assistants-overview.md](docs/phase-1/milestone-08-draft-assistants-overview.md).
+- **Apple on-device adapter:** targets the latest stable macOS/Foundation Models SDK only (no older-OS deployment floor). Supports all three assistant actions (extraction, drafting, paragraph review) for both en-US and ko-KR, matching the Codex hosted default. Request and response payloads, including a drafted entry approaching the 512 KiB entry bound, travel over the Swift bridge's in-band frame with its cap raised to cover that bound, not the P1-M5 private handoff-file transport. See [docs/phase-1/milestone-08-draft-assistants-overview.md](docs/phase-1/milestone-08-draft-assistants-overview.md).
 - **Product behavior:** source discovery and selection, composition and hosted data egress, draft/source retention, local and Notion publication, conflicts, and amendments. See [docs/product-behavior.md](docs/product-behavior.md).
 - **Terminal UX:** canonical workflow stages and layout, keybindings, the Korean-IME input constraint, date display, and the target terminal. See [docs/ux-tui.md](docs/ux-tui.md).
 - **License:** Apache-2.0 for all project code.
@@ -34,9 +35,6 @@ Each decision is recorded in full in the doc that owns its topic; this is the in
 - **Notion connector:** the configured root page's structure remains
   uninspected. Validate the root and any existing year/month path before
   creating pages or appending a daily section.
-- **Language metadata:** no known Ayumi front-matter field identifies a note's
-  language, so nothing is blocked by language. Name a field before adding
-  metadata-based rejection.
 
 The interview decisions and remaining page-compatibility check are mapped in the
 [research summary](docs/phase-1/milestone-01-research-summary.md).

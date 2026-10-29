@@ -197,11 +197,13 @@ overview's gate is split: the contract/migration packet unblocks the
 provider-neutral core, SQLite, Control API, and TUI work; the configuration
 packet separately unblocks the strict Codex profile parser; and the
 hosted-default and Apple packets each unblock only their own production
-adapter. None of the five packets is approved yet, so no implementation has
-started. The already-approved multi-profile Codex configuration shape (see
-`AGENTS.md` "Composition") does not select Codex as a provider; registering
-or launching a Codex backend additionally requires its separate process/API,
-account, tool-denial, privacy, and lifecycle approval packet.
+adapter. All five packets (contract/migration, configuration, hosted-default,
+Apple, and the Codex configuration/hosted-adapter integration) are now
+owner-approved and recorded in the overview and the Phase 1 changelog, but no
+implementation has started yet. The already-approved multi-profile Codex
+configuration shape (see `AGENTS.md` "Composition") does not by itself select
+Codex as a provider; that selection is the separately recorded hosted-default
+packet above.
 
 ### P1-M9: Local publication and recovery
 

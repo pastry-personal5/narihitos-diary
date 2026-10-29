@@ -277,19 +277,28 @@ packet(s) above in `AGENTS.md` and the Phase 1 changelog.
   descriptor so manual editing and other backends remain usable. Missing
   credentials must never silently select another account.
 
-### Required Apple on-device packet
+### Required Apple on-device packet (resolved)
 
-- Swift/Foundation Models API and deployment-target assumptions, protocol
-  version, guided-output schemas, model/session lifecycle, and dynamic
-  availability and locale checks for `en-US` and `ko-KR`.
-- Per-action token and output limits derived from the runtime model capability,
-  plus a private bounded payload transport for both directions, compatible
-  with the existing 64 KiB bridge frame or routed through a handoff instead. A
-  drafted entry can approach the existing 512 KiB entry bound, so the response
-  direction needs the same transport decision as the request direction, not
-  just the request. If private handoff files are chosen, reuse the existing
-  P1-M5 handoff design (owner-only creation, exact-path validation, cleanup,
-  timeout, and crash recovery already specified there) rather than a new one.
+- **Deployment target:** the latest stable macOS/Foundation Models SDK only;
+  no older-OS deployment floor is pinned (unlike the Codex 0.138.0 version
+  floor). A readiness check against an unsupported OS/SDK is a typed
+  unavailable backend, not a startup failure.
+- **Production-adapter scope:** all three assistant actions — memory
+  extraction, two-pass drafting, and paragraph review — for both `en-US` and
+  `ko-KR`, matching the Codex hosted default's action/language coverage.
+  Guided-output schemas, model/session lifecycle, and dynamic
+  availability/locale checks are implemented for all three actions, not a
+  drafting-only slice.
+- **Payload transport:** per-action request/response bodies, including a
+  drafted entry approaching the existing 512 KiB entry bound, travel over the
+  Swift bridge's existing in-band JSON frame with its cap raised to cover that
+  bound, in both directions. This does not reuse or extend the P1-M5 private
+  handoff-file transport (owner-only creation, exact-path validation, cleanup,
+  timeout, crash recovery); the bridge's framing is reimplemented as needed to
+  carry the larger cap safely (length-prefixing, read/write buffering, and the
+  existing 128-byte request-ID cap and protocol-only standard output are kept).
+  Per-action token and output limits are still derived from the runtime model
+  capability within that raised frame cap.
 - Helper process timeout/cancellation behavior and safe mapping for unavailable,
   unsupported locale, guardrail refusal, context overflow, invalid output,
   crash, and cancellation. Tests use a fake model service only.
@@ -335,8 +344,9 @@ are specified in the resolved hosted-default packet above.
 - [x] The owner approves the hosted-default packet (OpenAI's Codex via
   `codex app-server`, recorded in `AGENTS.md` "Decided" and the Phase 1
   changelog) before that adapter is implemented.
-- [ ] The owner approves the Apple packet (protocol version, payload
-  transport choice, and production-adapter scope) before the Apple
+- [x] The owner approves the Apple packet (deployment-target floor, raised
+  bridge-frame payload transport, and all-three-action production-adapter
+  scope, recorded above and in the Phase 1 changelog) before the Apple
   production adapter is implemented. Any dependency or Swift-package change
   follows the repository dependency approval rule.
 - [x] Codex is the approved production M8 hosted backend; the Codex runtime
