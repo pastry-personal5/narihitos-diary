@@ -478,6 +478,7 @@ impl Workflow {
             prior_draft: self.assistant_draft.clone(),
             edited_entry: (!self.entry.text.is_empty()).then(|| self.entry.text.clone()),
             focused_paragraph: None,
+            source_body: None,
             language,
             style: self.style,
         })

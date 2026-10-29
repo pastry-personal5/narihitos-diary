@@ -340,6 +340,7 @@ pub struct DraftAssistantRequest {
     pub prior_draft: Option<String>,
     pub edited_entry: Option<String>,
     pub focused_paragraph: Option<String>,
+    pub source_body: Option<String>,
     pub language: WritingLanguage,
     pub style: WritingStyle,
 }
@@ -349,6 +350,7 @@ pub enum AssistantAction {
     ExtractMemories,
     DraftEntry,
     ReviewParagraph,
+    RefineSource,
 }
 
 impl AssistantAction {
@@ -358,6 +360,7 @@ impl AssistantAction {
             Self::ExtractMemories => "extract-memories",
             Self::DraftEntry => "draft-entry",
             Self::ReviewParagraph => "review-paragraph",
+            Self::RefineSource => "refine-source",
         }
     }
 }
@@ -413,6 +416,7 @@ pub enum DraftAssistantResponse {
         replacement: String,
         explanation: Option<String>,
     },
+    SourceRefinement(String),
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -958,4 +962,42 @@ fn nonempty(value: String, name: &'static str) -> Result<String, ValueError> {
         }));
     }
     Ok(value)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn refine_source_action_as_str_is_refine_source() {
+        assert_eq!(AssistantAction::RefineSource.as_str(), "refine-source");
+    }
+
+    #[test]
+    fn draft_assistant_request_accepts_source_body_with_other_fields_defaulted() {
+        let request = DraftAssistantRequest {
+            readable_note_bodies: Vec::new(),
+            reviewed_memories: Vec::new(),
+            prior_draft: None,
+            edited_entry: None,
+            focused_paragraph: None,
+            source_body: Some("source body".to_owned()),
+            language: WritingLanguage::EnUs,
+            style: WritingStyle::Standard,
+        };
+        assert_eq!(request.source_body.as_deref(), Some("source body"));
+        assert!(request.prior_draft.is_none());
+        assert!(request.edited_entry.is_none());
+        assert!(request.focused_paragraph.is_none());
+    }
+
+    #[test]
+    fn source_refinement_response_round_trips_through_match() {
+        let response = DraftAssistantResponse::SourceRefinement("body".to_owned());
+        let body = match response {
+            DraftAssistantResponse::SourceRefinement(body) => body,
+            other => panic!("unexpected response: {other:?}"),
+        };
+        assert_eq!(body, "body");
+    }
 }
