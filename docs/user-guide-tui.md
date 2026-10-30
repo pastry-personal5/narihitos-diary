@@ -98,14 +98,18 @@ later output.
   actions are disabled. The label shows which composition path is active. The
   Diary Day Widget above it always shows the diary day you are working on.
   Manual editing in the Draft editor is always available, with or without an
-  assistant.
+  assistant. The choice, including "None (manual only)", is saved and restored
+  for newly created workflows after restarting the TUI. An existing workflow
+  keeps its own assistant choice.
 - "Extract memories" sends only the confirmed included source bodies to the
   selected backend; review the resulting memories, then "Confirm reviewed
   memories" and "Draft with selected assistant" to send those confirmed
   memories (not the raw sources) for drafting. A late result never overwrites
   newer unsent text.
 - Choose US English or Korean, and concise/standard/reflective
-  style (concise by default). A Korean entry from English notes is a
+  style (concise by default). The current language and style carry to newly
+  created workflows while this TUI session is open; an existing workflow keeps
+  its own saved settings. A Korean entry from English notes is a
   translation and is labeled as such.
 - Focus a paragraph and activate "Review focused paragraph" to get a
   suggested rewrite for just that paragraph; "Accept current suggestion" or

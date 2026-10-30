@@ -6,6 +6,11 @@ This changelog records owner decisions and material plan changes for Phase 1.
 
 ## Entries
 
+- 2026-10-30 — P1-M17 implemented — Owner requested TUI session continuity
+  for writing settings and persistent restoration of assistant selection.
+  New workflows inherit the current session language and style and the saved
+  backend choice, including manual mode; existing workflows retain their own
+  settings. Writing settings no longer clear a selected assistant.
 - 2026-10-30 — P1-M13 plan revised — Entry criteria now include P1-M14 through
   P1-M16 and a P1-M10 live-check resolution; the evidence matrix gained
   supplemental rows (mirror, Codex sandbox, Apple parity, sidebar/Sources) and a

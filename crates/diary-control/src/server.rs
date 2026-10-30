@@ -737,8 +737,55 @@ async fn start_workflow(
         .map(DiaryDay::parse)
         .transpose()
         .map_err(|_| ApiError::new(StatusCode::BAD_REQUEST, "invalid-diary-day"))?;
+    let language = request
+        .language
+        .as_deref()
+        .map(WritingLanguage::parse)
+        .transpose()
+        .map_err(|_| ApiError::new(StatusCode::BAD_REQUEST, "invalid-language"))?;
+    let style = request
+        .style
+        .as_deref()
+        .map(WritingStyle::parse)
+        .transpose()
+        .map_err(|_| ApiError::new(StatusCode::BAD_REQUEST, "invalid-style"))?;
     let service = state.0.config.commands.clone();
-    let outcome = blocking(move || service.start_workflow(day)).await?;
+    let descriptors = state.0.config.assistant_registry.descriptors();
+    let outcome = blocking(move || {
+        let outcome = service.start_workflow(day)?;
+        if let StartOutcome::Created(workflow) = outcome {
+            let preferences = service.preferences()?;
+            let preferred = preferences
+                .last_assistant_backend_id
+                .and_then(|backend_id| {
+                    descriptors
+                        .iter()
+                        .find(|descriptor| descriptor.id == backend_id && descriptor.available)
+                        .map(|descriptor| {
+                            AssistantSelection::new(backend_id, descriptor.composition_path)
+                        })
+                });
+            if preferred.is_some() || language.is_some() || style.is_some() {
+                let effective_language = language
+                    .or(workflow.language())
+                    .unwrap_or(WritingLanguage::EnUs);
+                let effective_style = style.unwrap_or(workflow.style());
+                let workflow = service.set_writing_settings(
+                    workflow.day(),
+                    workflow.revision(),
+                    effective_language,
+                    effective_style,
+                    preferred,
+                )?;
+                Ok(StartOutcome::Created(workflow))
+            } else {
+                Ok(StartOutcome::Created(workflow))
+            }
+        } else {
+            Ok(outcome)
+        }
+    })
+    .await?;
     let (status, workflow, created) = match outcome {
         StartOutcome::Created(workflow) => (StatusCode::CREATED, workflow, true),
         StartOutcome::Resumed(workflow) | StartOutcome::Completed(workflow) => {
@@ -1184,12 +1231,30 @@ async fn set_writing_settings(
         .map_err(|_| ApiError::new(StatusCode::BAD_REQUEST, "invalid-language"))?;
     let style = WritingStyle::parse(&request.style)
         .map_err(|_| ApiError::new(StatusCode::BAD_REQUEST, "invalid-style"))?;
-    if request.assistant_backend_id.is_some() {
-        return Err(ApiError::from(CommandError::UnavailableAssistantBackend));
-    }
+    let selection = if let Some(raw_id) = request.assistant_backend_id {
+        let backend_id = AssistantBackendId::parse(raw_id)
+            .map_err(|_| ApiError::new(StatusCode::BAD_REQUEST, "invalid-assistant-backend"))?;
+        let descriptor = state
+            .0
+            .config
+            .assistant_registry
+            .descriptors()
+            .into_iter()
+            .find(|descriptor| descriptor.id == backend_id)
+            .ok_or_else(|| ApiError::from(CommandError::UnavailableAssistantBackend))?;
+        if !descriptor.available {
+            return Err(ApiError::from(CommandError::UnavailableAssistantBackend));
+        }
+        Some(AssistantSelection::new(
+            backend_id,
+            descriptor.composition_path,
+        ))
+    } else {
+        None
+    };
     let service = state.0.config.commands.clone();
     let workflow =
-        blocking(move || service.set_writing_settings(&day, revision, language, style, None))
+        blocking(move || service.set_writing_settings(&day, revision, language, style, selection))
             .await?;
     publish_event(
         &state,

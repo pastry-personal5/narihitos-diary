@@ -285,6 +285,18 @@ Plan: [overview](milestone-16-simple-sources-overview.md),
 Notes: TUI-only; no Control API change unless step 1 finds one is required
 (then owner decision). Planned to run before P1-M13.
 
+### P1-M17: Assistant settings continuity
+
+Status: Done
+
+Goal: Keep language and style across new workflows in a TUI session, and
+restore the persisted assistant choice in the next session.
+
+Plan: [overview](milestone-17-assistant-settings-overview.md).
+
+Notes: A focused settings milestone before release qualification; P1-M10's
+Notion acceptance remains independent.
+
 ### P1-M13: Release qualification
 
 Status: Planned
@@ -296,5 +308,5 @@ Plan: [overview](milestone-13-release-qualification-overview.md),
 [architecture plan](milestone-13-release-qualification-architecture.md).
 
 Notes: The number follows P1-M12, which ran earlier; this milestone runs after
-P1-M11, P1-M14, P1-M15, and P1-M16. No exit gate requires a human run; real-IME and live-service limits
+P1-M11, P1-M14, P1-M15, P1-M16, and P1-M17. No exit gate requires a human run; real-IME and live-service limits
 are documented instead.

@@ -351,6 +351,51 @@ fn assistant_selection_sends_the_revision_etag_and_a_null_backend_to_deselect() 
 }
 
 #[test]
+fn start_and_writing_settings_carry_session_choices() {
+    let transport = FakeTransport::new();
+    transport.push(
+        "POST",
+        "/v1/workflows",
+        RawResponse {
+            status: 500,
+            ..RawResponse::default()
+        },
+    );
+    transport.push(
+        "PUT",
+        "/v1/workflows/wf_20261029/writing-settings",
+        RawResponse {
+            status: 500,
+            ..RawResponse::default()
+        },
+    );
+    let client = ApiClient::new(transport);
+    let _ = client.start_workflow(
+        &attachment(),
+        Some("2026-10-29"),
+        Some("ko-KR"),
+        Some("reflective"),
+    );
+    let _ = client.set_writing_settings(
+        &attachment(),
+        "wf_20261029",
+        4,
+        "ko-KR",
+        "reflective",
+        Some("synthetic-hosted"),
+    );
+    let seen = client.transport.seen.borrow();
+    let start: serde_json::Value =
+        serde_json::from_slice(seen[0].body.as_deref().unwrap()).unwrap();
+    assert_eq!(start["language"], "ko-KR");
+    assert_eq!(start["style"], "reflective");
+    let settings: serde_json::Value =
+        serde_json::from_slice(seen[1].body.as_deref().unwrap()).unwrap();
+    assert_eq!(settings["assistant_backend_id"], "synthetic-hosted");
+    assert_eq!(seen[1].if_match.as_deref(), Some("\"wf-4\""));
+}
+
+#[test]
 fn a_stale_assistant_selection_is_a_typed_problem_never_ok() {
     let transport = FakeTransport::new();
     transport.push(

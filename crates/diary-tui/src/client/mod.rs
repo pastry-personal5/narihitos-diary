@@ -290,9 +290,13 @@ impl<T: Transport> ApiClient<T> {
         &self,
         attachment: &Attachment,
         diary_day: Option<&str>,
+        language: Option<&str>,
+        style: Option<&str>,
     ) -> ClientOutcome<WorkflowDto> {
         let body = serde_json::to_vec(&diary_control_contract::StartWorkflowRequest {
             diary_day: diary_day.map(ToOwned::to_owned),
+            language: language.map(ToOwned::to_owned),
+            style: style.map(ToOwned::to_owned),
         })
         .unwrap_or_default();
         self.send_json(
@@ -486,11 +490,12 @@ impl<T: Transport> ApiClient<T> {
         revision: u64,
         language: &str,
         style: &str,
+        assistant_backend_id: Option<&str>,
     ) -> ClientOutcome<WorkflowDto> {
         let body = serde_json::to_vec(&WritingSettingsRequest {
             language: language.to_owned(),
             style: style.to_owned(),
-            assistant_backend_id: None,
+            assistant_backend_id: assistant_backend_id.map(ToOwned::to_owned),
         })
         .unwrap_or_default();
         self.send_json(

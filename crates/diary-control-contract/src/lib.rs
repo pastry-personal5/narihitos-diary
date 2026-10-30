@@ -741,6 +741,8 @@ dto!(
 dto!(
     pub struct StartWorkflowRequest {
         pub diary_day: Option<String>,
+        pub language: Option<String>,
+        pub style: Option<String>,
     }
 );
 dto!(

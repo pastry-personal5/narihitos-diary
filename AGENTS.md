@@ -42,7 +42,7 @@ Each decision is recorded in full in the doc that owns its topic; this is the in
   note; explicitly confirmed deletion hard-deletes that note and only its
   safely resolved linked audio. Audio bytes are never read or sent. See
   [docs/product-behavior.md](docs/product-behavior.md).
-- **Terminal UX:** canonical workflow stages and layout, keybindings, the Korean-IME input constraint, date display, and the target terminal. P1-M15 adds a right Utility Sidebar (Diary Day and Assistant Widgets); P1-M16 adds source-list letter shortcuts only while `IME: EN`, the one exception to no bare-letter hotkeys. See [docs/ux-tui.md](docs/ux-tui.md).
+- **Terminal UX:** canonical workflow stages and layout, keybindings, the Korean-IME input constraint, date display, and the target terminal. P1-M15 adds a right Utility Sidebar (Diary Day and Assistant Widgets); P1-M16 adds source-list letter shortcuts only while `IME: EN`, the one exception to no bare-letter hotkeys. P1-M17 keeps language and style across new workflows in one TUI session and restores the persisted assistant choice after restart. See [docs/ux-tui.md](docs/ux-tui.md).
 - **License:** Apache-2.0 for all project code.
 - **Process:** numbered phases contain numbered milestones; milestone numbering restarts per phase. IDs use `P1-M2`. See [docs/development-process.md](docs/development-process.md).
 

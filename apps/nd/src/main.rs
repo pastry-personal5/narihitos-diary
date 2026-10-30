@@ -883,6 +883,8 @@ fn run_connected_session(
     let mut capabilities: Option<CapabilitiesDto> = None;
     let mut setup_check: Option<SetupCheckDto> = None;
     let mut preferences: Option<PreferencesDto> = None;
+    let mut session_language: Option<String> = None;
+    let mut session_style: Option<String> = None;
     let mut current_workflow: Option<WorkflowDto> = None;
     let mut local_preview: Option<LocalPreviewDto> = None;
     let mut notion_preview: Option<NotionPreviewDto> = None;
@@ -1073,6 +1075,8 @@ fn run_connected_session(
                     start_pending = false;
                     match *outcome {
                         ClientOutcome::Ok(workflow) => {
+                            session_language = workflow.language.clone();
+                            session_style = Some(workflow.style.clone());
                             selected_day = Some(workflow.diary_day.clone());
                             local_preview = None;
                             notion_preview = None;
@@ -1542,13 +1546,14 @@ fn run_connected_session(
                     match *outcome {
                         ClientOutcome::Ok(workflow) => {
                             let language = workflow.language.clone();
+                            let backend = workflow.assistant_backend_id.clone();
+                            session_language = language.clone();
+                            session_style = Some(workflow.style.clone());
                             compose_view.load_from_canonical(&workflow);
                             current_workflow = Some(workflow);
-                            let _ = worker.try_send(Intent::SavePreferences {
+                            preferences = Some(PreferencesDto {
                                 last_language: language,
-                                last_assistant_backend_id: preferences
-                                    .as_ref()
-                                    .and_then(|value| value.last_assistant_backend_id.clone()),
+                                last_assistant_backend_id: backend,
                             });
                             feedback = Some("Writing settings saved".to_owned());
                         }
@@ -1838,7 +1843,7 @@ fn run_connected_session(
                             let backend = workflow.assistant_backend_id.clone();
                             compose_view.load_from_canonical(&workflow);
                             current_workflow = Some(workflow);
-                            let _ = worker.try_send(Intent::SavePreferences {
+                            preferences = Some(PreferencesDto {
                                 last_language: preferences
                                     .as_ref()
                                     .and_then(|value| value.last_language.clone()),
@@ -2889,6 +2894,8 @@ fn run_connected_session(
                         start_pending = worker
                             .try_send(Intent::StartOrResumeWorkflow {
                                 diary_day: Some(workflow.diary_day.clone()),
+                                language: session_language.clone(),
+                                style: session_style.clone(),
                             })
                             .is_ok();
                     }
@@ -3003,6 +3010,8 @@ fn run_connected_session(
                             start_pending = worker
                                 .try_send(Intent::StartOrResumeWorkflow {
                                     diary_day: selected_day.clone(),
+                                    language: session_language.clone(),
+                                    style: session_style.clone(),
                                 })
                                 .is_ok();
                         }
@@ -3011,6 +3020,8 @@ fn run_connected_session(
                                 start_pending = worker
                                     .try_send(Intent::StartOrResumeWorkflow {
                                         diary_day: Some(workflow.diary_day.clone()),
+                                        language: session_language.clone(),
+                                        style: session_style.clone(),
                                     })
                                     .is_ok();
                             }
@@ -3075,6 +3086,7 @@ fn run_connected_session(
                                         revision: workflow.revision,
                                         language: language.to_owned(),
                                         style: style.to_owned(),
+                                        assistant_backend_id: workflow.assistant_backend_id.clone(),
                                     })
                                     .is_ok();
                             }

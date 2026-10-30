@@ -89,7 +89,7 @@ impl StartViewModel {
         attachment: &Attachment,
         diary_day: Option<&str>,
     ) -> Option<WorkflowDto> {
-        self.apply_start_or_resume(client.start_workflow(attachment, diary_day))
+        self.apply_start_or_resume(client.start_workflow(attachment, diary_day, None, None))
     }
 
     /// Applies a `StartOrResumeWorkflow` outcome, same split as

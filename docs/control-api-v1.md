@@ -67,6 +67,14 @@ independent path; the server derives the path. `GET /v1/assistant-backends`
 returns the same safe global descriptor collection. Selecting or highlighting a
 backend does not invoke it.
 
+`POST /v1/workflows` accepts optional `language` and `style` values for a
+newly created workflow. It ignores them when resuming an existing workflow.
+The server restores a saved available assistant backend for a new workflow;
+an absent or unavailable saved backend leaves it manual. A writing-settings
+request carries the current `assistant_backend_id` so changing only language
+or style preserves the selected backend. `PUT /v1/workflows/{id}/assistant-selection`
+persists the backend ID, or `null` for manual mode.
+
 Assistant actions are jobs observed and cancelled through `/v1/jobs/{id}`.
 Extraction accepts no content body from the client: the server rereads the
 confirmed source snapshots, rechecks freshness before invocation and commit,

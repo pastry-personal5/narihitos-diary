@@ -88,6 +88,9 @@ second row carries a `Tip:` naming the next step to the following stage. See
   must fail safely if the paragraph changed; reject does not alter the entry.
 - Offer US English and Korean per entry, remember the last choice,
   and offer concise, standard, and reflective styles with concise as default.
+  Carry the current language and style to new workflows during the TUI session.
+  Persist the assistant choice, including manual mode, for new workflows after
+  restart; opening an existing workflow keeps its saved settings.
   The choice names the language of the finished entry; source notes are
   expected to be en-US. Mark assistant-inferred reflections for human review.
 - Require confirmation of the complete edited entry and then show the exact

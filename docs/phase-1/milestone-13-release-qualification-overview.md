@@ -16,7 +16,7 @@ human run.
 
 ## Entry criteria
 
-- P1-M7, P1-M8, P1-M9, P1-M11, P1-M14, P1-M15, and P1-M16 are `Done`.
+- P1-M7, P1-M8, P1-M9, P1-M11, P1-M14, P1-M15, P1-M16, and P1-M17 are `Done`.
 - P1-M10 is `Done`, or its only open items are the owner-authorized live
   checks (configured-root compatibility and disposable-hierarchy acceptance).
   Those are recorded under "Known limits" and never gate this milestone.

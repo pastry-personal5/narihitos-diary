@@ -42,6 +42,8 @@ pub enum Intent {
     },
     StartOrResumeWorkflow {
         diary_day: Option<String>,
+        language: Option<String>,
+        style: Option<String>,
     },
     DiscardWorkflow {
         id: String,
@@ -120,6 +122,7 @@ pub enum Intent {
         revision: u64,
         language: String,
         style: String,
+        assistant_backend_id: Option<String>,
     },
     BeginManualComposition {
         workflow_id: String,
@@ -377,9 +380,16 @@ impl Worker {
             Intent::LoadMoreWorkflows { cursor } => {
                 WorkerResult::MoreWorkflows(client.list_workflows(attachment, Some(&cursor)))
             }
-            Intent::StartOrResumeWorkflow { diary_day } => WorkerResult::StartedWorkflow(Box::new(
-                client.start_workflow(attachment, diary_day.as_deref()),
-            )),
+            Intent::StartOrResumeWorkflow {
+                diary_day,
+                language,
+                style,
+            } => WorkerResult::StartedWorkflow(Box::new(client.start_workflow(
+                attachment,
+                diary_day.as_deref(),
+                language.as_deref(),
+                style.as_deref(),
+            ))),
             Intent::DiscardWorkflow { id, revision } => {
                 WorkerResult::Discarded(client.discard_workflow(attachment, &id, revision))
             }
@@ -521,12 +531,14 @@ impl Worker {
                 revision,
                 language,
                 style,
+                assistant_backend_id,
             } => WorkerResult::WritingSettingsSet(Box::new(client.set_writing_settings(
                 attachment,
                 &workflow_id,
                 revision,
                 &language,
                 &style,
+                assistant_backend_id.as_deref(),
             ))),
             Intent::BeginManualComposition {
                 workflow_id,

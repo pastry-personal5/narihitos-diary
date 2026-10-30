@@ -325,6 +325,14 @@ fn real_loopback_enforces_headers_authorization_and_conditional_mutations() {
     runtime.block_on(async {
         let scratch = Scratch::new("loopback");
         let store = Arc::new(SqliteStore::open(scratch.path().join("state.sqlite3")).unwrap());
+        store
+            .save_preferences(&Preferences {
+                last_language: None,
+                last_assistant_backend_id: Some(
+                    AssistantBackendId::parse("missing-backend").unwrap(),
+                ),
+            })
+            .unwrap();
         let listener = match TcpListener::bind(("127.0.0.1", 0)).await {
             Ok(listener) => listener,
             Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => return,
@@ -413,6 +421,7 @@ fn real_loopback_enforces_headers_authorization_and_conditional_mutations() {
         .await;
         assert!(response.starts_with("HTTP/1.1 201"));
         assert!(response.to_ascii_lowercase().contains("etag: \"wf-0\""));
+        assert!(response.contains("\"assistant_backend_id\":null"));
         let response = request(
             port,
             "POST",
@@ -562,6 +571,145 @@ fn real_loopback_enforces_headers_authorization_and_conditional_mutations() {
 
         let _ = shutdown_tx.send(());
         server.await.unwrap().unwrap();
+    });
+}
+
+#[test]
+fn assistant_choice_survives_restart_and_new_workflows_inherit_session_settings() {
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    runtime.block_on(async {
+        let scratch = Scratch::new("assistant-settings");
+        let database = scratch.path().join("state.sqlite3");
+        let backend_id = AssistantBackendId::parse("synthetic-hosted").unwrap();
+        let registry = Arc::new(
+            DraftAssistantRegistry::new(
+                vec![Arc::new(SyntheticAssistant::new(backend_id.clone()))],
+                None,
+            )
+            .unwrap(),
+        );
+        let token = format!("token_{}", "33".repeat(32));
+
+        for restart in 0..2 {
+            let store = Arc::new(SqliteStore::open(&database).unwrap());
+            let listener = match TcpListener::bind(("127.0.0.1", 0)).await {
+                Ok(listener) => listener,
+                Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => return,
+                Err(error) => panic!("test listener bind failed: {error}"),
+            };
+            let port = listener.local_addr().unwrap().port();
+            let config = ServerConfig {
+                instance_id: format!("instance_{}", "44".repeat(32)),
+                control_token: token.clone(),
+                port,
+                commands: service(store),
+                apple_helper_available: true,
+                notion_configured: false,
+                assistant_registry: registry.clone(),
+                diagnostics: None,
+                diagnostic_failure: None,
+            };
+            let (shutdown_tx, shutdown_rx) = oneshot::channel();
+            let server = tokio::spawn(serve(listener, config, async move {
+                let _ = shutdown_rx.await;
+            }));
+
+            if restart == 0 {
+                let created = request(
+                    port,
+                    "POST",
+                    "/v1/workflows",
+                    r#"{"diary_day":"2026-10-28"}"#,
+                    &[],
+                    Some(&token),
+                )
+                .await;
+                assert!(created.starts_with("HTTP/1.1 201"));
+                let selected = request(
+                    port,
+                    "PUT",
+                    "/v1/workflows/wf_20261028/assistant-selection",
+                    r#"{"backend_id":"synthetic-hosted"}"#,
+                    &[("If-Match", "\"wf-0\"".to_owned())],
+                    Some(&token),
+                )
+                .await;
+                assert!(selected.starts_with("HTTP/1.1 200"), "{selected}");
+                let settings = request(
+                    port,
+                    "PUT",
+                    "/v1/workflows/wf_20261028/writing-settings",
+                    r#"{"language":"ko-KR","style":"reflective","assistant_backend_id":"synthetic-hosted"}"#,
+                    &[("If-Match", "\"wf-1\"".to_owned())],
+                    Some(&token),
+                )
+                .await;
+                assert!(settings.starts_with("HTTP/1.1 200"));
+                assert!(settings.contains("\"assistant_backend_id\":\"synthetic-hosted\""));
+                let next = request(
+                    port,
+                    "POST",
+                    "/v1/workflows",
+                    r#"{"diary_day":"2026-10-29","language":"ko-KR","style":"reflective"}"#,
+                    &[],
+                    Some(&token),
+                )
+                .await;
+                assert!(next.starts_with("HTTP/1.1 201"));
+                assert!(next.contains("\"style\":\"reflective\""));
+                assert!(next.contains("\"assistant_backend_id\":\"synthetic-hosted\""));
+            } else {
+                let restored = request(
+                    port,
+                    "POST",
+                    "/v1/workflows",
+                    r#"{"diary_day":"2026-10-30"}"#,
+                    &[],
+                    Some(&token),
+                )
+                .await;
+                assert!(restored.starts_with("HTTP/1.1 201"));
+                assert!(restored.contains("\"assistant_backend_id\":\"synthetic-hosted\""));
+                assert!(restored.contains("\"style\":\"concise\""));
+                let existing = request(
+                    port,
+                    "POST",
+                    "/v1/workflows",
+                    r#"{"diary_day":"2026-10-29","language":"en-US","style":"standard"}"#,
+                    &[],
+                    Some(&token),
+                )
+                .await;
+                assert!(existing.starts_with("HTTP/1.1 200"));
+                assert!(existing.contains("\"style\":\"reflective\""));
+                let manual = request(
+                    port,
+                    "PUT",
+                    "/v1/workflows/wf_20261030/assistant-selection",
+                    r#"{"backend_id":null}"#,
+                    &[("If-Match", "\"wf-1\"".to_owned())],
+                    Some(&token),
+                )
+                .await;
+                assert!(manual.starts_with("HTTP/1.1 200"));
+                let manual_next = request(
+                    port,
+                    "POST",
+                    "/v1/workflows",
+                    r#"{"diary_day":"2026-10-31"}"#,
+                    &[],
+                    Some(&token),
+                )
+                .await;
+                assert!(manual_next.starts_with("HTTP/1.1 201"));
+                assert!(manual_next.contains("\"assistant_backend_id\":null"));
+            }
+            let _ = shutdown_tx.send(());
+            server.await.unwrap().unwrap();
+        }
     });
 }
 

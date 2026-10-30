@@ -18,6 +18,11 @@ opening every note. Source-list letter shortcuts are available while the
 Resources Sidebar is focused and the input indicator reads `IME: EN`; `?`
 shows the shortcut help.
 
+The TUI carries language and writing style to new diary days during the
+session. It saves the assistant choice, including manual mode, and restores it
+for new days after a restart; reopening an existing day keeps that day's own
+settings.
+
 ## Status
 
 P1-M8 is done and adds optional Codex hosted and Apple on-device assistants for

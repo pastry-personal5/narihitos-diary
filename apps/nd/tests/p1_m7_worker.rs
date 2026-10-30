@@ -100,6 +100,8 @@ fn the_workers_complete_real_rest_and_event_requests_against_a_real_server() {
     worker
         .try_send(Intent::StartOrResumeWorkflow {
             diary_day: Some("2026-10-29".to_owned()),
+            language: None,
+            style: None,
         })
         .unwrap();
     let deadline = Instant::now() + Duration::from_secs(10);
@@ -166,6 +168,7 @@ fn the_workers_complete_real_rest_and_event_requests_against_a_real_server() {
             revision: empty_workflow.revision,
             language: "en-US".to_owned(),
             style: "concise".to_owned(),
+            assistant_backend_id: None,
         })
         .unwrap();
     let deadline = Instant::now() + Duration::from_secs(10);

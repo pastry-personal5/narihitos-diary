@@ -1042,7 +1042,7 @@ impl Workflow {
         now: Timestamp,
     ) -> Result<(), WorkflowError> {
         self.expect_revision(expected_revision)?;
-        self.ensure_entry_editable()?;
+        self.ensure_writing_settings_editable()?;
         if self.language == Some(language) {
             return Ok(());
         }
@@ -1058,7 +1058,7 @@ impl Workflow {
         now: Timestamp,
     ) -> Result<(), WorkflowError> {
         self.expect_revision(expected_revision)?;
-        self.ensure_entry_editable()?;
+        self.ensure_writing_settings_editable()?;
         if self.style == style {
             return Ok(());
         }
@@ -1074,7 +1074,7 @@ impl Workflow {
         now: Timestamp,
     ) -> Result<(), WorkflowError> {
         self.expect_revision(expected_revision)?;
-        self.ensure_entry_editable()?;
+        self.ensure_writing_settings_editable()?;
         if self.assistant_selection == selection {
             return Ok(());
         }
@@ -1092,7 +1092,7 @@ impl Workflow {
         now: Timestamp,
     ) -> Result<(), WorkflowError> {
         self.expect_revision(expected_revision)?;
-        self.ensure_entry_editable()?;
+        self.ensure_writing_settings_editable()?;
         if self.language == Some(language)
             && self.style == style
             && self.assistant_selection == assistant_selection
@@ -1827,6 +1827,17 @@ impl Workflow {
             Ok(())
         } else {
             Err(WorkflowError::WrongState)
+        }
+    }
+
+    fn ensure_writing_settings_editable(&self) -> Result<(), WorkflowError> {
+        if matches!(
+            self.state,
+            WorkflowState::Started | WorkflowState::Discovered
+        ) {
+            Ok(())
+        } else {
+            self.ensure_entry_editable()
         }
     }
 
