@@ -119,6 +119,8 @@ identical copy to that iCloud Drive folder, which must already exist under
 Publish shows a mirror row only if the copy is pending, blocked (for example
 the folder is missing or the file is still an iCloud placeholder), or in
 conflict. Local and Notion are unaffected either way.
+An amendment replaces that copy too, but only while it still holds the text the
+app saved there; a file you edited in iCloud stays untouched and shows a conflict.
 
 After the local receipt and read-back are verified, return to Preview and
 generate the Notion-only plan. It shows the human-readable

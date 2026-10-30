@@ -222,6 +222,7 @@ impl LocalOutput {
             Some(_) => {}
         }
         let parent = target.parent().ok_or(LocalError::UnsafePath)?;
+        Self::sweep_orphan_temps(parent, day);
         let mut temp = None;
         for attempt in 0..32 {
             let path = parent.join(format!(".nd-{}-{}-{attempt}.tmp", std::process::id(), day));
@@ -260,6 +261,37 @@ impl LocalOutput {
             let _ = fs::remove_file(&temp_path);
         }
         outcome
+    }
+
+    /// Removes temp files a crashed earlier process left for this day. Only
+    /// the exact `.nd-<pid>-<day>-<n>.tmp` pattern of another process is
+    /// matched; this process's own temp files and all other names are kept.
+    fn sweep_orphan_temps(parent: &Path, day: &DiaryDay) {
+        let Ok(entries) = fs::read_dir(parent) else {
+            return;
+        };
+        let own_pid = std::process::id().to_string();
+        let day_marker = format!("-{day}-");
+        for entry in entries.flatten() {
+            let name = entry.file_name();
+            let Some(rest) = name
+                .to_str()
+                .and_then(|name| name.strip_prefix(".nd-"))
+                .and_then(|name| name.strip_suffix(".tmp"))
+            else {
+                continue;
+            };
+            let Some((pid, attempt)) = rest.split_once(&day_marker) else {
+                continue;
+            };
+            let numeric = |text: &str| !text.is_empty() && text.bytes().all(|b| b.is_ascii_digit());
+            if numeric(pid) && numeric(attempt) && pid != own_pid {
+                let is_file = entry.file_type().is_ok_and(|kind| kind.is_file());
+                if is_file {
+                    let _ = fs::remove_file(entry.path());
+                }
+            }
+        }
     }
 
     fn current_digest(&self, day: &DiaryDay) -> Result<Option<Digest>, LocalError> {

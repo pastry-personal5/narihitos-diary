@@ -213,15 +213,31 @@ struct Fixture {
     service: CommandService,
     clock: Arc<AtomicI64>,
     day: DiaryDay,
+    mirror: Option<Arc<LocalOutput>>,
+    mirror_root: PathBuf,
 }
 
 fn fixture() -> Fixture {
+    build(false)
+}
+
+/// Same as [`fixture`] with an iCloud mirror configured beneath a fake home.
+fn fixture_with_mirror() -> Fixture {
+    build(true)
+}
+
+fn build(with_mirror: bool) -> Fixture {
     let scratch = Scratch::new();
     let store = Arc::new(SqliteStore::open(scratch.0.join("state.sqlite3")).unwrap());
     let root = scratch.0.join("entries");
     let notion = Scripted::new();
     let clock = Arc::new(AtomicI64::new(100));
-    let service = CommandService::new(
+    let home = scratch.0.join("home");
+    let mirror_root = home.join("Library/Mobile Documents/com~apple~CloudDocs/entries");
+    fs::create_dir_all(&mirror_root).unwrap();
+    let mirror =
+        with_mirror.then(|| Arc::new(LocalOutput::new_icloud(mirror_root.clone(), &home).unwrap()));
+    let mut service = CommandService::new(
         store.clone(),
         Arc::new(NoSources),
         Arc::new(NoSources),
@@ -229,7 +245,12 @@ fn fixture() -> Fixture {
     )
     .with_local_output(Arc::new(LocalOutput::new(root.clone()).unwrap()))
     .with_notion_output(notion.clone());
+    if let Some(mirror) = &mirror {
+        service = service.with_mirror_output(mirror.clone());
+    }
     Fixture {
+        mirror,
+        mirror_root,
         _scratch: scratch,
         root,
         store,
@@ -243,6 +264,10 @@ fn fixture() -> Fixture {
 impl Fixture {
     fn file(&self) -> PathBuf {
         self.root.join("2026/10/2026-10-30.md")
+    }
+
+    fn mirror_file(&self) -> PathBuf {
+        self.mirror.as_ref().unwrap().target(&self.day)
     }
 
     /// Publishes "Today was quiet." to the local file and to Notion.
@@ -756,7 +781,7 @@ fn a_crash_with_only_a_temp_file_written_leaves_the_file_and_retries_safely() {
         f.file()
             .parent()
             .unwrap()
-            .join(format!(".nd-{}-{}-0.tmp", std::process::id(), f.day));
+            .join(format!(".nd-{}-{}-0.tmp", std::process::id() + 1, f.day));
     fs::write(&stray, &payload).unwrap();
     f.service.reconcile_amendment_intents().unwrap();
     assert_eq!(fs::read_to_string(f.file()).unwrap(), before, "untouched");
@@ -771,6 +796,7 @@ fn a_crash_with_only_a_temp_file_written_leaves_the_file_and_retries_safely() {
         .unwrap();
     assert_eq!(done.state(), WorkflowState::Completed);
     assert_eq!(fs::read_to_string(f.file()).unwrap(), payload);
+    assert!(!stray.exists(), "an earlier process's orphan temp is swept");
 }
 
 #[test]
@@ -807,5 +833,114 @@ fn completing_an_amendment_restarts_the_seven_day_text_purge() {
     assert_eq!(
         f.store.purge_expired(Timestamp(5_000 + WEEK)).unwrap(),
         vec![f.day.clone()]
+    );
+}
+
+#[test]
+fn an_unchanged_amendment_completes_instead_of_sticking_in_publishing() {
+    let f = fixture();
+    let completed = f.completed();
+    let (previewed, digest) = f.previewed(&completed, "Today was quiet.");
+    let approved = f
+        .service
+        .approve_amendment(&f.day, previewed.revision(), &digest)
+        .unwrap();
+    let done = f
+        .service
+        .publish_amendment(&f.day, approved.revision(), &AtomicBool::new(false))
+        .unwrap();
+    assert_eq!(done.state(), WorkflowState::Completed);
+    assert!(f.store.unresolved_intents(Some(&f.day)).unwrap().is_empty());
+}
+
+fn amend_to(f: &Fixture, completed: &Workflow, text: &str) -> Workflow {
+    let (previewed, digest) = f.previewed(completed, text);
+    let approved = f
+        .service
+        .approve_amendment(&f.day, previewed.revision(), &digest)
+        .unwrap();
+    f.service
+        .publish_amendment(&f.day, approved.revision(), &AtomicBool::new(false))
+        .unwrap()
+}
+
+#[test]
+fn the_icloud_mirror_is_replaced_with_the_local_file_guarded_by_its_own_receipt() {
+    let f = fixture_with_mirror();
+    let completed = f.completed();
+    assert_eq!(
+        fs::read(f.mirror_file()).unwrap(),
+        fs::read(f.file()).unwrap()
+    );
+    let (previewed, _) = f.previewed(&completed, "Quiet, then rain.");
+    let plan = previewed.output_plan().unwrap();
+    assert!(
+        plan.targets
+            .iter()
+            .any(|target| target.destination == "icloud")
+    );
+    assert_eq!(Fixture::status(&previewed, "icloud"), "pending");
+
+    let done = amend_to(&f, &previewed_base(&f), "Quiet, then rain.");
+    assert_eq!(done.state(), WorkflowState::Completed);
+    let local = fs::read(f.file()).unwrap();
+    assert!(String::from_utf8_lossy(&local).contains("then rain"));
+    assert_eq!(fs::read(f.mirror_file()).unwrap(), local, "byte-identical");
+    let receipts = f.store.receipts(&f.day).unwrap();
+    assert!(
+        receipts
+            .iter()
+            .any(|receipt| receipt.destination == "icloud" && receipt.version == 3)
+    );
+}
+
+/// The workflow as it stands after an earlier preview was abandoned.
+fn previewed_base(f: &Fixture) -> Workflow {
+    let current = f.service.load_workflow(&f.day).unwrap();
+    f.service
+        .abandon_amendment(&f.day, current.revision())
+        .unwrap()
+}
+
+#[test]
+fn a_hand_edited_mirror_is_a_contained_conflict_and_never_overwritten() {
+    let f = fixture_with_mirror();
+    let completed = f.completed();
+    fs::write(f.mirror_file(), "my own notes").unwrap();
+    let partial = amend_to(&f, &completed, "Quiet, then rain.");
+    assert_eq!(partial.state(), WorkflowState::Partial);
+    assert_eq!(Fixture::status(&partial, "local"), "verified");
+    assert_eq!(Fixture::status(&partial, "notion"), "verified");
+    assert_eq!(Fixture::status(&partial, "icloud"), "conflict");
+    assert_eq!(fs::read_to_string(f.mirror_file()).unwrap(), "my own notes");
+}
+
+#[test]
+fn a_blocked_mirror_is_retried_alone_after_the_amendment() {
+    let f = fixture_with_mirror();
+    let completed = f.completed();
+    let (previewed, digest) = f.previewed(&completed, "Quiet, then rain.");
+    let approved = f
+        .service
+        .approve_amendment(&f.day, previewed.revision(), &digest)
+        .unwrap();
+    let moved = f.mirror_root.with_extension("away");
+    fs::rename(&f.mirror_root, &moved).unwrap();
+    let partial = f
+        .service
+        .publish_amendment(&f.day, approved.revision(), &AtomicBool::new(false))
+        .unwrap();
+    assert_eq!(partial.state(), WorkflowState::Partial);
+    assert_eq!(Fixture::status(&partial, "icloud"), "blocked");
+    assert_eq!(Fixture::status(&partial, "notion"), "verified");
+    fs::rename(&moved, &f.mirror_root).unwrap();
+    let done = f
+        .service
+        .publish_mirror_guarded(&f.day, partial.revision(), || true)
+        .unwrap();
+    assert_eq!(done.state(), WorkflowState::Completed);
+    assert_eq!(
+        fs::read(f.mirror_file()).unwrap(),
+        fs::read(f.file()).unwrap()
     );
 }

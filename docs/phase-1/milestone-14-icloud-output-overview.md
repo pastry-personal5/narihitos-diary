@@ -28,8 +28,8 @@ verified iCloud file with no extra prompt. Without it, nothing changes.
 ## Out of scope
 
 - CloudKit, the Swift helper, making iCloud the source of truth.
-- Mirror replacement during amendments: P1-M11 (amendments) is still `Planned`,
-  so no replace path exists to extend. P1-M11 must cover the mirror receipt.
+- Mirror replacement during amendments: delivered by the P1-M11 review
+  follow-up (see that overview).
 - A user-facing command that triggers `publish_mirror_guarded`; the service
   method and its tests exist, wiring a trigger is left to a later milestone.
 

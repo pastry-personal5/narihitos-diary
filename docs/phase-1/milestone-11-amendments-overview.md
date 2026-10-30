@@ -115,4 +115,31 @@ on a human performing a manual run.
 
 2026-10-30: `cargo fmt --all -- --check`, `cargo clippy --all-targets --all-features -- -D warnings`, `cargo test --all-features --workspace` (456 tests), and `swift build` + `swift test` in `helpers/apple-bridge` (13 tests) all pass.
 
-Known limits: the iCloud mirror is not updated by an amendment; the Notion paths are tested against fakes only (no live Notion call, per the plan).
+Known limits: the Notion paths are tested against fakes only (no live Notion call, per the plan).
+
+## Review follow-up (2026-10-30)
+
+Defects found in review of the shipped milestone, each fixed test-first.
+
+- [x] The iCloud mirror is part of the amendment plan and progress, replaced
+  only while it holds its own receipted bytes, contained on conflict or
+  blocked, and retried alone (tests: replace, hand-edited mirror, blocked
+  mirror then `publish_mirror_guarded`).
+- [ ] Startup reconciliation of an interrupted amendment mirror write is
+  implemented (`reconcile_amendment_intents`) but has no crash-boundary test
+  yet.
+- [x] An unchanged amendment completes instead of sticking in `Publishing`.
+- [x] A crashed process's orphan temp file is swept on the next replacement
+  (asserted in the temp-file crash test).
+- [x] The standard gate passes again (results below).
+
+2026-10-30 (follow-up): `cargo fmt --all -- --check`, `cargo clippy
+--all-targets --all-features -- -D warnings`, `cargo test --all-features
+--workspace` (466 tests, summed from per-binary results; 462 before this
+follow-up), and `swift build` + `swift test` in `helpers/apple-bridge` (13
+tests) all pass.
+
+Reviewed and left as is: the reread and seed hand-edit predicates differ only
+by a front-matter-prefix check that cannot matter when the digest equals the
+receipt's; `preflight_replace` reports a half-replaced Notion section as Ready
+with empty current blocks (the apply path resumes it safely).

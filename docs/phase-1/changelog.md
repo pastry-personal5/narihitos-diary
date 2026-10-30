@@ -11,7 +11,14 @@ This changelog records owner decisions and material plan changes for Phase 1.
   (file digest, receipt version, hand-edited flag). Amendment receipts take the
   next version and a `#v<n>` receipt ID. Abandon returns the day to its
   text-stripped Completed form; reread rebinds the seed and keeps the person's
-  text. The iCloud mirror is not amended in this milestone.
+  text. The iCloud mirror is not amended in this milestone (superseded by the
+  2026-10-30 review follow-up below).
+- 2026-10-30 — P1-M11 review follow-up — Amendments now cover the iCloud
+  mirror: an `icloud` plan target guarded by the mirror's own latest receipt
+  digest, replaced after the local file, contained conflict/blocked states,
+  startup reconciliation, and a mirror-only retry. An unchanged amendment no
+  longer leaves the day in `Publishing`. Orphan `.nd-<pid>-<day>-<n>.tmp` files
+  from a crashed process are swept on the next replacement of that day.
 - 2026-10-30 — P1-M14 iCloud output — Added an optional iCloud Drive
   Markdown mirror (`paths.icloud_entries_root`) written automatically after the
   verified local write under the same approval, isolated from local and Notion.

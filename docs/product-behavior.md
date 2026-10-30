@@ -132,8 +132,11 @@ mirror can be retried alone. Without the setting nothing changes. See the
   keeps the new text and Notion is retried alone. A conflict offers reread
   (rebind to the file as it is now, or re-preview the Notion section, keeping
   your text) or abandoning the
-  amendment, which leaves files and receipts untouched. The iCloud mirror is
-  not updated by an amendment in this milestone.
+  amendment, which leaves files and receipts untouched. With an iCloud mirror
+  configured, the mirror is replaced after the local file, only while it still
+  holds the bytes the app itself mirrored (its own receipt digest); any other
+  content, or an unreachable folder, leaves the mirror in conflict or blocked
+  without affecting local or Notion, and the mirror is retried alone.
 - If Notion is unconfigured, unreachable, or fails its preflight, the local
   entry can still be approved and written, and Notion shows blocked and can be
   retried later after a new Notion-only preview and approval. If Notion fails

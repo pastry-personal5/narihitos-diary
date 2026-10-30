@@ -1655,6 +1655,10 @@ impl CommandService {
         }
         let mut workflow = self.load_workflow(day)?;
         ensure_revision(&workflow, expected_revision)?;
+        if workflow.amendment().is_some() {
+            // The mirror holds the app's earlier bytes: replace, never create.
+            return self.publish_amendment_mirror(day, expected_revision, commit);
+        }
         if workflow.state() != diary_core::WorkflowState::Partial {
             return Err(CommandError::Workflow(WorkflowError::WrongState));
         }

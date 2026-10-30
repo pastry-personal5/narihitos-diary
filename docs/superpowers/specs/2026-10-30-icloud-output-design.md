@@ -1,6 +1,6 @@
 # iCloud output connector design
 
-Status: Implemented (P1-M14). No SQLite migration was needed; amendment replacement of the mirror file is deferred to P1-M11.
+Status: Implemented (P1-M14). No SQLite migration was needed; amendment replacement of the mirror file landed in the P1-M11 review follow-up.
 
 Adds an iCloud Drive Markdown output that mirrors the local entry file. It is written automatically and quietly when configured, and it never blocks or changes the local or Notion outputs.
 
