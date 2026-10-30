@@ -111,6 +111,9 @@ second row carries a `Tip:` naming the next step to the following stage. See
   The check is read-only, needs no mutation authority, and its answer clears
   when the workflow revision or day changes. A ready Notion points to Preview and
   approval; readiness never stands in for approval.
+- The Notion preview shows a `Position` line (`end`, `after YYYY-MM-DD`, or
+  `before YYYY-MM-DD`) saying where the day's section goes on the month page
+  (P1-M20). A page whose order changes before the write needs a new preview.
 - When the local file differs, stop the whole plan; when Notion holds
   conflicting same-day content, stop Notion only. Show both versions and offer
   only reread, discard the entry, or save under a different diary day, as

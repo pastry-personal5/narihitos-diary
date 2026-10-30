@@ -154,7 +154,8 @@ generate the Notion-only plan. It shows the human-readable
 the renderer/API versions, digest, and every ordered native block beginning
 with `heading_2: YYYY-MM-DD (DDD)`. Inspect that projection and approve it;
 Publish then creates only missing canonical pages and appends the section at
-the month page's bottom. A duplicate or wrong-weekday same-day heading stops
+its place in ascending date order on the month page (the preview's `Position`
+line says where; sections already out of order stay as they are). A duplicate or wrong-weekday same-day heading stops
 Notion without changing the verified local file. A blocked retry needs a new
 preview and approval, while an uncertain append is inspected before any new
 write. The token, page IDs, and unrelated Notion prose are never shown.

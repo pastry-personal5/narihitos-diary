@@ -323,6 +323,18 @@ Plan: [overview](milestone-19-publish-readiness-overview.md).
 Notes: Added after P1-M18 from a Notion-blocked diagnosis; it raises the
 Control API contract to version 6 with one read-only route.
 
+### P1-M20: Notion ascending date order
+
+Status: Done
+
+Goal: Insert each new Notion daily section in ascending date order on its month
+page instead of appending it at the bottom.
+
+Plan: [overview](milestone-20-notion-ascending-order-overview.md).
+
+Notes: Owner-approved 2026-10-30; raises the contract to version 7 with the
+Notion preview's `placement` field.
+
 ### P1-M13: Release qualification
 
 Status: Planned

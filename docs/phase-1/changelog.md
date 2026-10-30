@@ -15,6 +15,11 @@ This changelog records owner decisions and material plan changes for Phase 1.
   so the text before the first `#` is still the month page ID. A day stuck this
   way recovers on the next server start, when recovery re-inspects Notion and
   saves the receipt. No schema change.
+- 2026-10-30 — P1-M20 planned — New Notion daily sections were appended at the
+  bottom of the month page. They are now inserted in ascending date order (after
+  the greatest earlier dated section, or before the smallest later one); sections
+  already out of order are left alone. The Notion preview gains a `Position` line
+  and the contract version becomes 7.
 - 2026-10-30 — P1-M19 planned and implemented — Publish could send a Notion
   publish for a partial workflow whose Notion plan was never previewed and
   approved, and the failure said only `precondition-failed`. Publish now directs

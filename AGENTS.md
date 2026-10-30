@@ -33,11 +33,15 @@ Each decision is recorded in full in the doc that owns its topic; this is the in
   [the design](docs/superpowers/specs/2026-10-30-icloud-output-design.md) and
   [P1-M14](docs/phase-1/milestone-14-icloud-output-overview.md).
 - **Local output front matter:**- **Local output front matter:** P1-M9 uses YAML keys `date` and `language`. See [docs/phase-1/milestone-09-local-publication-recovery-overview.md](docs/phase-1/milestone-09-local-publication-recovery-overview.md).
-- **Notion publication format:** P1-M10 appends a native `heading_2` formatted
+- **Notion publication format:** P1-M10 adds a native `heading_2` formatted
   `YYYY-MM-DD (DDD)` with fixed uppercase English weekdays, followed by a
-  lossless native-block projection of the confirmed Markdown body. Unrelated
-  hierarchy content is allowed; canonical year/month matches must be unique.
-  See [docs/phase-1/milestone-10-notion-publication-overview.md](docs/phase-1/milestone-10-notion-publication-overview.md).
+  lossless native-block projection of the confirmed Markdown body. P1-M20
+  (owner-approved 2026-10-30) inserts it in ascending date order: after the
+  greatest earlier dated section, or before the smallest later one; existing
+  out-of-order sections are never rewritten. Unrelated hierarchy content is
+  allowed; canonical year/month matches must be unique.
+  See [docs/phase-1/milestone-10-notion-publication-overview.md](docs/phase-1/milestone-10-notion-publication-overview.md)
+  and [P1-M20](docs/phase-1/milestone-20-notion-ascending-order-overview.md).
 - **Ayumi source maintenance:** Sources-stage approval/edit writes the real
   note; explicitly confirmed deletion hard-deletes that note and only its
   safely resolved linked audio. Audio bytes are never read or sent. See

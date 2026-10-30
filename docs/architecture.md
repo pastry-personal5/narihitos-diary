@@ -402,9 +402,15 @@ the mirror alone. See the [iCloud output design](superpowers/specs/2026-10-30-ic
 The Notion adapter sends only the confirmed body, without YAML front matter.
 It treats the configured page as a root, tolerates unrelated content, resolves
 or creates unique direct `YYYY` and `YYYY-MM` child pages, and appends a native
-`heading_2: YYYY-MM-DD (DDD)` section at the bottom of the month page. The
-weekday is derived from the diary day and uses fixed uppercase English
-abbreviations. A versioned renderer converts Markdown losslessly to native
+`heading_2: YYYY-MM-DD (DDD)` section to the month page in ascending date
+order (P1-M20): it goes after the dated section with the greatest earlier date,
+or before the smallest later one, and at the end when the page has no dated
+section. Sections already out of order are left alone, because Notion cannot
+move blocks, so a new section never makes the page less sorted. Only the first
+chunk takes that insertion point; later chunks chain after the last verified
+block. A section ends at the next first- or second-level heading, matching
+read-back. The weekday is derived from the diary day and uses fixed uppercase
+English abbreviations. A versioned renderer converts Markdown losslessly to native
 Notion blocks; unsupported constructs remain literal, and preview, digest,
 write, read-back, and reconciliation share its canonical block plan. The
 adapter paginates relevant reads, checks for an existing same-day section,

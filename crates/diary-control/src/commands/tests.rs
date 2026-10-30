@@ -104,6 +104,7 @@ fn notion_binding_refusal_names_the_first_departure() {
             month_title: String::new(),
             year_exists: true,
             month_exists: true,
+            placement: "end".to_owned(),
             renderer_version: 1,
             api_version: String::new(),
             payload_digest: digest(payload),

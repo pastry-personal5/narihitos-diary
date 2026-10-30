@@ -342,14 +342,17 @@ impl NotionRemote for HttpRemote {
         &self,
         parent_id: &str,
         blocks: &[NotionBlock],
-        after: Option<&str>,
+        place: &Placement,
         cancelled: &AtomicBool,
     ) -> Result<Vec<RemoteBlock>, RemoteError> {
         let children: Vec<_> = blocks.iter().map(block_json).collect();
-        let position = after.map_or_else(
-            || serde_json::json!({ "type": "end" }),
-            |id| serde_json::json!({ "type": "after_block", "after_block": { "id": id } }),
-        );
+        let position = match place {
+            Placement::End => serde_json::json!({ "type": "end" }),
+            Placement::Start => serde_json::json!({ "type": "start" }),
+            Placement::After(id) => {
+                serde_json::json!({ "type": "after_block", "after_block": { "id": id } })
+            }
+        };
         let body = serde_json::json!({ "children": children, "position": position });
         let response = self.request(
             "PATCH",

@@ -39,6 +39,10 @@ pub struct NotionPreviewDto {
     pub path: Vec<String>,
     pub year_exists: bool,
     pub month_exists: bool,
+    /// Where the new section goes on the month page (`end`, `after YYYY-MM-DD`,
+    /// or `before YYYY-MM-DD`); empty from a server that predates ordering.
+    #[serde(default)]
+    pub placement: String,
     pub renderer_version: u32,
     pub api_version: String,
     pub payload_digest: String,

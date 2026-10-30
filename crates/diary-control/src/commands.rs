@@ -50,6 +50,7 @@ pub struct NotionPreview {
     pub month_title: String,
     pub year_exists: bool,
     pub month_exists: bool,
+    pub placement: String,
     pub renderer_version: u32,
     pub api_version: String,
     pub payload_digest: Digest,

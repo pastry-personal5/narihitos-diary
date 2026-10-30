@@ -32,8 +32,8 @@ use projection::{chunk_blocks, plan_digest};
 
 mod hierarchy;
 pub use hierarchy::{
-    HierarchyError, HierarchyPlan, NotionPage, PageChild, PageKind, SameDayState,
-    classify_same_day, resolve_child,
+    HierarchyError, HierarchyPlan, InsertionPoint, NotionPage, PageChild, PageKind, SameDayState,
+    classify_same_day, plan_insertion, resolve_child,
 };
 
 mod retry;
@@ -43,6 +43,14 @@ pub use retry::{RetryAction, RetryPolicy, SetupReason, content_free_reason};
 struct RemoteBlock {
     id: String,
     block: NotionBlock,
+}
+
+/// Where an append lands among the parent's existing children.
+#[derive(Clone, Debug, Eq, PartialEq)]
+enum Placement {
+    End,
+    Start,
+    After(String),
 }
 
 trait NotionRemote: Send + Sync {
@@ -66,7 +74,7 @@ trait NotionRemote: Send + Sync {
         &self,
         parent_id: &str,
         blocks: &[NotionBlock],
-        after: Option<&str>,
+        place: &Placement,
         cancelled: &AtomicBool,
     ) -> Result<Vec<RemoteBlock>, RemoteError>;
     /// Moves one block (and its children) to the trash.

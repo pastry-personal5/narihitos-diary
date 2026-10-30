@@ -252,6 +252,7 @@ pub(super) async fn preview_notion_output(
         path: vec![preview.root_label, preview.year_title, preview.month_title],
         year_exists: preview.year_exists,
         month_exists: preview.month_exists,
+        placement: preview.placement,
         renderer_version: preview.renderer_version,
         api_version: preview.api_version,
         payload_digest: preview.payload_digest.as_str().to_owned(),

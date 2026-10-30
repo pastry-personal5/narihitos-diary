@@ -180,8 +180,13 @@ pub fn preview_screen_body(
     );
     if let Some(notion) = notion {
         text.push_str(&format!(
-            "Path: {}\nRenderer: {} · API: {}\nSHA-256: {}\nNotion: {}\nYear: {} · Month: {}\n",
+            "Path: {}\nPosition: {}\nRenderer: {} · API: {}\nSHA-256: {}\nNotion: {}\nYear: {} · Month: {}\n",
             notion.path.join(" → "),
+            if notion.placement.is_empty() {
+                "end"
+            } else {
+                &notion.placement
+            },
             notion.renderer_version,
             notion.api_version,
             notion.payload_digest,

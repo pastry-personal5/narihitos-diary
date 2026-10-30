@@ -49,8 +49,8 @@ The configured page is a root, not the daily-entry destination. For diary day
 Use the workflow's diary day to choose the `YYYY` year and `YYYY-MM` month.
 Create a missing year page under the root and a missing month page under that
 year when publishing. Reuse an existing unambiguous path. Append each new
-daily section at the bottom of the month page; check for the same-day heading
-there. A duplicate or ambiguous year/month page title requires resolution
+daily section in ascending date order on the month page (P1-M20); check for
+the same-day heading there. A duplicate or ambiguous year/month page title requires resolution
 before a write. The TUI previews the root, year, and month destination and
 any pages that publication will create.
 
@@ -156,7 +156,8 @@ Reasons:
 
 - It does not rewrite existing page content.
 - It directly models a heading plus paragraphs.
-- It supports bottom-of-month placement with an end append.
+- It supports bottom-of-month placement with an end append, and ordered
+  placement with `position` types `start`, `end`, and `after_block`.
 - It provides block IDs that can be retained for later verification.
 
 The block API remains a research candidate. Creating year/month subpages must
@@ -228,7 +229,8 @@ native block: <losslessly converted Markdown block>
 
 The date is the workflow's canonical local diary day and `DDD` is its fixed
 uppercase English weekday (`MON` through `SUN`) regardless of entry language.
-New daily sections are appended at the bottom of the target month page. The
+New daily sections are inserted in ascending date order on the target month
+page (P1-M20; appended when no dated section exists). The
 body is mapped losslessly to native blocks, splitting rich text and requests at
 documented limits without truncation; unsupported constructs remain literal.
 

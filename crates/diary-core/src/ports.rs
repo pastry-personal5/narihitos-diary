@@ -179,6 +179,9 @@ pub struct NotionPreflight {
     pub month_title: String,
     pub year_exists: bool,
     pub month_exists: bool,
+    /// Where the new daily section goes on the month page (`end`,
+    /// `after YYYY-MM-DD`, or `before YYYY-MM-DD`); content-free.
+    pub placement: String,
     pub renderer_version: u32,
     pub api_version: String,
     pub payload_digest: Digest,

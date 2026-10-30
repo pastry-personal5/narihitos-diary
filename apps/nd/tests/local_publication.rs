@@ -149,6 +149,7 @@ impl NotionOutputPort for SyntheticNotion {
             month_title: day.as_str()[..7].to_owned(),
             year_exists: false,
             month_exists: false,
+            placement: "end".to_owned(),
             renderer_version: 1,
             api_version: "2026-03-11".into(),
             payload_digest: Digest::of_bytes(markdown.as_bytes()),

@@ -75,6 +75,7 @@ impl NotionClient {
         observed.extend_from_slice(plan.month_title.as_bytes());
         let mut status = NotionPreflightStatus::Ready;
         let mut reason = None;
+        let mut placement = "end".to_owned();
         if let Some(year) = &path.year {
             observed.extend_from_slice(year.id.as_bytes());
         }
@@ -85,18 +86,12 @@ impl NotionClient {
                 observed.extend_from_slice(block.id.as_bytes());
                 observed.extend_from_slice(block.block.display_text().as_bytes());
             }
-            if !matches!(
-                classify_same_day(
-                    &blocks
-                        .iter()
-                        .map(|item| item.block.clone())
-                        .collect::<Vec<_>>(),
-                    plan,
-                ),
-                SameDayState::Absent
-            ) {
+            let bare: Vec<_> = blocks.iter().map(|item| item.block.clone()).collect();
+            if !matches!(classify_same_day(&bare, plan), SameDayState::Absent) {
                 status = NotionPreflightStatus::Conflict;
                 reason = Some("notion-same-day-conflict".to_owned());
+            } else {
+                placement = plan_insertion(&bare, plan).label;
             }
         }
         Ok(NotionPreflight {
@@ -106,6 +101,7 @@ impl NotionClient {
             month_title: plan.month_title.clone(),
             year_exists: path.year.is_some(),
             month_exists: path.month.is_some(),
+            placement,
             renderer_version: plan.renderer_version,
             api_version: plan.api_version.clone(),
             payload_digest: Digest::parse(plan.payload_digest.clone())
@@ -252,20 +248,18 @@ impl NotionOutputPort for NotionClient {
             Ok(blocks) => blocks,
             Err(_) => return WriteOutcome::Unavailable,
         };
-        if !matches!(
-            classify_same_day(
-                &existing
-                    .iter()
-                    .map(|item| item.block.clone())
-                    .collect::<Vec<_>>(),
-                &plan,
-            ),
-            SameDayState::Absent
-        ) {
+        let bare: Vec<_> = existing.iter().map(|item| item.block.clone()).collect();
+        if !matches!(classify_same_day(&bare, &plan), SameDayState::Absent) {
             return WriteOutcome::Conflict;
         }
+        // Only the first chunk uses the dated insertion point; later chunks
+        // chain after the last read-back-verified block.
+        let mut place = match plan_insertion(&bare, &plan).point {
+            InsertionPoint::End => Placement::End,
+            InsertionPoint::Start => Placement::Start,
+            InsertionPoint::After(index) => Placement::After(existing[index].id.clone()),
+        };
         let mut ids = Vec::new();
-        let mut after = None;
         for chunk in plan.append_chunks() {
             if cancelled.load(Ordering::Acquire) {
                 return if ids.is_empty() {
@@ -274,17 +268,16 @@ impl NotionOutputPort for NotionClient {
                     WriteOutcome::AmbiguousWrite
                 };
             }
-            let appended =
-                match self
-                    .remote
-                    .append_blocks(&month.id, chunk, after.as_deref(), cancelled)
-                {
-                    Ok(appended) => appended,
-                    Err(RemoteError::Pending) if ids.is_empty() => {
-                        return WriteOutcome::DefiniteNoEffect;
-                    }
-                    Err(_) => return WriteOutcome::AmbiguousWrite,
-                };
+            let appended = match self
+                .remote
+                .append_blocks(&month.id, chunk, &place, cancelled)
+            {
+                Ok(appended) => appended,
+                Err(RemoteError::Pending) if ids.is_empty() => {
+                    return WriteOutcome::DefiniteNoEffect;
+                }
+                Err(_) => return WriteOutcome::AmbiguousWrite,
+            };
             if appended.len() != chunk.len()
                 || appended.iter().map(|item| &item.block).ne(chunk.iter())
             {
@@ -297,7 +290,9 @@ impl NotionOutputPort for NotionClient {
                     _ => return WriteOutcome::AmbiguousWrite,
                 };
             ids = verified;
-            after = ids.last().cloned();
+            if let Some(last) = ids.last() {
+                place = Placement::After(last.clone());
+            }
         }
         match self.inspect_exact(&plan, cancelled) {
             Ok(Some(verified)) if verified == ids => WriteOutcome::Verified {
@@ -370,6 +365,7 @@ impl NotionOutputPort for NotionClient {
                 month_title: plan.month_title.clone(),
                 year_exists: true,
                 month_exists: true,
+                placement: "in place".to_owned(),
                 renderer_version: plan.renderer_version,
                 api_version: plan.api_version.clone(),
                 payload_digest: Digest::parse(&plan.payload_digest)
@@ -432,7 +428,7 @@ impl NotionOutputPort for NotionClient {
                 match self.remote.append_blocks(
                     &request.owned_month_id,
                     chunk,
-                    Some(&after),
+                    &Placement::After(after),
                     cancelled,
                 ) {
                     Ok(_) => {}

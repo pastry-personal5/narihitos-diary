@@ -360,7 +360,7 @@ fn real_loopback_enforces_headers_authorization_and_conditional_mutations() {
 
         let response = request(port, "GET", "/v1/health", "", &[], None).await;
         assert!(response.starts_with("HTTP/1.1 200"));
-        assert!(response.contains("\"contract_version\":6"));
+        assert!(response.contains("\"contract_version\":7"));
         assert!(
             response
                 .to_ascii_lowercase()

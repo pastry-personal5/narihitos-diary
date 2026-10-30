@@ -137,7 +137,10 @@ fn route_table_contains_local_and_notion_publication_and_excludes_future_surface
             "{suffix}"
         );
     }
-    assert_eq!(CONTRACT_VERSION, 6, "publish readiness bumped the contract");
+    assert_eq!(
+        CONTRACT_VERSION, 7,
+        "Notion section placement bumped the contract"
+    );
     assert!(
         ROUTES
             .iter()

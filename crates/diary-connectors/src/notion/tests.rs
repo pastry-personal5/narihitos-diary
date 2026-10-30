@@ -1,3 +1,4 @@
+use super::hierarchy::Insertion;
 use super::projection::text_block;
 use super::*;
 use std::collections::BTreeMap;
@@ -231,6 +232,8 @@ struct FakeState {
     /// and the blocks are either stored (`true`) or never reach Notion.
     lose_append_reply_on_call: Option<(usize, bool)>,
     append_anchors: Vec<Option<String>>,
+    /// Appends that asked for the start of the parent's children.
+    start_inserts: usize,
     list_blocks_calls: usize,
     lose_next_create_reply: bool,
     fail_list_blocks_on_call: Option<(usize, RemoteError)>,
@@ -368,11 +371,17 @@ impl NotionRemote for FakeRemote {
         &self,
         parent_id: &str,
         blocks: &[NotionBlock],
-        after: Option<&str>,
+        place: &Placement,
         _: &AtomicBool,
     ) -> Result<Vec<RemoteBlock>, RemoteError> {
         let mut state = self.0.lock().unwrap();
-        state.append_anchors.push(after.map(str::to_owned));
+        state.append_anchors.push(match place {
+            Placement::After(id) => Some(id.clone()),
+            Placement::Start | Placement::End => None,
+        });
+        if *place == Placement::Start {
+            state.start_inserts += 1;
+        }
         let call = state.append_anchors.len();
         let lost = state
             .lose_append_reply_on_call
@@ -390,9 +399,14 @@ impl NotionRemote for FakeRemote {
             });
         }
         let existing = state.blocks.entry(parent_id.to_owned()).or_default();
-        let insertion = after
-            .and_then(|id| existing.iter().position(|item| item.id == id))
-            .map_or(existing.len(), |index| index + 1);
+        let insertion = match place {
+            Placement::End => existing.len(),
+            Placement::Start => 0,
+            Placement::After(id) => existing
+                .iter()
+                .position(|item| &item.id == id)
+                .map_or(existing.len(), |index| index + 1),
+        };
         existing.splice(insertion..insertion, appended.clone());
         if lost.is_some() {
             state.lose_append_reply_on_call = None;
@@ -457,7 +471,7 @@ fn published(markdown: &str) -> Published {
                 text_block(BlockKind::Heading2, "2026-10-31 (SAT)".into()),
                 text_block(BlockKind::Paragraph, "Someone else's day.".into()),
             ],
-            None,
+            &Placement::End,
             &AtomicBool::new(false),
         )
         .unwrap();
@@ -1389,4 +1403,262 @@ fn verified_section_is_adopted_again_without_another_write() {
     };
     assert_eq!(returned_ids, again);
     assert_eq!(remote.0.lock().unwrap().append_anchors.len(), 1);
+}
+
+fn dated(value: &str) -> NotionBlock {
+    text_block(
+        BlockKind::Heading2,
+        render_notion(&day(value), "").unwrap().heading,
+    )
+}
+
+fn para(text: &str) -> NotionBlock {
+    text_block(BlockKind::Paragraph, text.into())
+}
+
+fn insertion(blocks: &[NotionBlock], value: &str) -> Insertion {
+    plan_insertion(blocks, &render_notion(&day(value), "body").unwrap())
+}
+
+#[test]
+fn insertion_goes_after_the_greatest_earlier_section() {
+    let blocks = [
+        dated("2026-10-28"),
+        para("a"),
+        para("a2"),
+        dated("2026-10-30"),
+        para("c"),
+    ];
+    let found = insertion(&blocks, "2026-10-29");
+    assert_eq!(found.point, InsertionPoint::After(2));
+    assert_eq!(found.label, "after 2026-10-28");
+}
+
+#[test]
+fn a_later_day_goes_last_and_an_empty_page_appends() {
+    let blocks = [dated("2026-10-28"), para("a")];
+    let found = insertion(&blocks, "2026-10-30");
+    assert_eq!(found.point, InsertionPoint::End);
+    assert_eq!(found.label, "after 2026-10-28");
+    let empty = insertion(&[], "2026-10-30");
+    assert_eq!(empty.point, InsertionPoint::End);
+    assert_eq!(empty.label, "end");
+    // A page with only unrelated content also appends.
+    let unrelated = insertion(&[para("notes")], "2026-10-30");
+    assert_eq!(unrelated.point, InsertionPoint::End);
+    assert_eq!(unrelated.label, "end");
+}
+
+#[test]
+fn an_earlier_day_goes_before_the_first_later_section() {
+    let blocks = [dated("2026-10-28"), para("a")];
+    let first = insertion(&blocks, "2026-10-27");
+    assert_eq!(first.point, InsertionPoint::Start);
+    assert_eq!(first.label, "before 2026-10-28");
+    let with_intro = [para("intro"), dated("2026-10-28"), para("a")];
+    let after_intro = insertion(&with_intro, "2026-10-27");
+    assert_eq!(after_intro.point, InsertionPoint::After(0));
+    assert_eq!(after_intro.label, "before 2026-10-28");
+}
+
+#[test]
+fn an_unsorted_page_is_never_made_less_sorted() {
+    // 30 sits before 28; publishing 29 follows the greatest earlier date (28).
+    let blocks = [
+        dated("2026-10-30"),
+        para("c"),
+        dated("2026-10-28"),
+        para("a"),
+        dated("2026-10-31"),
+    ];
+    let found = insertion(&blocks, "2026-10-29");
+    assert_eq!(found.point, InsertionPoint::After(3));
+    assert_eq!(found.label, "after 2026-10-28");
+}
+
+#[test]
+fn only_canonical_dated_headings_count_and_any_heading_ends_a_section() {
+    let blocks = [
+        dated("2026-10-28"),
+        para("a"),
+        text_block(BlockKind::Heading2, "2026-10-29".into()),
+        text_block(BlockKind::Heading2, "2026-10-29 (wed)".into()),
+        text_block(BlockKind::Heading1, "Notes".into()),
+        para("n"),
+    ];
+    // The ISO-only and lower-case headings are not dated sections, but they
+    // still end the 28th section, so the insertion follows its body.
+    let found = insertion(&blocks, "2026-10-30");
+    assert_eq!(found.label, "after 2026-10-28");
+    assert_eq!(found.point, InsertionPoint::After(1));
+}
+
+fn seeded_month(days: &[&str]) -> Arc<FakeRemote> {
+    let remote = Arc::new(FakeRemote::default());
+    remote.seed_children(ROOT, vec![page("year", "2026")]);
+    remote.seed_children("year", vec![page("month", "2026-10")]);
+    let mut blocks = Vec::new();
+    for value in days {
+        blocks.push(RemoteBlock {
+            id: format!("h-{value}"),
+            block: dated(value),
+        });
+        blocks.push(RemoteBlock {
+            id: format!("b-{value}"),
+            block: para(&format!("body {value}")),
+        });
+    }
+    remote.seed_blocks("month", blocks);
+    remote
+}
+
+fn publish_day(remote: &Arc<FakeRemote>, value: &str, markdown: &str) -> WriteOutcome {
+    let client = NotionClient::scripted(remote.clone(), ROOT);
+    let request = request_for(&client, value, markdown);
+    client.write(&request, &AtomicBool::new(false))
+}
+
+fn headings(remote: &FakeRemote) -> Vec<String> {
+    remote
+        .month_texts("month")
+        .into_iter()
+        .filter(|text| text.starts_with("2026-10-"))
+        .collect()
+}
+
+#[test]
+fn a_new_day_is_inserted_between_existing_days() {
+    let remote = seeded_month(&["2026-10-28", "2026-10-30"]);
+    assert!(matches!(
+        publish_day(&remote, "2026-10-29", "mine"),
+        WriteOutcome::Verified { .. }
+    ));
+    assert_eq!(
+        remote.month_texts("month"),
+        vec![
+            "2026-10-28 (WED)",
+            "body 2026-10-28",
+            "2026-10-29 (THU)",
+            "mine",
+            "2026-10-30 (FRI)",
+            "body 2026-10-30",
+        ]
+    );
+}
+
+#[test]
+fn an_earlier_day_is_inserted_first_and_a_later_day_last() {
+    let remote = seeded_month(&["2026-10-28", "2026-10-30"]);
+    assert!(matches!(
+        publish_day(&remote, "2026-10-27", "first"),
+        WriteOutcome::Verified { .. }
+    ));
+    assert_eq!(remote.0.lock().unwrap().start_inserts, 1);
+    assert!(matches!(
+        publish_day(&remote, "2026-10-31", "last"),
+        WriteOutcome::Verified { .. }
+    ));
+    assert_eq!(
+        headings(&remote),
+        vec![
+            "2026-10-27 (TUE)",
+            "2026-10-28 (WED)",
+            "2026-10-30 (FRI)",
+            "2026-10-31 (SAT)"
+        ]
+    );
+    // The append of the later day needed no anchor.
+    let state = remote.0.lock().unwrap();
+    assert_eq!(state.append_anchors.last(), Some(&None));
+}
+
+#[test]
+fn a_section_over_one_hundred_blocks_inserts_mid_page_and_reads_back_verified() {
+    let remote = seeded_month(&["2026-10-28", "2026-10-30"]);
+    assert!(matches!(
+        publish_day(&remote, "2026-10-29", &long_markdown()),
+        WriteOutcome::Verified { .. }
+    ));
+    let texts = remote.month_texts("month");
+    assert_eq!(texts.len(), 4 + 121);
+    assert_eq!(texts[2], "2026-10-29 (THU)");
+    assert_eq!(texts[3], "paragraph 0");
+    assert_eq!(texts[122], "paragraph 119");
+    assert_eq!(texts[123], "2026-10-30 (FRI)");
+    // The second chunk chains after the last verified block of the first.
+    let state = remote.0.lock().unwrap();
+    assert_eq!(state.append_anchors.len(), 2);
+    assert_eq!(state.append_anchors[0].as_deref(), Some("b-2026-10-28"));
+    assert!(state.append_anchors[1].is_some());
+}
+
+#[test]
+fn an_unsorted_page_keeps_its_order_and_the_new_day_never_worsens_it() {
+    let remote = seeded_month(&["2026-10-30", "2026-10-28"]);
+    assert!(matches!(
+        publish_day(&remote, "2026-10-29", "mine"),
+        WriteOutcome::Verified { .. }
+    ));
+    assert_eq!(
+        headings(&remote),
+        vec!["2026-10-30 (FRI)", "2026-10-28 (WED)", "2026-10-29 (THU)"]
+    );
+}
+
+#[test]
+fn preflight_reports_the_placement_and_a_moved_anchor_voids_the_plan() {
+    let remote = seeded_month(&["2026-10-28", "2026-10-30"]);
+    let client = NotionClient::scripted(remote.clone(), ROOT);
+    let preflight = client.preflight(&day("2026-10-29"), "mine").unwrap();
+    assert_eq!(preflight.placement, "after 2026-10-28");
+    let request = NotionRequest {
+        day: day("2026-10-29"),
+        markdown: "mine".into(),
+        expected_target_identity: preflight.target_identity,
+        expected_payload_digest: preflight.payload_digest,
+        expected_state_digest: preflight.observed_state_digest,
+    };
+    // Someone adds a section in the meantime: the plan must be re-previewed.
+    remote
+        .append_blocks(
+            "month",
+            &[dated("2026-10-29")],
+            &Placement::End,
+            &AtomicBool::new(false),
+        )
+        .unwrap();
+    let before = remote.month_texts("month");
+    assert_eq!(
+        client.write(&request, &AtomicBool::new(false)),
+        WriteOutcome::Conflict
+    );
+    assert_eq!(remote.month_texts("month"), before);
+    // A month page that does not exist yet appends.
+    let fresh = Arc::new(FakeRemote::default());
+    let fresh_client = NotionClient::scripted(fresh, ROOT);
+    assert_eq!(
+        fresh_client
+            .preflight(&day("2026-10-29"), "mine")
+            .unwrap()
+            .placement,
+        "end"
+    );
+}
+
+#[test]
+fn a_lost_reply_mid_page_is_adopted_without_a_second_insert() {
+    let remote = seeded_month(&["2026-10-28", "2026-10-30"]);
+    let client = NotionClient::scripted(remote.clone(), ROOT);
+    let request = request_for(&client, "2026-10-29", "mine");
+    remote.lose_next_append_reply();
+    assert_eq!(
+        client.write(&request, &AtomicBool::new(false)),
+        WriteOutcome::AmbiguousWrite
+    );
+    let InspectionOutcome::Matching { returned_ids, .. } = client.inspect(&request) else {
+        panic!("the committed mid-page section must reconcile");
+    };
+    assert_eq!(returned_ids.len(), 2);
+    assert_eq!(remote.0.lock().unwrap().append_anchors.len(), 1);
+    assert_eq!(headings(&remote).len(), 3);
 }

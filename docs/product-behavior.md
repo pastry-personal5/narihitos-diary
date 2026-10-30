@@ -69,7 +69,7 @@ stage, and activating one displays its content in the right Main Pane.
 7. **Publish:** Write the local file first, at the configurable default path
    `~/Documents/narihitos-diary/entries/YYYY/MM/YYYY-MM-DD.md`. Publish the
    confirmed Markdown body, with YAML front matter stripped, under a native
-   `heading_2: YYYY-MM-DD (DDD)` section at the bottom of the configured Notion
+   `heading_2: YYYY-MM-DD (DDD)` section, in ascending date order, in the configured Notion
    root's `YYYY` year and `YYYY-MM` month subpages. `DDD` is the fixed uppercase
    English weekday. Convert the body losslessly to native Notion blocks,
    preserving unsupported constructs literally. Allow unrelated hierarchy

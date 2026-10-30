@@ -10,7 +10,7 @@ canonical diary path or same-day section is not uniquely safe.
 ## Goal
 
 After the local file is verified, publish the confirmed entry under
-`Root → YYYY → YYYY-MM` as a bottom-appended daily section, but only after
+`Root → YYYY → YYYY-MM` as a daily section (bottom-appended here; P1-M20 later made it date-ordered), but only after
 runtime inspection proves the destination is accessible, compatible, and
 unambiguous.
 

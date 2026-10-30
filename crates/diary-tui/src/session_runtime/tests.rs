@@ -460,6 +460,30 @@ fn preview_and_publish_show_exact_file_conflict_and_separate_statuses() {
 }
 
 #[test]
+fn notion_preview_shows_where_the_day_goes_on_the_month_page() {
+    let notion = |placement: &str| NotionPreviewDto {
+        workflow: composing_workflow(),
+        path: vec!["Notion root".into(), "2026".into(), "2026-10".into()],
+        year_exists: true,
+        month_exists: true,
+        placement: placement.to_owned(),
+        renderer_version: 1,
+        api_version: "2026-03-11".into(),
+        payload_digest: "digest".into(),
+        plan_digest: Some("plan".into()),
+        blocks: Vec::new(),
+        status: "pending".into(),
+        reason: None,
+    };
+    let focus = FocusModel::default();
+    let body = preview_screen_body(&focus, None, Some(&notion("after 2026-10-28")));
+    assert!(body.contains("Position: after 2026-10-28\n"));
+    // A server that predates ordering sends no placement: show the old behavior.
+    let legacy = preview_screen_body(&focus, None, Some(&notion("")));
+    assert!(legacy.contains("Position: end\n"));
+}
+
+#[test]
 fn verified_mirror_collapses_into_local_row_note() {
     let mut workflow = workflow_dto_for_publish_tests();
     workflow.local_status = Some("verified".to_owned());
