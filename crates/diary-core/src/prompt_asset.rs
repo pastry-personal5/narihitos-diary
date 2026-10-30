@@ -163,7 +163,11 @@ mod tests {
             let codex = codex_prompt(action).unwrap();
             assert_eq!(codex.provider(), "codex");
             assert_eq!(
-                codex.render(&[("data", "D")]).unwrap().matches('D').count(),
+                codex
+                    .render(&[("data", "\u{1}")])
+                    .unwrap()
+                    .matches('\u{1}')
+                    .count(),
                 1
             );
             let apple = apple_prompt(action).unwrap();

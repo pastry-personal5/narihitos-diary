@@ -101,7 +101,11 @@ final class LiveFoundationModelsAssistantService: AssistantService {
                     ]
                     let response = try await session.respond(
                         to: try render(payload),
-                        generating: GeneratedDraft.self
+                        generating: GeneratedDraft.self,
+                        options: GenerationOptions(
+                            samplingMode: .random(probabilityThreshold: 0.95),
+                            temperature: 1.0
+                        )
                     )
                     return .draft(
                         text: response.content.text,
