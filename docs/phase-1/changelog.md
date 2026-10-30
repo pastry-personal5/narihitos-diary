@@ -6,6 +6,11 @@ This changelog records owner decisions and material plan changes for Phase 1.
 
 ## Entries
 
+- 2026-10-30 — P1-M13 plan revised — Entry criteria now include P1-M14 through
+  P1-M16 and a P1-M10 live-check resolution; the evidence matrix gained
+  supplemental rows (mirror, Codex sandbox, Apple parity, sidebar/Sources) and a
+  matrix-existence check; terminal tests default to ratatui's in-memory backend
+  because a pty harness needs a new dependency (owner decision pending).
 - 2026-10-30 — P1-M16 implemented — Work Status's second row now carries a
   `Tip:` naming the next step to the following stage (owner request, added to
   P1-M16). The Sources stage is the flat menu with Confirm Source List,

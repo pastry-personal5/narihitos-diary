@@ -3,9 +3,10 @@
 Status: Planned
 
 This final Phase 1 milestone proves the assembled macOS TUI MVP against every
-Phase 1 exit criterion using automated tests only. It fixes scope-conforming
-integration defects and does not broaden product scope. The number 13 follows
-P1-M12, which ran earlier; P1-M13 runs after P1-M11.
+Phase 1 exit criterion and every shipped Phase 1 scope item using automated
+tests only. It fixes scope-conforming integration defects and does not broaden
+product scope. The number 13 follows P1-M12, which ran earlier; P1-M13 runs
+after P1-M11, P1-M14, P1-M15, and P1-M16 so it qualifies the final layout.
 
 ## Goal
 
@@ -15,22 +16,43 @@ human run.
 
 ## Entry criteria
 
-- P1-M11 is `Done`; P1-M7 through P1-M10 are `Done`.
+- P1-M7, P1-M8, P1-M9, P1-M11, P1-M14, P1-M15, and P1-M16 are `Done`.
+- P1-M10 is `Done`, or its only open items are the owner-authorized live
+  checks (configured-root compatibility and disposable-hierarchy acceptance).
+  Those are recorded under "Known limits" and never gate this milestone.
+  Resolve which applies, with the owner, before starting.
+- The "Undecided" Notion root-structure item in `AGENTS.md` is not built on:
+  tests use only a fake Notion server, and nothing here touches the configured
+  root.
 
 ## In scope
 
-- An evidence matrix in this overview mapping each Phase 1 exit criterion to the
-  named automated test or tests that prove it.
-- Synthetic end-to-end tests over real REST and rendered TUI state for the
-  manual, hosted-fake, Apple-fake, empty-day, source-change, restart,
-  blocked/pending Notion, conflict, different-day save, and amendment journeys.
-- Pty-driven TUI tests: startup, restoration, multiline English and Korean
-  input, display width, 2-Set mapping, and IME status through a fake
-  input-source notifier.
-- A fake Notion HTTP server modelling pagination, block ordering, and trash, and
-  a temp-directory iCloud simulation including cloud-only placeholders.
+- An evidence matrix in this overview. It has one row per Phase 1 exit
+  criterion plus one row per shipped scope item that no exit criterion covers
+  (see "Supplemental rows"). Each row names the automated test or tests that
+  prove it, or a gap that this milestone closes.
+- A matrix check: a test (or `make` target run by the gate) that reads the
+  matrix, lists tests with `cargo test --all-features -- --list` and
+  `swift test list`, and fails if any named test does not exist. Passing
+  results are verified by the gate itself, not by this check.
+- Synthetic end-to-end tests over the real REST server (loopback process, not
+  in-process mocks) and rendered TUI state for these journeys: manual,
+  hosted-fake (a fake `codex app-server` process), Apple-fake, empty-day,
+  source-change, restart mid-publication, blocked and pending Notion, conflict,
+  different-day save, amendment, and iCloud mirror (success, failure isolation,
+  retry).
+- Terminal tests of startup, restoration, multiline English and Korean input,
+  display width, 2-Set mapping, the IME-gated source-list shortcuts, and IME
+  status through a fake input-source notifier. They render through
+  ratatui's in-memory test backend with scripted crossterm events. A real pty
+  harness needs a new dev-dependency and is not assumed; see the architecture
+  plan.
+- A fake Notion HTTP server modelling pagination, block ordering, rate limits
+  and `Retry-After`, ambiguous writes, and trash, and a temp-directory iCloud
+  simulation including cloud-only placeholders.
 - Security tests: owner-only file modes, loopback and origin enforcement,
-  content-free diagnostics, bounded input and jobs, and a scan proving no
+  token handling, content-free diagnostics, bounded input and jobs, the
+  restricted Codex per-turn sandbox arguments, and a scan proving no
   credential, audio byte, or attachment path reaches composition input,
   output, or logs.
 - Packaging, setup, and troubleshooting documentation; a clean-checkout gate
@@ -43,7 +65,40 @@ human run.
   or a live Notion or iCloud environment.
 - New product behavior, new dependencies, MCP, remote access, additional
   connectors, or iOS.
-- Live model calls or private diary prose in tests.
+- Live model calls or private diary prose in tests. Tests never read the
+  Application Support directory, its control token, or `diagnostic-tag-key`;
+  every server a test starts uses a temporary state directory.
+
+## Evidence matrix
+
+Filled in during step 1 of the architecture plan. `Status` is `covered`
+(test exists and passes), `gap` (test to write), or `limit` (documented
+limit, no test possible). Replace `TBD` with the test path and name.
+
+| # | Exit criterion (from [phase-1.md](phase-1.md)) | Evidence | Status |
+|---|---|---|---|
+| 1 | Start with `nd serve`, interact through the `nd` TUI | TBD | gap |
+| 2 | Choose among assistant backends or write manually; drafts and reviews never auto-accepted; blank entry cannot be confirmed; two or more backends without provider-specific stages | TBD | gap |
+| 3 | Amend a completed entry without overwriting content the app did not write | TBD | gap |
+| 4 | Read Markdown source notes from a mounted iCloud directory | TBD | gap |
+| 5 | Source selection and date disagreement shown before composition; include or exclude regardless of metadata date | TBD | gap |
+| 6 | Entry composed from exactly the confirmed selection | TBD | gap |
+| 7 | Ayumi eligible with or without audio; no audio bytes or attachment paths in composition input or output | TBD | gap |
+| 8 | Completed run writes a local Markdown file | TBD | gap |
+| 9 | Missing Notion year/month pages created; body published under the diary-day heading at the bottom of the month page | TBD | gap |
+
+### Supplemental rows
+
+Shipped Phase 1 scope that no exit criterion above states.
+
+| # | Scope item | Evidence | Status |
+|---|---|---|---|
+| S1 | iCloud mirror is byte-identical, isolated from local and Notion, and absent when unconfigured (P1-M14) | TBD | gap |
+| S2 | Codex runs only through `codex app-server` with the restricted per-turn sandbox | TBD | gap |
+| S3 | Apple on-device adapter covers all four actions for en-US and ko-KR | TBD | gap |
+| S4 | Utility Sidebar and flat Sources menu behave per [ux-tui.md](../ux-tui.md) (P1-M15, P1-M16) | TBD | gap |
+| S5 | Real Korean IME behavior | fake notifier only | limit |
+| S6 | Live Notion and live iCloud behavior | fakes only | limit |
 
 ## Known limits (documented, not gating)
 
@@ -51,18 +106,31 @@ human run.
   fake notifier. A human spot check is welcome but does not gate completion.
 - Live Notion and live iCloud behavior is covered by fakes and by the P1-M10
   disposable-hierarchy evidence where it exists. The docs state this plainly.
+- Terminal tests use an in-memory backend, so raw-mode setup, resize signals,
+  and terminal-emulator rendering are covered only by existing unit tests and
+  a documented manual check.
 
 ## Completion checklist
 
-- [ ] The evidence matrix lists every Phase 1 exit criterion with a named
-  automated test, and each named test exists and passes.
-- [ ] End-to-end journey tests cover all journeys listed under "In scope".
-- [ ] Pty-driven terminal tests cover the listed input, width, and IME-status
+- [ ] Entry criteria hold, and the P1-M10 resolution is recorded in the phase
+  changelog.
+- [ ] The evidence matrix has no `TBD` and no `gap`; every `covered` row names
+  an existing passing test, and the matrix check passes.
+- [ ] End-to-end journey tests cover every journey listed under "In scope".
+- [ ] Terminal tests cover the listed input, width, shortcut, and IME-status
   behavior.
 - [ ] Fake Notion and temp-directory iCloud tests cover create, append, amend,
-  reconcile, and cloud-only acquisition.
+  reconcile, retry limits, and cloud-only acquisition.
 - [ ] Security tests cover every item listed under "In scope".
 - [ ] README, setup, troubleshooting, privacy, known limits, and all Phase 1
-  planning docs reflect shipped behavior.
+  planning docs reflect shipped behavior; `docs/README.md` indexes any new doc.
 - [ ] The standard Rust and Swift gate passes from a clean checkout, and the
-  results and supported toolchain versions are recorded here.
+  dated results and supported toolchain versions (`rustc`, `cargo`, `swift`,
+  macOS) are recorded here.
+- [ ] No new dependency, state-directory read, or live service call was
+  introduced (`git diff` of `Cargo.toml` and `Cargo.lock` is empty).
+
+## Gate record
+
+Filled in at completion: date, commit, `rustc`/`cargo`/`swift`/macOS versions,
+and the result of each gate command.
