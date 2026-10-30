@@ -43,6 +43,7 @@ This index lists the design and process docs, one line each. Read only the doc y
 | [ux-information-architecture.md](ux-information-architecture.md) | Canonical two-sidebar containment, stage/resource behavior, connection and error states, and chrome layout. |
 | [ux-tui.md](ux-tui.md) | Terminal UX: approved behavior, the Korean-IME input constraint, and proposed presentation details, kept separate. |
 | [user-guide-tui.md](user-guide-tui.md) | End-user guide to the `nd` TUI: starting the app, moving between stages, and working the Sources and Compose controls. |
+| [superpowers/specs/2026-10-30-icloud-output-design.md](superpowers/specs/2026-10-30-icloud-output-design.md) | Draft design for the automatic, quiet iCloud Markdown mirror output (`Mirror` destination, preflight, config, recovery, tests). |
 | [phase-1/changelog.md](phase-1/changelog.md) | Phase 1 owner decisions and material plan changes. |
 | [research/markdown-input-format.md](research/markdown-input-format.md) | P1-M1 iCloud directory layout, Markdown/YAML format, attachment format, time semantics, and privacy constraints. |
 | [research/notion-diary-section.md](research/notion-diary-section.md) | P1-M1 Notion authentication, block APIs, limits, and owner publication contract. |
