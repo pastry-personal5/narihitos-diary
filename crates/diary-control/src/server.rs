@@ -1646,6 +1646,10 @@ async fn preview_local_output(
         intended_changes: preview.intended_changes,
         local_status: local_status.to_owned(),
         notion_status: "blocked".to_owned(),
+        icloud_target: preview.mirror_target,
+        icloud_status: preview
+            .mirror_status
+            .map(|status| status.as_str().to_owned()),
     };
     publish_event(
         &state,
@@ -2931,6 +2935,11 @@ fn workflow_dto(workflow: &Workflow) -> WorkflowDto {
             .destination_progress()
             .iter()
             .find(|item| item.destination == "notion")
+            .map(|item| item.status.as_str().to_owned()),
+        icloud_status: workflow
+            .destination_progress()
+            .iter()
+            .find(|item| item.destination == "icloud")
             .map(|item| item.status.as_str().to_owned()),
         candidates: candidate_dtos(workflow),
     }

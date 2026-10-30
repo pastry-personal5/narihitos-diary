@@ -250,6 +250,15 @@ Notes: Requires P1-M10 `Done`. Conflicts offer only reread or abandon; the
 local file is replaced first and Notion is retried alone on failure. All
 completion evidence is automated.
 
+### P1-M14: iCloud output
+
+Status: Done
+
+Goal: Mirror each published entry to a configured iCloud Drive folder as an
+identical Markdown file, quietly and without affecting local or Notion output.
+
+Plan: [overview](milestone-14-icloud-output-overview.md).
+
 ### P1-M13: Release qualification
 
 Status: Planned

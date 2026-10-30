@@ -1258,20 +1258,24 @@ impl Workflow {
         if &plan.plan_digest != plan_digest {
             return Err(WorkflowError::PlanBindingMismatch);
         }
-        if self
-            .destination_progress
+        // A mirror conflict is isolated: it never gates local or Notion.
+        let is_mirror = |destination: &str| {
+            plan.targets.iter().any(|target| {
+                target.destination == destination && target.kind == DestinationKind::Mirror
+            })
+        };
+        if self.destination_progress.iter().any(|progress| {
+            progress.status == DestinationStatus::Conflict && !is_mirror(&progress.destination)
+        }) || plan
+            .targets
             .iter()
-            .any(|progress| progress.status == DestinationStatus::Conflict)
-            || plan
-                .targets
-                .iter()
-                .filter(|target| target.kind == DestinationKind::Local)
-                .any(|target| {
-                    self.destination_progress.iter().any(|progress| {
-                        progress.destination == target.destination
-                            && progress.status != DestinationStatus::Pending
-                    })
+            .filter(|target| target.kind == DestinationKind::Local)
+            .any(|target| {
+                self.destination_progress.iter().any(|progress| {
+                    progress.destination == target.destination
+                        && progress.status != DestinationStatus::Pending
                 })
+            })
         {
             return Err(WorkflowError::RetryNeedsPreview);
         }
@@ -3198,6 +3202,27 @@ mod tests {
                 &replanned.plan_digest,
                 time(26),
             )
+            .unwrap();
+    }
+
+    #[test]
+    fn mirror_conflict_preview_still_allows_approval() {
+        let mut workflow = confirmed_workflow();
+        let plan = mirror_plan(&workflow);
+        workflow
+            .preview_output_with_progress(
+                workflow.revision(),
+                plan.clone(),
+                progress_of(&[
+                    ("local", DestinationStatus::Pending),
+                    ("icloud", DestinationStatus::Conflict),
+                    ("notion", DestinationStatus::Blocked),
+                ]),
+                time(21),
+            )
+            .unwrap();
+        workflow
+            .approve(workflow.revision(), &plan.plan_digest, time(22))
             .unwrap();
     }
 

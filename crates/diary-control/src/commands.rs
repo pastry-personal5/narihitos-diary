@@ -25,6 +25,8 @@ pub struct LocalPreview {
     pub payload_digest: Digest,
     pub existing_text: Option<String>,
     pub intended_changes: Vec<String>,
+    pub mirror_target: Option<String>,
+    pub mirror_status: Option<DestinationStatus>,
 }
 
 #[derive(Clone, Debug)]
@@ -55,6 +57,7 @@ pub struct CommandService {
     writer: Arc<dyn SourceWriter + Send + Sync>,
     clock: Arc<dyn Clock + Send + Sync>,
     local_output: Option<Arc<dyn LocalOutputPort>>,
+    mirror_output: Option<Arc<dyn LocalOutputPort>>,
     notion_output: Option<Arc<dyn NotionOutputPort>>,
 }
 
@@ -72,6 +75,7 @@ impl CommandService {
             writer: Arc::new(UnavailableSourceWriter),
             clock,
             local_output: None,
+            mirror_output: None,
             notion_output: None,
         }
     }
@@ -90,12 +94,19 @@ impl CommandService {
             writer,
             clock,
             local_output: None,
+            mirror_output: None,
             notion_output: None,
         }
     }
 
     pub fn with_local_output(mut self, local_output: Arc<dyn LocalOutputPort>) -> Self {
         self.local_output = Some(local_output);
+        self
+    }
+
+    /// Optional iCloud mirror of the local file, destination name `icloud`.
+    pub fn with_mirror_output(mut self, mirror_output: Arc<dyn LocalOutputPort>) -> Self {
+        self.mirror_output = Some(mirror_output);
         self
     }
 
@@ -965,6 +976,41 @@ impl CommandService {
             observed,
         )
         .map_err(|_| CommandError::LocalOutput(LocalOutputError::Unavailable))?;
+        let mut targets = vec![local];
+        let mut mirror_target = None;
+        let mut mirror_status = None;
+        if let Some(mirror) = &self.mirror_output {
+            let (observed, status) = match mirror.inspect(day, &payload) {
+                Ok(LocalOutputState::Absent) => {
+                    (Digest::of_bytes(b"absent"), DestinationStatus::Pending)
+                }
+                Ok(LocalOutputState::Identical) => {
+                    (payload_digest.clone(), DestinationStatus::Pending)
+                }
+                Ok(LocalOutputState::Different(text)) => (
+                    Digest::of_bytes(text.as_bytes()),
+                    DestinationStatus::Conflict,
+                ),
+                Err(_) => (
+                    Digest::of_bytes(b"unverifiable"),
+                    DestinationStatus::Blocked,
+                ),
+            };
+            let identity = mirror.target(day);
+            targets.push(
+                DestinationPlan::new(
+                    DestinationKind::Mirror,
+                    MIRROR_DESTINATION,
+                    identity.clone(),
+                    payload_digest.clone(),
+                    payload_digest.clone(),
+                    observed,
+                )
+                .map_err(|_| CommandError::LocalOutput(LocalOutputError::Unavailable))?,
+            );
+            mirror_target = Some(identity);
+            mirror_status = Some(status);
+        }
         let blocked = DestinationPlan::new(
             DestinationKind::Remote,
             "notion",
@@ -988,20 +1034,27 @@ impl CommandService {
                 .selection_digest()
                 .ok_or(CommandError::Workflow(WorkflowError::PlanBindingMismatch))?
                 .clone(),
-            vec![local, blocked],
+            {
+                targets.push(blocked);
+                targets
+            },
             self.clock.now(),
         )
         .map_err(|_| CommandError::LocalOutput(LocalOutputError::Unavailable))?;
-        let progress = vec![
-            DestinationProgress {
-                destination: "local".into(),
+        let mut progress = vec![DestinationProgress {
+            destination: "local".into(),
+            status,
+        }];
+        if let Some(status) = mirror_status {
+            progress.push(DestinationProgress {
+                destination: MIRROR_DESTINATION.into(),
                 status,
-            },
-            DestinationProgress {
-                destination: "notion".into(),
-                status: DestinationStatus::Blocked,
-            },
-        ];
+            });
+        }
+        progress.push(DestinationProgress {
+            destination: "notion".into(),
+            status: DestinationStatus::Blocked,
+        });
         workflow
             .preview_output_with_progress(expected_revision, plan, progress, self.clock.now())
             .map_err(CommandError::Workflow)?;
@@ -1015,6 +1068,8 @@ impl CommandService {
             payload_digest,
             existing_text,
             intended_changes,
+            mirror_target,
+            mirror_status,
         })
     }
 
@@ -1072,6 +1127,7 @@ impl CommandService {
         {
             return Err(CommandError::PreconditionFailed);
         }
+        self.ensure_mirror_binding(plan, day, &target.payload_digest)?;
         workflow
             .approve(expected_revision, digest, self.clock.now())
             .map_err(CommandError::Workflow)?;
@@ -1129,6 +1185,7 @@ impl CommandService {
         {
             return Err(CommandError::PreconditionFailed);
         }
+        self.ensure_mirror_binding(&plan, day, &target.payload_digest)?;
         let prior = workflow.revision();
         let fresh = revalidate_workflow_sources(
             &mut workflow,
@@ -1174,6 +1231,7 @@ impl CommandService {
             output: output.as_ref(),
             day,
             payload: &payload,
+            receipt_id: "local".into(),
         };
         let result = PublicationCoordinator::execute(
             self.store.as_ref(),
@@ -1191,21 +1249,16 @@ impl CommandService {
         if status == DestinationStatus::Reconciling {
             return Ok(workflow);
         }
+        let mut overrides = vec![("local", status), ("notion", DestinationStatus::Blocked)];
+        if status == DestinationStatus::Verified && self.mirror_output.is_some() {
+            overrides.push((
+                MIRROR_DESTINATION,
+                self.run_mirror(&workflow, &plan, day, &payload),
+            ));
+        }
+        let progress = progress_with(&workflow, &overrides);
         workflow
-            .finish_publication(
-                workflow.revision(),
-                vec![
-                    DestinationProgress {
-                        destination: "local".into(),
-                        status,
-                    },
-                    DestinationProgress {
-                        destination: "notion".into(),
-                        status: DestinationStatus::Blocked,
-                    },
-                ],
-                self.clock.now(),
-            )
+            .finish_publication(workflow.revision(), progress, self.clock.now())
             .map_err(CommandError::Workflow)?;
         self.store
             .compare_and_swap(workflow.revision() - 1, None, &workflow)
@@ -1455,16 +1508,10 @@ impl CommandService {
         workflow
             .finish_publication(
                 revision,
-                vec![
-                    DestinationProgress {
-                        destination: "local".into(),
-                        status: DestinationStatus::Verified,
-                    },
-                    DestinationProgress {
-                        destination: "notion".into(),
-                        status,
-                    },
-                ],
+                progress_with(
+                    &workflow,
+                    &[("local", DestinationStatus::Verified), ("notion", status)],
+                ),
                 self.clock.now(),
             )
             .map_err(CommandError::Workflow)?;
@@ -1472,6 +1519,226 @@ impl CommandService {
             .compare_and_swap(revision, None, &workflow)
             .map_err(CommandError::Store)?;
         Ok(workflow)
+    }
+
+    /// A plan carries an `icloud` target exactly when a mirror is configured,
+    /// for the same target and bytes; otherwise a new preview is required.
+    fn ensure_mirror_binding(
+        &self,
+        plan: &OutputPlan,
+        day: &DiaryDay,
+        payload_digest: &Digest,
+    ) -> Result<(), CommandError> {
+        let planned = plan
+            .targets
+            .iter()
+            .find(|target| target.kind == DestinationKind::Mirror);
+        match (&self.mirror_output, planned) {
+            (None, None) => Ok(()),
+            (Some(mirror), Some(target))
+                if target.destination == MIRROR_DESTINATION
+                    && target.target_identity == mirror.target(day)
+                    && &target.payload_digest == payload_digest =>
+            {
+                Ok(())
+            }
+            _ => Err(CommandError::PreconditionFailed),
+        }
+    }
+
+    /// Runs the mirror write after a verified local write. Every failure is
+    /// contained: it yields a non-verified status and never an error.
+    fn run_mirror(
+        &self,
+        workflow: &Workflow,
+        plan: &OutputPlan,
+        day: &DiaryDay,
+        payload: &str,
+    ) -> DestinationStatus {
+        let planned = workflow
+            .destination_progress()
+            .iter()
+            .find(|item| item.destination == MIRROR_DESTINATION)
+            .map_or(DestinationStatus::Blocked, |item| item.status);
+        if planned != DestinationStatus::Pending {
+            return planned;
+        }
+        self.execute_mirror(plan, day, payload)
+    }
+
+    fn execute_mirror(
+        &self,
+        plan: &OutputPlan,
+        day: &DiaryDay,
+        payload: &str,
+    ) -> DestinationStatus {
+        let (Some(mirror), Some(target)) = (
+            &self.mirror_output,
+            plan.targets
+                .iter()
+                .find(|target| target.kind == DestinationKind::Mirror),
+        ) else {
+            return DestinationStatus::Blocked;
+        };
+        // Read-only preflight: never record an intent for a mirror that
+        // cannot be inspected, so a missing folder cannot gate the day.
+        match mirror.inspect(day, payload) {
+            Err(_) => return DestinationStatus::Blocked,
+            Ok(LocalOutputState::Different(_)) => return DestinationStatus::Conflict,
+            Ok(_) => {}
+        }
+        let Ok(attempt) = random_id("attempt_") else {
+            return DestinationStatus::Blocked;
+        };
+        let receipt_id = format!("icloud-{attempt}");
+        let Ok(intent) = OperationIntent::new(
+            attempt,
+            plan.plan_id.clone(),
+            day.clone(),
+            target,
+            plan.entry_digest.clone(),
+            plan.selection_digest.clone(),
+            self.clock.now(),
+        ) else {
+            return DestinationStatus::Blocked;
+        };
+        let mut destination = LocalDestination {
+            output: mirror.as_ref(),
+            day,
+            payload,
+            receipt_id,
+        };
+        match PublicationCoordinator::execute(
+            self.store.as_ref(),
+            &mut destination,
+            &intent,
+            1,
+            self.clock.now(),
+        ) {
+            Ok(PublicationResult::Verified(_)) => DestinationStatus::Verified,
+            Ok(PublicationResult::Conflict) => DestinationStatus::Conflict,
+            // An uncertain write keeps its intent; startup reconciliation
+            // resolves it before any retry.
+            _ => DestinationStatus::Pending,
+        }
+    }
+
+    /// Retries only the iCloud mirror from the verified local file.
+    pub fn publish_mirror_guarded(
+        &self,
+        day: &DiaryDay,
+        expected_revision: u64,
+        commit: impl FnOnce() -> bool,
+    ) -> Result<Workflow, CommandError> {
+        self.ensure_clear(day)?;
+        if self.mirror_output.is_none() {
+            return Err(CommandError::LocalOutput(LocalOutputError::Unavailable));
+        }
+        let mut workflow = self.load_workflow(day)?;
+        ensure_revision(&workflow, expected_revision)?;
+        if workflow.state() != diary_core::WorkflowState::Partial {
+            return Err(CommandError::Workflow(WorkflowError::WrongState));
+        }
+        self.verify_local_receipt(&workflow)?;
+        let plan = workflow
+            .output_plan()
+            .ok_or(CommandError::Workflow(WorkflowError::MissingPlan))?
+            .clone();
+        let payload = render_local_markdown(
+            day,
+            workflow
+                .language()
+                .ok_or(CommandError::Workflow(WorkflowError::LanguageRequired))?,
+            &workflow.entry().text,
+        );
+        self.ensure_mirror_binding(&plan, day, &Digest::of_bytes(payload.as_bytes()))?;
+        if !commit() {
+            return Err(CommandError::Cancelled);
+        }
+        let status = self.execute_mirror(&plan, day, &payload);
+        workflow
+            .finish_mirror_retry(expected_revision, status, self.clock.now())
+            .map_err(CommandError::Workflow)?;
+        self.store
+            .compare_and_swap(expected_revision, None, &workflow)
+            .map_err(CommandError::Store)?;
+        Ok(workflow)
+    }
+
+    /// Recovers uncertain mirror effects. An interrupted publication job
+    /// finishes through `finish_publication`; a mirror-only retry through
+    /// `finish_mirror_retry`.
+    pub fn reconcile_mirror_intents(&self) -> Result<(), CommandError> {
+        let Some(mirror) = &self.mirror_output else {
+            return Ok(());
+        };
+        for intent in self
+            .store
+            .unresolved_intents(None)
+            .map_err(CommandError::Store)?
+        {
+            if intent.destination != MIRROR_DESTINATION {
+                continue;
+            }
+            let mut workflow = self.load_workflow(&intent.day)?;
+            let Some(language) = workflow.language() else {
+                continue;
+            };
+            let payload = render_local_markdown(&intent.day, language, &workflow.entry().text);
+            if Digest::of_bytes(payload.as_bytes()) != intent.payload_digest
+                || mirror.target(&intent.day) != intent.target_identity
+            {
+                continue;
+            }
+            let mut destination = LocalDestination {
+                output: mirror.as_ref(),
+                day: &intent.day,
+                payload: &payload,
+                receipt_id: format!("icloud-{}", intent.attempt_id),
+            };
+            let result = PublicationCoordinator::reconcile(
+                self.store.as_ref(),
+                &mut destination,
+                &intent,
+                1,
+                self.clock.now(),
+            )
+            .map_err(|_| CommandError::LocalOutput(LocalOutputError::Unavailable))?;
+            let status = match result {
+                PublicationResult::Verified(_) => DestinationStatus::Verified,
+                PublicationResult::Conflict => DestinationStatus::Conflict,
+                PublicationResult::SafeToRetry => DestinationStatus::Pending,
+                _ => continue,
+            };
+            let revision = workflow.revision();
+            match workflow.state() {
+                diary_core::WorkflowState::Publishing => {
+                    workflow
+                        .finish_publication(
+                            revision,
+                            progress_with(
+                                &workflow,
+                                &[
+                                    ("local", DestinationStatus::Verified),
+                                    (MIRROR_DESTINATION, status),
+                                ],
+                            ),
+                            self.clock.now(),
+                        )
+                        .map_err(CommandError::Workflow)?;
+                }
+                diary_core::WorkflowState::Partial => {
+                    workflow
+                        .finish_mirror_retry(revision, status, self.clock.now())
+                        .map_err(CommandError::Workflow)?;
+                }
+                _ => continue,
+            }
+            self.store
+                .compare_and_swap(revision, None, &workflow)
+                .map_err(CommandError::Store)?;
+        }
+        Ok(())
     }
 
     fn verify_local_receipt(&self, workflow: &Workflow) -> Result<(), CommandError> {
@@ -1545,6 +1812,7 @@ impl CommandService {
                 output: output.as_ref(),
                 day: &intent.day,
                 payload: &payload,
+                receipt_id: "local".into(),
             };
             let result = PublicationCoordinator::reconcile(
                 self.store.as_ref(),
@@ -1565,16 +1833,10 @@ impl CommandService {
                 workflow
                     .finish_publication(
                         revision,
-                        vec![
-                            DestinationProgress {
-                                destination: "local".into(),
-                                status,
-                            },
-                            DestinationProgress {
-                                destination: "notion".into(),
-                                status: DestinationStatus::Blocked,
-                            },
-                        ],
+                        progress_with(
+                            &workflow,
+                            &[("local", status), ("notion", DestinationStatus::Blocked)],
+                        ),
                         self.clock.now(),
                     )
                     .map_err(CommandError::Workflow)?;
@@ -1642,16 +1904,10 @@ impl CommandService {
             workflow
                 .finish_publication(
                     revision,
-                    vec![
-                        DestinationProgress {
-                            destination: "local".into(),
-                            status,
-                        },
-                        DestinationProgress {
-                            destination: "notion".into(),
-                            status: DestinationStatus::Blocked,
-                        },
-                    ],
+                    progress_with(
+                        &workflow,
+                        &[("local", status), ("notion", DestinationStatus::Blocked)],
+                    ),
                     self.clock.now(),
                 )
                 .map_err(CommandError::Workflow)?;
@@ -1807,6 +2063,28 @@ impl CommandService {
 }
 
 struct UnavailableSourceWriter;
+const MIRROR_DESTINATION: &str = "icloud";
+
+/// The workflow's current progress with the named destinations overridden.
+/// Destinations absent from the plan are ignored, so callers need not know
+/// whether a mirror is configured.
+fn progress_with(
+    workflow: &Workflow,
+    overrides: &[(&str, DestinationStatus)],
+) -> Vec<DestinationProgress> {
+    workflow
+        .destination_progress()
+        .iter()
+        .map(|item| DestinationProgress {
+            destination: item.destination.clone(),
+            status: overrides
+                .iter()
+                .find(|(destination, _)| *destination == item.destination)
+                .map_or(item.status, |(_, status)| *status),
+        })
+        .collect()
+}
+
 fn observed_digest(state: LocalOutputState, payload: &str) -> Digest {
     match state {
         LocalOutputState::Absent => Digest::of_bytes(b"absent"),
@@ -1819,6 +2097,7 @@ struct LocalDestination<'a> {
     output: &'a dyn LocalOutputPort,
     day: &'a DiaryDay,
     payload: &'a str,
+    receipt_id: String,
 }
 
 struct NotionDestination<'a> {
@@ -1841,7 +2120,7 @@ impl Destination for LocalDestination<'_> {
     fn write(&mut self, _: &OperationIntent) -> WriteOutcome {
         match self.output.write(self.day, self.payload) {
             Ok(LocalOutputState::Identical) => WriteOutcome::Verified {
-                receipt_id: "local".into(),
+                receipt_id: self.receipt_id.clone(),
                 returned_ids: Vec::new(),
             },
             Ok(LocalOutputState::Different(_)) => WriteOutcome::Conflict,
@@ -1853,7 +2132,7 @@ impl Destination for LocalDestination<'_> {
     fn inspect(&mut self, _: &OperationIntent) -> InspectionOutcome {
         match self.output.inspect(self.day, self.payload) {
             Ok(LocalOutputState::Identical) => InspectionOutcome::Matching {
-                receipt_id: "local".into(),
+                receipt_id: self.receipt_id.clone(),
                 returned_ids: Vec::new(),
             },
             Ok(LocalOutputState::Absent) => InspectionOutcome::Absent,

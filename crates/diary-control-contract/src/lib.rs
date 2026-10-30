@@ -75,6 +75,12 @@ pub struct LocalPreviewDto {
     pub intended_changes: Vec<String>,
     pub local_status: String,
     pub notion_status: String,
+    /// Mirror target label and status; absent when no mirror is configured
+    /// or from a server that predates the mirror kind.
+    #[serde(default)]
+    pub icloud_target: Option<String>,
+    #[serde(default)]
+    pub icloud_status: Option<String>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -512,6 +518,8 @@ dto!(
         pub local_status: Option<String>,
         #[serde(default)]
         pub notion_status: Option<String>,
+        #[serde(default)]
+        pub icloud_status: Option<String>,
         pub candidates: Vec<SourceCandidateDto>,
     }
 );
@@ -534,6 +542,7 @@ pub struct WorkflowDto {
     pub entry_confirmed: bool,
     pub local_status: Option<String>,
     pub notion_status: Option<String>,
+    pub icloud_status: Option<String>,
     pub candidates: Vec<SourceCandidateDto>,
 }
 
@@ -565,6 +574,7 @@ impl TryFrom<WorkflowDtoWire> for WorkflowDto {
             entry_confirmed: value.entry_confirmed,
             local_status: value.local_status,
             notion_status: value.notion_status,
+            icloud_status: value.icloud_status,
             candidates: value.candidates,
         })
     }

@@ -26,7 +26,13 @@ Each decision is recorded in full in the doc that owns its topic; this is the in
 - **Hosted assistant provider:** the Phase 1 hosted default is OpenAI's Codex, reached only through the `codex app-server` JSON-RPC surface over stdio (never the TypeScript SDK, never bare `codex exec` flags). One registry member per configured `codex_home` profile; the first-listed profile is the default when more than one is configured. Each job spawns and kills its own `codex app-server` process, with a per-turn restricted sandbox (no readable roots, no network, no MCP servers, no web search, approval never, no history/rollout persistence). The account credential lives inside each profile's own `codex_home`; Rust never reads it. See [docs/architecture.md](docs/architecture.md) "Composition and egress" and [docs/phase-1/milestone-08-draft-assistants-overview.md](docs/phase-1/milestone-08-draft-assistants-overview.md).
 - **Apple on-device adapter:** targets the latest stable macOS/Foundation Models SDK only (no older-OS deployment floor). Supports all four assistant actions (extraction, drafting, paragraph review, and Ayumi source refinement) for both en-US and ko-KR where the action produces entry prose; source refinement operates on en-US Ayumi text. This matches the Codex hosted default. Request and response payloads, including a drafted entry approaching the 512 KiB entry bound, travel over the Swift bridge's in-band frame with its cap raised to cover that bound, not the P1-M5 private handoff-file transport. See [docs/phase-1/milestone-08-draft-assistants-overview.md](docs/phase-1/milestone-08-draft-assistants-overview.md).
 - **Product behavior:** source discovery and selection, composition and hosted data egress, draft/source retention, local and Notion publication, conflicts, and amendments. See [docs/product-behavior.md](docs/product-behavior.md).
-- **Local output front matter:** P1-M9 uses YAML keys `date` and `language`. See [docs/phase-1/milestone-09-local-publication-recovery-overview.md](docs/phase-1/milestone-09-local-publication-recovery-overview.md).
+- **iCloud mirror output:** optional `paths.icloud_entries_root` (under
+  `~/Library/Mobile Documents/`) mirrors each local entry as byte-identical
+  Markdown after the verified local write, under the same approval and isolated
+  from local and Notion. See
+  [the design](docs/superpowers/specs/2026-10-30-icloud-output-design.md) and
+  [P1-M14](docs/phase-1/milestone-14-icloud-output-overview.md).
+- **Local output front matter:**- **Local output front matter:** P1-M9 uses YAML keys `date` and `language`. See [docs/phase-1/milestone-09-local-publication-recovery-overview.md](docs/phase-1/milestone-09-local-publication-recovery-overview.md).
 - **Notion publication format:** P1-M10 appends a native `heading_2` formatted
   `YYYY-MM-DD (DDD)` with fixed uppercase English weekdays, followed by a
   lossless native-block projection of the confirmed Markdown body. Unrelated

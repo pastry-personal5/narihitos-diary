@@ -27,6 +27,10 @@ daily section in bounded chunks, and reads it back before completing. The live
 configured-root compatibility check and disposable-hierarchy acceptance remain
 owner-authorized gates; synthetic tests never access a contributor's Notion.
 
+Set the optional `paths.icloud_entries_root` (under
+`~/Library/Mobile Documents/`) to also save each entry to iCloud Drive as an
+identical Markdown file; see `config/global_config.example.yaml`.
+
 ## Quick start
 
 ```sh

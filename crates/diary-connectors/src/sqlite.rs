@@ -3043,6 +3043,75 @@ mod tests {
     }
 
     #[test]
+    fn mirror_destination_round_trips_through_store() {
+        let scratch = Scratch::new("mirror-kind");
+        let store = SqliteStore::open(scratch.db()).unwrap();
+        let clock = FixedClock {
+            now: Timestamp(0),
+            day: day("2026-10-29"),
+        };
+        let mut workflow = match start_default_workflow(&store, &clock).unwrap() {
+            StartOutcome::Created(workflow) => workflow,
+            _ => panic!("expected a new workflow"),
+        };
+        make_confirmed(&mut workflow);
+        let plan = OutputPlan::new(
+            "mirror-plan",
+            workflow
+                .entry()
+                .confirmed
+                .as_ref()
+                .unwrap()
+                .entry_digest
+                .clone(),
+            workflow.selection_digest().unwrap().clone(),
+            vec![
+                target("local"),
+                DestinationPlan::new(
+                    DestinationKind::Mirror,
+                    "icloud",
+                    "icloud-target",
+                    Digest::of_bytes(b"icloud-state"),
+                    Digest::of_bytes(b"icloud-payload"),
+                    Digest::of_bytes(b"icloud-inspected"),
+                )
+                .unwrap(),
+            ],
+            Timestamp(7),
+        )
+        .unwrap();
+        workflow
+            .preview_output(workflow.revision(), plan, Timestamp(7))
+            .unwrap();
+        store.compare_and_swap(0, Some(0), &workflow).unwrap();
+        let reopened = SqliteStore::open(scratch.db())
+            .unwrap()
+            .load(&day("2026-10-29"))
+            .unwrap()
+            .unwrap();
+        // Progress rows reload ordered by destination name, so compare as sets.
+        assert_eq!(reopened.output_plan(), workflow.output_plan());
+        let sorted = |workflow: &Workflow| {
+            let mut progress: Vec<_> = workflow
+                .destination_progress()
+                .iter()
+                .map(|item| (item.destination.clone(), item.status))
+                .collect();
+            progress.sort_by(|left, right| left.0.cmp(&right.0));
+            progress
+        };
+        assert_eq!(sorted(&reopened), sorted(&workflow));
+        assert!(
+            reopened
+                .output_plan()
+                .unwrap()
+                .targets
+                .iter()
+                .any(|target| target.kind == DestinationKind::Mirror)
+        );
+    }
+
+    #[test]
     fn fixed_clock_starts_one_local_day_and_completed_day_is_preserved() {
         let scratch = Scratch::new("default-day");
         let store = SqliteStore::open(scratch.db()).unwrap();

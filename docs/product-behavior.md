@@ -75,6 +75,17 @@ stage, and activating one displays its content in the right Main Pane.
    the read-only preflight and conflict checks. Show success, pending, or
    blocked state separately for each destination.
 
+
+### iCloud mirror
+
+When `paths.icloud_entries_root` is configured, each approved local entry is also
+saved to that iCloud Drive folder as a byte-identical Markdown file, with no
+extra approval or prompt. It never blocks or changes the local or Notion
+outputs: a missing folder, an evicted placeholder, different existing content,
+or an uncertain write leaves the day partial and is shown in Publish, and the
+mirror can be retried alone. Without the setting nothing changes. See the
+[iCloud output design](superpowers/specs/2026-10-30-icloud-output-design.md).
+
 ## Boundaries people can rely on
 
 - Readable notes remain selectable when front matter is missing or malformed;

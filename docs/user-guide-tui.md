@@ -110,6 +110,13 @@ again. A conflict shows the existing and planned text. Reread with Preview,
 discard the workflow from Start, or choose another day in Preview; carried
 text must be confirmed again.
 
+If `paths.icloud_entries_root` is set, the same approval also saves an
+identical copy to that iCloud Drive folder, which must already exist under
+`~/Library/Mobile Documents/`. Preview shows an `iCloud mirror` line, and
+Publish shows a mirror row only if the copy is pending, blocked (for example
+the folder is missing or the file is still an iCloud placeholder), or in
+conflict. Local and Notion are unaffected either way.
+
 After the local receipt and read-back are verified, return to Preview and
 generate the Notion-only plan. It shows the human-readable
 `Notion root → YYYY → YYYY-MM` path, whether the year and month already exist,

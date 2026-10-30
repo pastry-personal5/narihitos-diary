@@ -6,6 +6,14 @@ This changelog records owner decisions and material plan changes for Phase 1.
 
 ## Entries
 
+- 2026-10-30 — P1-M14 iCloud output — Added an optional iCloud Drive
+  Markdown mirror (`paths.icloud_entries_root`) written automatically after the
+  verified local write under the same approval, isolated from local and Notion.
+  No SQLite migration was needed (the destination kind column has no
+  constraint). Amendment replacement of the mirror file is deferred to P1-M11,
+  which is still planned. Mirror retry exists as a service method; a user
+  trigger is not wired.
+
 - 2026-10-30 — P1-M11 plan review and split — P1-M11 now covers amendments
   only; release qualification moved to new P1-M13 (after P1-M11; the number
   follows P1-M12). Owner decisions: amendment conflicts offer only reread or

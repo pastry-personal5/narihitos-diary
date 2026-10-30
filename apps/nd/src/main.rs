@@ -289,6 +289,19 @@ async fn run_server() -> Result<(), &'static str> {
         .await
         .map_err(|_| "publication-recovery-task-failed")?
         .map_err(|_| "publication-recovery-failed")?;
+    if let Some(root) = &lifecycle.icloud_entries_root {
+        let home = env::var_os("HOME")
+            .map(PathBuf::from)
+            .ok_or("home-unavailable")?;
+        commands = commands.with_mirror_output(Arc::new(
+            LocalOutput::new_icloud(root.clone(), &home).map_err(|_| "icloud-root-invalid")?,
+        ));
+        let recovery_commands = commands.clone();
+        tokio::task::spawn_blocking(move || recovery_commands.reconcile_mirror_intents())
+            .await
+            .map_err(|_| "mirror-recovery-task-failed")?
+            .map_err(|_| "mirror-recovery-failed")?;
+    }
     let recovery_commands = commands.clone();
     tokio::task::spawn_blocking(move || recovery_commands.reconcile_notion_intents())
         .await
@@ -3434,13 +3447,16 @@ fn preview_screen_body(
         }
     } else if let Some(preview) = preview {
         text.push_str(&format!(
-            "Target: {}\nSHA-256: {}\nLocal: {}\nNotion: {}\n\n{}\n",
-            preview.target,
-            preview.payload_digest,
-            preview.local_status,
-            preview.notion_status,
-            preview.payload
+            "Target: {}\nSHA-256: {}\nLocal: {}\nNotion: {}\n",
+            preview.target, preview.payload_digest, preview.local_status, preview.notion_status,
         ));
+        if let Some(target) = &preview.icloud_target {
+            text.push_str(&format!(
+                "iCloud mirror: {target} ({})\n",
+                preview.icloud_status.as_deref().unwrap_or("pending")
+            ));
+        }
+        text.push_str(&format!("\n{}\n", preview.payload));
         for change in &preview.intended_changes {
             text.push_str(&format!("Planned: {change}\n"));
         }
@@ -3461,11 +3477,22 @@ fn publish_screen_body(focus: &FocusModel, workflow: Option<&WorkflowDto>) -> St
             " "
         }
     };
+    let icloud = workflow.and_then(|w| w.icloud_status.as_deref());
+    let local = workflow
+        .and_then(|w| w.local_status.as_deref())
+        .unwrap_or("pending");
+    // A verified mirror stays quiet: a note on the local row, no row of its own.
+    let local_note = if icloud == Some("verified") {
+        " (also saved to iCloud)"
+    } else {
+        ""
+    };
+    let icloud_row = match icloud {
+        Some(status) if status != "verified" => format!("iCloud mirror: {status}\n"),
+        _ => String::new(),
+    };
     format!(
-        "Local publication: {}\nNotion: {}\n\n{} Publish approved destination\n{} Cancel pending publication",
-        workflow
-            .and_then(|w| w.local_status.as_deref())
-            .unwrap_or("pending"),
+        "Local publication: {local}{local_note}\n{icloud_row}Notion: {}\n\n{} Publish approved destination\n{} Cancel pending publication",
         workflow
             .and_then(|w| w.notion_status.as_deref())
             .unwrap_or("blocked"),
@@ -4108,6 +4135,7 @@ mod start_screen_tests {
             entry_confirmed: false,
             local_status: None,
             notion_status: None,
+            icloud_status: None,
             candidates: vec![
                 diary_control_contract::SourceCandidateDto {
                     id: "selected".to_owned(),
@@ -4188,6 +4216,8 @@ mod start_screen_tests {
             intended_changes: Vec::new(),
             local_status: "conflict".to_owned(),
             notion_status: "blocked".to_owned(),
+            icloud_target: None,
+            icloud_status: None,
         };
         let focus = FocusModel {
             zone: FocusZone::Main,
@@ -4202,5 +4232,42 @@ mod start_screen_tests {
             publish_screen_body(&focus, Some(&workflow))
                 .contains("Local publication: conflict\nNotion: blocked")
         );
+    }
+
+    #[test]
+    fn verified_mirror_collapses_into_local_row_note() {
+        let mut workflow = workflow_dto_for_publish_tests();
+        workflow.local_status = Some("verified".to_owned());
+        workflow.icloud_status = Some("verified".to_owned());
+        let body = publish_screen_body(&FocusModel::default(), Some(&workflow));
+        assert!(body.contains("Local publication: verified (also saved to iCloud)"));
+        assert!(!body.contains("iCloud mirror:"));
+    }
+
+    #[test]
+    fn pending_blocked_or_conflict_mirror_shows_own_row() {
+        for status in ["pending", "blocked", "conflict"] {
+            let mut workflow = workflow_dto_for_publish_tests();
+            workflow.local_status = Some("verified".to_owned());
+            workflow.icloud_status = Some(status.to_owned());
+            let body = publish_screen_body(&FocusModel::default(), Some(&workflow));
+            assert!(body.contains(&format!("iCloud mirror: {status}\n")));
+            assert!(!body.contains("also saved to iCloud"));
+        }
+    }
+
+    #[test]
+    fn no_mirror_configured_adds_no_publish_row() {
+        let workflow = workflow_dto_for_publish_tests();
+        let body = publish_screen_body(&FocusModel::default(), Some(&workflow));
+        assert!(!body.contains("iCloud"));
+    }
+
+    fn workflow_dto_for_publish_tests() -> WorkflowDto {
+        let mut workflow = composing_workflow();
+        workflow.local_status = None;
+        workflow.notion_status = None;
+        workflow.icloud_status = None;
+        workflow
     }
 }

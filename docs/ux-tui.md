@@ -71,6 +71,11 @@ bypass review.
   with `YYYY-MM-DD (DDD)`, using a fixed uppercase English weekday, and shows
   the ordered native blocks produced by lossless Markdown conversion. Show
   conflicts and partial success plainly.
+- When an iCloud mirror is configured, Preview shows one `iCloud mirror` line
+  with its target and status. Publish shows a mirror row only while it is
+  pending, blocked, or in conflict; a verified mirror is a note on the local
+  row (`also saved to iCloud`). A mirror failure never raises a modal and never
+  fails the local publication.
 - When the local file differs, stop the whole plan; when Notion holds
   conflicting same-day content, stop Notion only. Show both versions and offer
   only reread, discard the entry, or save under a different diary day, as

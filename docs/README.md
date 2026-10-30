@@ -34,6 +34,9 @@ This index lists the design and process docs, one line each. Read only the doc y
 | [phase-1/milestone-10-notion-publication-architecture.md](phase-1/milestone-10-notion-publication-architecture.md) | P1-M10 renderer, tolerant hierarchy, bounded retry, append, read-back, and reconciliation design. |
 | [phase-1/milestone-11-amendments-overview.md](phase-1/milestone-11-amendments-overview.md) | P1-M11 amendment decisions, scope, and automated completion checklist. |
 | [phase-1/milestone-11-amendments-architecture.md](phase-1/milestone-11-amendments-architecture.md) | P1-M11 seed digests, guarded local and Notion replacement, and crash-boundary sequence. |
+| [phase-1/milestone-14-icloud-output-overview.md](phase-1/milestone-14-icloud-output-overview.md) | P1-M14 iCloud Markdown mirror scope and completion checklist. |
+| [superpowers/specs/2026-10-30-icloud-output-design.md](superpowers/specs/2026-10-30-icloud-output-design.md) | iCloud Markdown mirror output design. |
+| [superpowers/plans/2026-10-30-icloud-output.md](superpowers/plans/2026-10-30-icloud-output.md) | iCloud mirror implementation plan. |
 | [phase-1/milestone-13-release-qualification-overview.md](phase-1/milestone-13-release-qualification-overview.md) | P1-M13 automated exit-criteria evidence matrix and qualification checklist. |
 | [phase-1/milestone-13-release-qualification-architecture.md](phase-1/milestone-13-release-qualification-architecture.md) | P1-M13 automated end-to-end, pty, fake-service, and security test sequence. |
 | [architecture.md](architecture.md) | Local control server, two-sidebar TUI client, clean-architecture boundaries, connectors, multi-backend assistants, paragraph review, workflow states, amendments, data egress, REST, streaming, and future MCP design. |

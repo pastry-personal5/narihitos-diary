@@ -44,6 +44,13 @@ advertised and accepted only while the Swift helper is available; its absence
 does not prevent the explicit continue-without-notes action from a newly
 started workflow.
 
+The additive `icloud_status` workflow field and the local preview's
+`icloud_target`/`icloud_status` fields describe the optional iCloud mirror
+destination (kind `mirror`, destination `icloud`). They are absent when no
+mirror is configured; clients that predate them ignore them and treat an
+unknown destination kind as non-blocking. See the
+[iCloud output design](superpowers/specs/2026-10-30-icloud-output-design.md).
+
 Capabilities report `manual_workflow_available` separately from
 `assistant_backends[]`. Manual editing has no backend ID or composition path.
 Each descriptor binds one stable backend ID to its display label, hosted or

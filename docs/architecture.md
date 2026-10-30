@@ -217,6 +217,12 @@ read over `/mcp`.
 
 ### Adding connectors
 
+### Adding connectors
+
+A peer file destination such as the iCloud mirror adds a `DestinationKind`
+and reuses the local adapter instead of a new connector; see
+"Publication and recovery".
+
 Register connectors at startup with a stable connector ID, display name, and
 declared capabilities. Source references are namespaced by connector. When two
 connectors appear to contain the same note, show both with provenance and let
@@ -370,6 +376,15 @@ no-clobber finalization strategy. Same-path identical content resumes; different
 content is a conflict and is never overwritten automatically; only an
 approved amendment replaces the app's own receipted file. The local file
 is the durable source of truth for retrying later destinations.
+
+The optional iCloud mirror (`DestinationKind::Mirror`, destination `icloud`,
+enabled by `paths.icloud_entries_root`) reuses the local adapter on an
+iCloud-validated root and writes the same bytes after the local write is
+verified, in the same job and under the same plan approval. A blocked, evicted
+(`.<name>.icloud` placeholder), conflicting, or uncertain mirror leaves the day
+`Partial` and never changes local or Notion; startup reconciliation inspects an
+uncertain mirror write before any retry, and `publish_mirror_guarded` retries
+the mirror alone. See the [iCloud output design](superpowers/specs/2026-10-30-icloud-output-design.md).
 
 The Notion adapter sends only the confirmed body, without YAML front matter.
 It treats the configured page as a root, tolerates unrelated content, resolves

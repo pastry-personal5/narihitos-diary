@@ -1,6 +1,6 @@
 # P1-M14: iCloud output overview
 
-Status: In progress
+Status: Done
 
 This milestone mirrors each published diary entry to a configured iCloud Drive
 folder as a byte-identical Markdown file, automatically and quietly, without
@@ -35,25 +35,25 @@ verified iCloud file with no extra prompt. Without it, nothing changes.
 
 ## Completion checklist
 
-- [ ] `Mirror` kind round-trips and mirror states never block Notion approval
+- [x] `Mirror` kind round-trips and mirror states never block Notion approval
   (diary-core `mirror_*`, `destination_kind_mirror_round_trips`).
-- [ ] `finish_mirror_retry` completes, rejects wrong states, never regresses
+- [x] `finish_mirror_retry` completes, rejects wrong states, never regresses
   (diary-core `finish_mirror_retry_*`).
-- [ ] Config key parses, is optional, rejects duplicates (diary-control).
-- [ ] Root outside Mobile Documents, `..`, and symlink escape are rejected;
+- [x] Config key parses, is optional, rejects duplicates (diary-control).
+- [x] Root outside Mobile Documents, `..`, and symlink escape are rejected;
   evicted placeholder and vanished root are unavailable and never written
   (diary-connectors `new_icloud_*`, `icloud_*`).
-- [ ] Byte-identical mirror completes the day with no extra approval; no mirror
+- [x] Byte-identical mirror completes the day with no extra approval; no mirror
   configured leaves behavior unchanged (`apps/nd/tests/p1_m14_icloud.rs`).
-- [ ] Missing root, placeholder, and different content leave local published and
+- [x] Missing root, placeholder, and different content leave local published and
   the day `Partial`/unaffected; Notion still previews and publishes.
-- [ ] Ambiguous mirror write reconciles at startup without a second write.
-- [ ] Mirror retry after a blocked mirror completes the day.
-- [ ] A config change between preview and publish forces a new preview.
-- [ ] SQLite round-trip of the `mirror` kind passes (no migration needed or one
+- [x] Ambiguous mirror write reconciles at startup without a second write.
+- [x] Mirror retry after a blocked mirror completes the day.
+- [x] A config change between preview and publish forces a new preview.
+- [x] SQLite round-trip of the `mirror` kind passes (no migration needed or one
   added), contract serializes `mirror`, TUI shows mirror only when not verified.
-- [ ] Docs updated (`docs/README.md`, product-behavior, architecture,
+- [x] Docs updated (`docs/README.md`, product-behavior, architecture,
   control-api-v1, ux-tui, user-guide-tui, README, changelog, roadmap, AGENTS.md).
-- [ ] Gate passes: `cargo fmt --all -- --check`,
+- [x] Gate passes: `cargo fmt --all -- --check`,
   `cargo clippy --all-targets --all-features -- -D warnings`,
   `cargo test --all-features`.
