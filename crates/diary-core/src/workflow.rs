@@ -1589,6 +1589,53 @@ impl Workflow {
         Ok(())
     }
 
+    /// Completes a mirror-only retry from `Partial`. Only the `icloud`
+    /// destination changes; a verified destination never regresses.
+    pub fn finish_mirror_retry(
+        &mut self,
+        expected_revision: u64,
+        status: DestinationStatus,
+        now: Timestamp,
+    ) -> Result<(), WorkflowError> {
+        self.expect_revision(expected_revision)?;
+        if self.state != WorkflowState::Partial || self.approval.is_none() {
+            return Err(WorkflowError::WrongState);
+        }
+        let status_of = |destination: &str| {
+            self.destination_progress
+                .iter()
+                .find(|item| item.destination == destination)
+                .map(|item| item.status)
+        };
+        if status_of("local") != Some(DestinationStatus::Verified) {
+            return Err(WorkflowError::LocalMustBeVerified);
+        }
+        match status_of("icloud") {
+            None => return Err(WorkflowError::UnknownDestination),
+            Some(DestinationStatus::Verified) => {
+                return Err(WorkflowError::VerifiedDestinationRegressed);
+            }
+            Some(_) => {}
+        }
+        for item in &mut self.destination_progress {
+            if item.destination == "icloud" {
+                item.status = status;
+            }
+        }
+        self.job_status = Some(JobStatus::Completed);
+        let all_verified = self
+            .destination_progress
+            .iter()
+            .all(|item| item.status == DestinationStatus::Verified);
+        self.all_verified_at = all_verified.then_some(now);
+        if all_verified {
+            self.advance(WorkflowState::Completed, now);
+        } else {
+            self.bump(now);
+        }
+        Ok(())
+    }
+
     pub fn seed_amendment(
         &mut self,
         expected_revision: u64,
@@ -3034,6 +3081,207 @@ mod tests {
             )
             .unwrap();
         assert!(!conflicted.pending_retry_reuses_approval("remote", &conflicted_plan.plan_digest));
+    }
+
+    fn progress_of(items: &[(&str, DestinationStatus)]) -> Vec<DestinationProgress> {
+        items
+            .iter()
+            .map(|(destination, status)| DestinationProgress {
+                destination: (*destination).to_owned(),
+                status: *status,
+            })
+            .collect()
+    }
+
+    fn mirror_plan(workflow: &Workflow) -> OutputPlan {
+        OutputPlan::new(
+            "mirror-plan",
+            workflow
+                .entry()
+                .confirmed
+                .as_ref()
+                .unwrap()
+                .entry_digest
+                .clone(),
+            workflow.selection_digest().unwrap().clone(),
+            vec![
+                target_kind("local", DestinationKind::Local),
+                target_kind("icloud", DestinationKind::Mirror),
+                target_kind("notion", DestinationKind::Remote),
+            ],
+            time(20),
+        )
+        .unwrap()
+    }
+
+    fn mirror_publishing(
+        local: DestinationStatus,
+        icloud: DestinationStatus,
+        notion: DestinationStatus,
+    ) -> Workflow {
+        let mut workflow = confirmed_workflow();
+        let plan = mirror_plan(&workflow);
+        workflow
+            .preview_output(workflow.revision(), plan.clone(), time(21))
+            .unwrap();
+        workflow
+            .approve(workflow.revision(), &plan.plan_digest, time(22))
+            .unwrap();
+        workflow
+            .begin_publication(workflow.revision(), time(23))
+            .unwrap();
+        workflow
+            .finish_publication(
+                workflow.revision(),
+                progress_of(&[("local", local), ("icloud", icloud), ("notion", notion)]),
+                time(24),
+            )
+            .unwrap();
+        workflow
+    }
+
+    #[test]
+    fn destination_kind_mirror_round_trips() {
+        assert_eq!(DestinationKind::Mirror.as_str(), "mirror");
+        assert_eq!(
+            DestinationKind::parse(DestinationKind::Mirror.as_str()),
+            Ok(DestinationKind::Mirror)
+        );
+    }
+
+    #[test]
+    fn mirror_blocked_does_not_block_notion_approval() {
+        let mut workflow = confirmed_workflow();
+        let plan = mirror_plan(&workflow);
+        workflow
+            .preview_output_with_progress(
+                workflow.revision(),
+                plan.clone(),
+                progress_of(&[
+                    ("local", DestinationStatus::Pending),
+                    ("icloud", DestinationStatus::Blocked),
+                    ("notion", DestinationStatus::Blocked),
+                ]),
+                time(21),
+            )
+            .unwrap();
+        workflow
+            .approve(workflow.revision(), &plan.plan_digest, time(22))
+            .unwrap();
+        workflow
+            .begin_publication(workflow.revision(), time(23))
+            .unwrap();
+        workflow
+            .finish_publication(
+                workflow.revision(),
+                progress_of(&[
+                    ("local", DestinationStatus::Verified),
+                    ("icloud", DestinationStatus::Blocked),
+                    ("notion", DestinationStatus::Blocked),
+                ]),
+                time(24),
+            )
+            .unwrap();
+        let replanned = workflow
+            .preview_blocked_retry(
+                workflow.revision(),
+                "notion",
+                target_kind("notion", DestinationKind::Remote),
+                "mirror-retry",
+                time(25),
+            )
+            .unwrap();
+        workflow
+            .approve_blocked_retry(
+                workflow.revision(),
+                "notion",
+                &replanned.plan_digest,
+                time(26),
+            )
+            .unwrap();
+    }
+
+    #[test]
+    fn mirror_conflict_leaves_local_verified_and_day_partial() {
+        let workflow = mirror_publishing(
+            DestinationStatus::Verified,
+            DestinationStatus::Conflict,
+            DestinationStatus::Verified,
+        );
+        assert_eq!(workflow.state(), WorkflowState::Partial);
+        assert!(workflow.destination_progress().iter().any(|item| {
+            item.destination == "local" && item.status == DestinationStatus::Verified
+        }));
+    }
+
+    #[test]
+    fn finish_mirror_retry_completes_when_all_verified() {
+        let mut workflow = mirror_publishing(
+            DestinationStatus::Verified,
+            DestinationStatus::Blocked,
+            DestinationStatus::Verified,
+        );
+        workflow
+            .finish_mirror_retry(workflow.revision(), DestinationStatus::Verified, time(30))
+            .unwrap();
+        assert_eq!(workflow.state(), WorkflowState::Completed);
+        assert_eq!(workflow.all_verified_at(), Some(time(30)));
+
+        let mut still_partial = mirror_publishing(
+            DestinationStatus::Verified,
+            DestinationStatus::Blocked,
+            DestinationStatus::Blocked,
+        );
+        still_partial
+            .finish_mirror_retry(
+                still_partial.revision(),
+                DestinationStatus::Verified,
+                time(30),
+            )
+            .unwrap();
+        assert_eq!(still_partial.state(), WorkflowState::Partial);
+    }
+
+    #[test]
+    fn finish_mirror_retry_rejects_non_partial() {
+        let mut workflow = journey_to_publishing();
+        assert_eq!(
+            workflow.finish_mirror_retry(
+                workflow.revision(),
+                DestinationStatus::Verified,
+                time(30)
+            ),
+            Err(WorkflowError::WrongState)
+        );
+        let mut no_mirror = mirror_publishing(
+            DestinationStatus::Verified,
+            DestinationStatus::Blocked,
+            DestinationStatus::Blocked,
+        );
+        no_mirror
+            .destination_progress
+            .retain(|item| item.destination != "icloud");
+        assert_eq!(
+            no_mirror.finish_mirror_retry(
+                no_mirror.revision(),
+                DestinationStatus::Verified,
+                time(30)
+            ),
+            Err(WorkflowError::UnknownDestination)
+        );
+    }
+
+    #[test]
+    fn finish_mirror_retry_cannot_regress_verified() {
+        let mut workflow = mirror_publishing(
+            DestinationStatus::Verified,
+            DestinationStatus::Verified,
+            DestinationStatus::Blocked,
+        );
+        assert_eq!(
+            workflow.finish_mirror_retry(workflow.revision(), DestinationStatus::Blocked, time(30)),
+            Err(WorkflowError::VerifiedDestinationRegressed)
+        );
     }
 
     fn two_target_publishing() -> (Workflow, OutputPlan) {

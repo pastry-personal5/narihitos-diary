@@ -595,6 +595,7 @@ impl DestinationPlan {
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub enum DestinationKind {
     Local,
+    Mirror,
     Remote,
 }
 
@@ -603,6 +604,7 @@ impl DestinationKind {
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::Local => "local",
+            Self::Mirror => "mirror",
             Self::Remote => "remote",
         }
     }
@@ -610,6 +612,7 @@ impl DestinationKind {
     pub fn parse(value: &str) -> Result<Self, ValueError> {
         match value {
             "local" => Ok(Self::Local),
+            "mirror" => Ok(Self::Mirror),
             "remote" => Ok(Self::Remote),
             _ => Err(ValueError::new("unknown destination kind")),
         }
