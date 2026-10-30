@@ -10,6 +10,7 @@ use crate::assistant_view::{AssistantResource, AssistantViewModel};
 use crate::compose_view::ComposeViewModel;
 use crate::date_display::format_diary_day;
 use crate::focus::{FocusModel, FocusZone};
+use crate::readiness_view::{ReadinessView, readiness_block};
 use crate::review_view::first_unresolved_delimiter;
 use crate::sources_menu::{SourcesMenuItem, SourcesMenuState, label as menu_label};
 use crate::sources_view::{SourcesViewModel, source_label};
@@ -284,7 +285,11 @@ pub fn amendment_preview_screen_body(
     text
 }
 
-pub fn publish_screen_body(focus: &FocusModel, workflow: Option<&WorkflowDto>) -> String {
+pub fn publish_screen_body(
+    focus: &FocusModel,
+    workflow: Option<&WorkflowDto>,
+    readiness: &ReadinessView,
+) -> String {
     let marker = |index| {
         if focus.zone == FocusZone::Main && focus.main_control_index == index {
             ">"
@@ -316,12 +321,14 @@ pub fn publish_screen_body(focus: &FocusModel, workflow: Option<&WorkflowDto>) -
         "Publish approved destination"
     };
     format!(
-        "{completion}Local publication: {local}{local_note}\n{icloud_row}Notion: {}\n\n{} {primary}\n{} Cancel pending publication",
+        "{completion}Local publication: {local}{local_note}\n{icloud_row}Notion: {}\n\n{}\n\n{} {primary}\n{} Cancel pending publication\n{} Check Notion and iCloud readiness",
         workflow
             .and_then(|w| w.notion_status.as_deref())
             .unwrap_or("blocked"),
+        readiness_block(readiness),
         marker(0),
-        marker(1)
+        marker(1),
+        marker(2)
     )
 }
 

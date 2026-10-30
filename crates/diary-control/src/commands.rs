@@ -228,6 +228,8 @@ mod composition;
 mod local_publication;
 mod mirror_publication;
 mod notion_publication;
+mod readiness;
+pub use readiness::{DestinationReadiness, PublishReadiness, Readiness};
 mod reconciliation;
 mod sources;
 
@@ -288,13 +290,40 @@ struct NotionDestination<'a> {
     cancelled: &'a AtomicBool,
 }
 
+/// Receipt IDs are primary keys, but Notion reports the month page as its
+/// receipt, so every diary day of one month would share it and the second
+/// day's receipt could never be saved, leaving that day reconciling. Appending
+/// the attempt keeps each receipt unique; the text before the first `#` is
+/// still the month page ID that an amendment reads back.
+fn attempt_receipt_id(receipt_id: &str, attempt_id: &str) -> String {
+    format!("{receipt_id}#{attempt_id}")
+}
+
 impl Destination for NotionDestination<'_> {
-    fn write(&mut self, _: &OperationIntent) -> WriteOutcome {
-        self.output.write(self.request, self.cancelled)
+    fn write(&mut self, intent: &OperationIntent) -> WriteOutcome {
+        match self.output.write(self.request, self.cancelled) {
+            WriteOutcome::Verified {
+                receipt_id,
+                returned_ids,
+            } => WriteOutcome::Verified {
+                receipt_id: attempt_receipt_id(&receipt_id, &intent.attempt_id),
+                returned_ids,
+            },
+            other => other,
+        }
     }
 
-    fn inspect(&mut self, _: &OperationIntent) -> InspectionOutcome {
-        self.output.inspect(self.request)
+    fn inspect(&mut self, intent: &OperationIntent) -> InspectionOutcome {
+        match self.output.inspect(self.request) {
+            InspectionOutcome::Matching {
+                receipt_id,
+                returned_ids,
+            } => InspectionOutcome::Matching {
+                receipt_id: attempt_receipt_id(&receipt_id, &intent.attempt_id),
+                returned_ids,
+            },
+            other => other,
+        }
     }
 }
 

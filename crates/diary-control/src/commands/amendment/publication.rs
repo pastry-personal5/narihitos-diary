@@ -195,7 +195,7 @@ impl CommandService {
             day,
             payload: &payload,
             seed_digest: Some(&seed.file_digest),
-            receipt_id: versioned("local", version),
+            receipt_id: versioned(&format!("local-{}", intent.attempt_id), version),
         };
         let result = PublicationCoordinator::execute(
             self.store.as_ref(),

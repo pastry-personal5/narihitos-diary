@@ -101,6 +101,30 @@ pub enum DiagnosticEvent {
         status: &'static str,
         reason: &'static str,
     },
+    /// The outcome of one destination's read-only readiness check, as closed
+    /// tokens only: never a path, identifier, or response text.
+    PublishReadiness {
+        destination: &'static str,
+        readiness: &'static str,
+        reason: &'static str,
+        next_step: &'static str,
+        /// The check that settled the answer, so a surprising result can be
+        /// traced to a gate rather than guessed at.
+        decided_by: &'static str,
+        duration_ms: u64,
+    },
+    /// One readiness request as a whole: which prerequisites held and how
+    /// long the destinations took. The workflow is a keyed tag, never a day.
+    ReadinessCheck {
+        workflow: DiagnosticTag,
+        revision: u64,
+        local_verified: bool,
+        notion_configured: bool,
+        icloud_configured: bool,
+        duration_ms: u64,
+    },
+    /// A readiness request that was refused before any destination ran.
+    ReadinessRefused { reason: &'static str },
     /// A content-free picture of a workflow at an assistant job's start or
     /// failure, so a rejection such as `reviewed-memory-required` can be
     /// matched to the state that caused it. Only closed tokens, booleans,
@@ -587,6 +611,67 @@ fn encode(
                 vec![("reason", reason.to_owned()), ("status", status.to_owned())],
             )
         }
+        DiagnosticEvent::PublishReadiness {
+            destination,
+            readiness,
+            reason,
+            next_step,
+            decided_by,
+            duration_ms,
+        } => {
+            if !READINESS_DESTINATIONS.contains(&destination)
+                || !READINESS_STATES.contains(&readiness)
+                || !READINESS_REASONS.contains(&reason)
+                || !READINESS_NEXT_STEPS.contains(&next_step)
+                || !READINESS_DECIDERS.contains(&decided_by)
+            {
+                return Err(DiagnosticError::InvalidRecord);
+            }
+            (
+                "publish",
+                "readiness",
+                vec![
+                    ("decided_by", decided_by.to_owned()),
+                    ("destination", destination.to_owned()),
+                    ("duration_ms", duration_ms.to_string()),
+                    ("next_step", next_step.to_owned()),
+                    ("readiness", readiness.to_owned()),
+                    ("reason", reason.to_owned()),
+                ],
+            )
+        }
+        DiagnosticEvent::ReadinessCheck {
+            workflow,
+            revision,
+            local_verified,
+            notion_configured,
+            icloud_configured,
+            duration_ms,
+        } => {
+            let flag = |value: bool| u8::from(value).to_string();
+            (
+                "publish",
+                "readiness-check",
+                vec![
+                    ("duration_ms", duration_ms.to_string()),
+                    ("icloud_configured", flag(icloud_configured)),
+                    ("local_verified", flag(local_verified)),
+                    ("notion_configured", flag(notion_configured)),
+                    ("revision", revision.to_string()),
+                    ("workflow", workflow.as_str().to_owned()),
+                ],
+            )
+        }
+        DiagnosticEvent::ReadinessRefused { reason } => {
+            if !READINESS_REFUSALS.contains(&reason) {
+                return Err(DiagnosticError::InvalidRecord);
+            }
+            (
+                "publish",
+                "readiness-refused",
+                vec![("reason", reason.to_owned())],
+            )
+        }
         DiagnosticEvent::PublicationState(snapshot) => {
             if !vocab_publication_kind(snapshot.kind)
                 || !matches!(snapshot.event_status, "finished" | "failed")
@@ -957,6 +1042,93 @@ pub const NOTION_PREVIEW_REASONS: &[&str] = &[
     "notion-write-ambiguous",
 ];
 
+/// Destinations a readiness check reports on.
+pub const READINESS_DESTINATIONS: &[&str] = &["notion", "icloud"];
+
+/// Readiness states a destination can report.
+pub const READINESS_STATES: &[&str] = &["ready", "not-ready", "conflict", "published"];
+
+/// Closed reason tokens for a readiness record and response; free text can
+/// never reach the log or the client.
+pub const READINESS_REASONS: &[&str] = &[
+    "none",
+    "already-published",
+    "icloud-different-file-exists",
+    "icloud-folder-unavailable",
+    "icloud-not-configured",
+    "local-file-not-verified",
+    "notion-config-invalid",
+    "notion-credential-invalid",
+    "notion-hierarchy-ambiguous",
+    "notion-not-configured",
+    "notion-permission-denied",
+    "notion-remote-unavailable",
+    "notion-render-invalid",
+    "notion-response-invalid",
+    "notion-retry-deferred",
+    "notion-root-unverifiable",
+    "notion-same-day-conflict",
+    "notion-unavailable",
+    "notion-write-ambiguous",
+];
+
+/// Closed next-step tokens a readiness record and response can carry.
+pub const READINESS_NEXT_STEPS: &[&str] = &[
+    "none",
+    "publish-local-first",
+    "configure-notion",
+    "fix-notion-access",
+    "check-notion-page",
+    "retry-later",
+    "configure-icloud",
+    "check-icloud-folder",
+    "resolve-icloud-file",
+    "preview-and-approve",
+    "publish-approved",
+];
+
+/// The check that settled a destination's answer.
+pub const READINESS_DECIDERS: &[&str] = &[
+    "local-gate",
+    "published",
+    "not-configured",
+    "preflight-error",
+    "preflight-status",
+    "mirror-inspect",
+];
+
+/// Why a readiness request was refused before any destination ran.
+pub const READINESS_REFUSALS: &[&str] = &[
+    "stale-revision",
+    "reconciling",
+    "not-found",
+    "state-unavailable",
+];
+
+fn vocab_readiness_next_step(value: &str) -> bool {
+    READINESS_NEXT_STEPS.contains(&value)
+}
+
+fn vocab_readiness_decider(value: &str) -> bool {
+    READINESS_DECIDERS.contains(&value)
+}
+
+fn vocab_readiness_refusal(value: &str) -> bool {
+    READINESS_REFUSALS.contains(&value)
+}
+
+fn vocab_readiness_destination(value: &str) -> bool {
+    READINESS_DESTINATIONS.contains(&value)
+}
+
+fn vocab_readiness_state(value: &str) -> bool {
+    READINESS_STATES.contains(&value)
+}
+
+fn vocab_readiness_reason(value: &str) -> bool {
+    READINESS_REASONS.contains(&value)
+}
+
 fn vocab_notion_status(value: &str) -> bool {
     NOTION_PREVIEW_STATUSES.contains(&value)
 }
@@ -1074,6 +1246,26 @@ const NOTION_PREVIEW_SPEC: &[KeySpec] = &[
     required("reason", ValueKind::Vocab(vocab_notion_reason)),
     required("status", ValueKind::Vocab(vocab_notion_status)),
 ];
+const READINESS_SPEC: &[KeySpec] = &[
+    required("decided_by", ValueKind::Vocab(vocab_readiness_decider)),
+    required("destination", ValueKind::Vocab(vocab_readiness_destination)),
+    required("duration_ms", ValueKind::Number),
+    required("next_step", ValueKind::Vocab(vocab_readiness_next_step)),
+    required("readiness", ValueKind::Vocab(vocab_readiness_state)),
+    required("reason", ValueKind::Vocab(vocab_readiness_reason)),
+];
+const READINESS_CHECK_SPEC: &[KeySpec] = &[
+    required("duration_ms", ValueKind::Number),
+    required("icloud_configured", ValueKind::Flag),
+    required("local_verified", ValueKind::Flag),
+    required("notion_configured", ValueKind::Flag),
+    required("revision", ValueKind::Number),
+    required("workflow", ValueKind::Tag),
+];
+const READINESS_REFUSED_SPEC: &[KeySpec] = &[required(
+    "reason",
+    ValueKind::Vocab(vocab_readiness_refusal),
+)];
 const MIGRATION_SPEC: &[KeySpec] = &[
     required("duration_ms", ValueKind::Number),
     required("from", ValueKind::Number),
@@ -1100,6 +1292,9 @@ fn record_spec(component: &str, event: &str) -> Option<&'static [KeySpec]> {
         ("assistant", "snapshot") => Some(SNAPSHOT_SPEC),
         ("publication", "snapshot") => Some(PUBLICATION_SPEC),
         ("notion", "preview") => Some(NOTION_PREVIEW_SPEC),
+        ("publish", "readiness") => Some(READINESS_SPEC),
+        ("publish", "readiness-check") => Some(READINESS_CHECK_SPEC),
+        ("publish", "readiness-refused") => Some(READINESS_REFUSED_SPEC),
         (
             "store",
             "migration-current" | "migration-started" | "migration-step" | "migration-finished"

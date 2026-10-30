@@ -333,7 +333,7 @@ impl CommandService {
             output: output.as_ref(),
             day,
             payload: &payload,
-            receipt_id: "local".into(),
+            receipt_id: format!("local-{}", intent.attempt_id),
         };
         let result = PublicationCoordinator::execute(
             self.store.as_ref(),
@@ -343,6 +343,22 @@ impl CommandService {
             self.clock.now(),
         )
         .map_err(|_| CommandError::LocalOutput(LocalOutputError::Unavailable))?;
+        // A filesystem operation can report failure after the final name has
+        // been created (for example, while syncing the parent directory).
+        // Inspect the exact target now so a landed write gets its receipt and
+        // the mirror can run without requiring a server restart.
+        let result = if result == PublicationResult::Reconciling {
+            PublicationCoordinator::reconcile(
+                self.store.as_ref(),
+                &mut destination,
+                &intent,
+                1,
+                self.clock.now(),
+            )
+            .map_err(|_| CommandError::LocalOutput(LocalOutputError::Unavailable))?
+        } else {
+            result
+        };
         let status = match result {
             PublicationResult::Verified(_) => DestinationStatus::Verified,
             PublicationResult::Conflict => DestinationStatus::Conflict,

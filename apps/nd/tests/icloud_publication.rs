@@ -342,6 +342,60 @@ struct AmbiguousMirror {
     inner: LocalOutput,
     writes: AtomicU64,
 }
+
+/// Models a local write that creates the final file and then reports an
+/// unavailable result before the caller receives confirmation.
+struct LandedUncertainLocal {
+    inner: LocalOutput,
+    writes: AtomicU64,
+}
+impl LocalOutputPort for LandedUncertainLocal {
+    fn target(&self, day: &DiaryDay) -> String {
+        self.inner.target(day).to_string_lossy().into_owned()
+    }
+    fn inspect(&self, day: &DiaryDay, payload: &str) -> Result<LocalOutputState, LocalOutputError> {
+        self.inner.inspect(day, payload)
+    }
+    fn write(&self, day: &DiaryDay, payload: &str) -> Result<LocalOutputState, LocalOutputError> {
+        self.writes.fetch_add(1, Ordering::SeqCst);
+        self.inner.write(day, payload)?;
+        Err(LocalOutputError::Unavailable)
+    }
+}
+
+#[test]
+fn landed_uncertain_local_is_receipted_and_mirror_runs_without_restart() {
+    let fx = Fixture::new();
+    let local = Arc::new(LandedUncertainLocal {
+        inner: LocalOutput::new(fx._scratch.0.join("entries")).unwrap(),
+        writes: AtomicU64::new(0),
+    });
+    let service = CommandService::new(
+        fx.store.clone(),
+        Arc::new(EmptySources),
+        Arc::new(EmptySources),
+        Arc::new(FixedClock),
+    )
+    .with_local_output(local.clone())
+    .with_mirror_output(fx.mirror())
+    .with_notion_output(Arc::new(SyntheticNotion));
+    let published = publish(&service, &fx.day);
+    assert_eq!(status_of(&published, "local"), DestinationStatus::Verified);
+    assert_eq!(status_of(&published, "icloud"), DestinationStatus::Verified);
+    assert_eq!(status_of(&published, "notion"), DestinationStatus::Blocked);
+    assert_eq!(local.writes.load(Ordering::SeqCst), 1);
+    assert!(
+        fx.store
+            .unresolved_intents(Some(&fx.day))
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(fx.store.receipts(&fx.day).unwrap().len(), 2);
+    let notion = service
+        .preview_notion(&fx.day, published.revision())
+        .unwrap();
+    assert_eq!(notion.status, DestinationStatus::Pending);
+}
 impl LocalOutputPort for AmbiguousMirror {
     fn target(&self, day: &DiaryDay) -> String {
         self.inner.target(day).to_string_lossy().into_owned()

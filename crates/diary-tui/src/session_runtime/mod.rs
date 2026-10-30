@@ -6,8 +6,8 @@ use std::time::{Duration, Instant};
 
 use diary_control_contract::{
     CapabilitiesDto, JOB_NOT_FOUND, LocalPreviewDto, NotionPreviewDto, PreferencesDto,
-    ResolveParagraphSuggestionRequest, SetupCheckDto, SourceDetailDto, StartParagraphReviewRequest,
-    WorkflowDto, buffer_etag, job_status,
+    PublishReadinessDto, ResolveParagraphSuggestionRequest, SetupCheckDto, SourceDetailDto,
+    StartParagraphReviewRequest, WorkflowDto, buffer_etag, job_status,
 };
 
 use crate::amendment_view;
@@ -22,6 +22,7 @@ use crate::help_overlay::{HelpOverlayWidget, overlay_area};
 use crate::ime::{ImeState, ImeTracker, MacInputLanguageNotifications, MacInputLanguageQuery};
 use crate::layout::{OverlayClearWidget, adaptive_areas};
 use crate::main_pane::MainPaneWidget;
+use crate::readiness_view::{ReadinessView, needs_notion_approval};
 use crate::resources::{ResourceRow, ResourcesSidebarModel, ResourcesSidebarWidget};
 use crate::review_view::{ReviewViewModel, can_confirm, first_unresolved_delimiter};
 use crate::screen_body::*;
@@ -107,6 +108,10 @@ pub fn run_connected_session(
     let mut current_workflow: Option<WorkflowDto> = None;
     let mut local_preview: Option<LocalPreviewDto> = None;
     let mut notion_preview: Option<NotionPreviewDto> = None;
+    // Publish readiness is asked for, never automatic; the answer belongs to
+    // one workflow revision and shows as not checked once that moves on.
+    let mut readiness_checked: Option<(String, PublishReadinessDto)> = None;
+    let mut readiness_pending = false;
     let mut amendment_preview: Option<diary_control_contract::AmendmentPreviewDto> = None;
     let mut local_action_pending = false;
     let mut local_publication_job: Option<String> = None;
@@ -874,6 +879,21 @@ pub fn run_connected_session(
                         }
                     }
                 }
+                WorkerResult::ReadinessChecked(outcome) => {
+                    readiness_pending = false;
+                    match *outcome {
+                        ClientOutcome::Ok(report) => {
+                            readiness_checked = current_workflow
+                                .as_ref()
+                                .map(|workflow| (workflow.id.clone(), report));
+                            feedback = Some("Readiness checked".to_owned());
+                        }
+                        ClientOutcome::Problem(problem) => feedback = Some(problem.safe_label()),
+                        ClientOutcome::Transport(error) => {
+                            feedback = Some(error.safe_label().to_owned())
+                        }
+                    }
+                }
                 WorkerResult::NotionPreviewed(outcome) => {
                     local_action_pending = false;
                     match *outcome {
@@ -1308,7 +1328,7 @@ pub fn run_connected_session(
                 4
             }
             Stage::Preview => 3,
-            Stage::Publish => 2,
+            Stage::Publish => 3,
             _ => START_CONTROL_COUNT,
         };
         focus.clamp(
@@ -1498,7 +1518,15 @@ pub fn run_connected_session(
             Stage::Preview => {
                 preview_screen_body(&focus, local_preview.as_ref(), notion_preview.as_ref())
             }
-            Stage::Publish => publish_screen_body(&focus, current_workflow.as_ref()),
+            Stage::Publish => publish_screen_body(
+                &focus,
+                current_workflow.as_ref(),
+                &ReadinessView::resolve(
+                    readiness_pending,
+                    readiness_checked.as_ref(),
+                    current_workflow.as_ref(),
+                ),
+            ),
         };
         if current_stage != Stage::Sources {
             sources_help = None;
@@ -2609,6 +2637,20 @@ pub fn run_connected_session(
                         }
                     }
                 }
+                // Read-only, so it needs no mutation authority and never
+                // shares the busy flag with publication actions.
+                FocusZone::Main
+                    if current_stage == Stage::Publish && focus.main_control_index == 2 =>
+                {
+                    if !readiness_pending && let Some(workflow) = &current_workflow {
+                        readiness_pending = worker
+                            .try_send(Intent::CheckReadiness {
+                                workflow_id: workflow.id.clone(),
+                                revision: workflow.revision,
+                            })
+                            .is_ok();
+                    }
+                }
                 FocusZone::Main
                     if current_stage == Stage::Publish && can_mutate && !local_action_pending =>
                 {
@@ -2657,6 +2699,11 @@ pub fn run_connected_session(
                                         Some("No approved replacement is pending".to_owned());
                                 }
                             }
+                        } else if needs_notion_approval(workflow) {
+                            feedback = Some(
+                                "Preview and approve the Notion plan in the Preview stage first"
+                                    .to_owned(),
+                            );
                         } else if workflow.state == "approved" || workflow.state == "partial" {
                             local_action_pending =
                                 if workflow.local_status.as_deref() == Some("verified") {

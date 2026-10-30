@@ -14,9 +14,9 @@ use std::thread::{self, JoinHandle};
 use diary_control_contract::{
     AmendmentPreviewDto, AssistantBackendListDto, CapabilitiesDto, DraftResultDto, JobAcceptedDto,
     JobDto, LocalPreviewDto, MemoryReviewDto, NotionPreviewDto, ParagraphSuggestionDto,
-    ParagraphSuggestionListDto, PreferencesDto, ResolveParagraphSuggestionRequest, SetupCheckDto,
-    SourceListDto, SourceRefineSuggestionDto, StartParagraphReviewRequest, WorkflowDto,
-    WorkflowListDto,
+    ParagraphSuggestionListDto, PreferencesDto, PublishReadinessDto,
+    ResolveParagraphSuggestionRequest, SetupCheckDto, SourceListDto, SourceRefineSuggestionDto,
+    StartParagraphReviewRequest, WorkflowDto, WorkflowListDto,
 };
 
 use crate::client::{ApiClient, Attachment, ClientOutcome, SourceDetailResponse, Transport};
@@ -151,6 +151,10 @@ pub enum Intent {
         workflow_id: String,
         revision: u64,
     },
+    CheckReadiness {
+        workflow_id: String,
+        revision: u64,
+    },
     PreviewNotion {
         workflow_id: String,
         revision: u64,
@@ -279,6 +283,7 @@ pub enum WorkerResult {
     LocalPreviewed(Box<ClientOutcome<LocalPreviewDto>>),
     LocalApproved(Box<ClientOutcome<WorkflowDto>>),
     LocalPublished(ClientOutcome<JobAcceptedDto>),
+    ReadinessChecked(Box<ClientOutcome<PublishReadinessDto>>),
     NotionPreviewed(Box<ClientOutcome<NotionPreviewDto>>),
     NotionApproved(Box<ClientOutcome<WorkflowDto>>),
     NotionPublished(ClientOutcome<JobAcceptedDto>),
@@ -594,6 +599,14 @@ impl Worker {
                 &workflow_id,
                 revision,
             )),
+            Intent::CheckReadiness {
+                workflow_id,
+                revision,
+            } => WorkerResult::ReadinessChecked(Box::new(client.check_readiness(
+                attachment,
+                &workflow_id,
+                revision,
+            ))),
             Intent::PreviewNotion {
                 workflow_id,
                 revision,

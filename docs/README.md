@@ -42,7 +42,10 @@ This index lists the design and process docs, one line each. Read only the doc y
 | [phase-1/milestone-17-assistant-settings-overview.md](phase-1/milestone-17-assistant-settings-overview.md) | P1-M17 assistant settings continuity and completion checklist. |
 | [phase-1/milestone-18-clean-architecture-refactor-overview.md](phase-1/milestone-18-clean-architecture-refactor-overview.md) | P1-M18 refactoring goal, scope, checklist, and acceptance evidence. |
 | [phase-1/milestone-18-clean-architecture-refactor-architecture.md](phase-1/milestone-18-clean-architecture-refactor-architecture.md) | P1-M18 module ownership, refactor sequence, and verification boundaries. |
+| [phase-1/milestone-19-publish-readiness-overview.md](phase-1/milestone-19-publish-readiness-overview.md) | P1-M19 Publish-stage readiness check for Notion and iCloud, with completion checklist. |
 | [superpowers/specs/2026-10-30-icloud-output-design.md](superpowers/specs/2026-10-30-icloud-output-design.md) | iCloud Markdown mirror output design. |
+| [superpowers/specs/2026-10-30-notion-ascending-order-design.md](superpowers/specs/2026-10-30-notion-ascending-order-design.md) | Draft design (proposed P1-M20): insert Notion daily sections in ascending date order. |
+| [superpowers/specs/2026-10-30-append-overwrite-existing-entry-design.md](superpowers/specs/2026-10-30-append-overwrite-existing-entry-design.md) | Draft design (proposed P1-M21): Append and Overwrite resolutions for existing entries at local, iCloud, and Notion. |
 | [superpowers/plans/2026-10-30-icloud-output.md](superpowers/plans/2026-10-30-icloud-output.md) | iCloud mirror implementation plan. |
 | [phase-1/milestone-13-release-qualification-overview.md](phase-1/milestone-13-release-qualification-overview.md) | P1-M13 automated exit-criteria evidence matrix and qualification checklist. |
 | [phase-1/milestone-13-release-qualification-architecture.md](phase-1/milestone-13-release-qualification-architecture.md) | P1-M13 automated end-to-end, pty, fake-service, and security test sequence. |

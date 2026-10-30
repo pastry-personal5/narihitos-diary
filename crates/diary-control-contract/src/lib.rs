@@ -5,7 +5,7 @@
 use serde::{Deserialize, Serialize};
 
 pub const API_VERSION: &str = "v1";
-pub const CONTRACT_VERSION: u32 = 5;
+pub const CONTRACT_VERSION: u32 = 6;
 /// Covers one maximum-size source body plus a bounded JSON envelope. Individual
 /// routes still enforce their narrower action-specific limits.
 pub const MAX_REQUEST_BYTES: usize = 8 * 1024 * 1024 + 64 * 1024;

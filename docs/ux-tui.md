@@ -104,6 +104,13 @@ second row carries a `Tip:` naming the next step to the following stage. See
   pending, blocked, or in conflict; a verified mirror is a note on the local
   row (`also saved to iCloud`). A mirror failure never raises a modal and never
   fails the local publication.
+- Publish offers a manual `Check Notion and iCloud readiness` control, the last
+  Publish control. Nothing runs automatically. Each destination shows `Not
+  checked` before a check and `Checking...` during one, then `READY`, `NOT
+  READY`, `CONFLICT`, or `PUBLISHED` with a plain-language reason and next step.
+  The check is read-only, needs no mutation authority, and its answer clears
+  when the workflow revision or day changes. A ready Notion points to Preview and
+  approval; readiness never stands in for approval.
 - When the local file differs, stop the whole plan; when Notion holds
   conflicting same-day content, stop Notion only. Show both versions and offer
   only reread, discard the entry, or save under a different diary day, as

@@ -264,6 +264,21 @@ keeps one tag. A bare SHA-256 would not do: the inputs are few and guessable,
 so anyone reading the log could recover them by trying candidates. Tags are
 correlation handles only; do not publish or compare them across installs.
 
+The Publish readiness check (P1-M19) writes three Debug records, all closed
+tokens, `0`/`1` flags, counts, and the keyed `workflow` tag, never a day, path,
+or response text. `component=publish event=readiness` appears once per
+destination with `destination`, `readiness`, `reason`, `next_step`, `decided_by`
+(the check that settled the answer: `local-gate`, `published`,
+`not-configured`, `preflight-error`, `preflight-status`, or `mirror-inspect`),
+and `duration_ms`. `event=readiness-check` summarizes the request with
+`workflow`, `revision`, `local_verified`, `notion_configured`,
+`icloud_configured`, and `duration_ms`. `event=readiness-refused` carries
+`reason` (`stale-revision`, `reconciling`, `not-found`, or `state-unavailable`)
+when the request was rejected before any destination ran. A failed
+`notion-publication` job now logs the exact binding that changed
+(`notion-preflight-blocked`, `notion-preflight-conflict`, `notion-target-changed`,
+`notion-payload-changed`, or `notion-state-changed`) as its `reason`.
+
 **Log compatibility contract.** The writer is strict: it emits only the closed
 vocabulary of the records above. The startup reader is tolerant, because it
 re-validates every retained segment, which an older or newer build may have

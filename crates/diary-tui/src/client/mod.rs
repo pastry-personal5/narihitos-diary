@@ -22,7 +22,7 @@ use diary_control_contract::{
     EditSourceBodyRequest, HealthDto, JobAcceptedDto, JobDto, LocalApprovalRequest,
     LocalPreviewDto, MAX_RESPONSE_BYTES, MAX_SOURCE_BYTES, MemoryReviewDto, NotionPreviewDto,
     ParagraphSuggestionDto, ParagraphSuggestionListDto, PreferencesDto, PrepareSourcesRequest,
-    PutAssistantSelectionRequest, PutMemoryReviewRequest, RefineSourceRequest,
+    PublishReadinessDto, PutAssistantSelectionRequest, PutMemoryReviewRequest, RefineSourceRequest,
     ResolveParagraphSuggestionRequest, ResolveSourceRefineRequest, SaveEntryRequest,
     SaveUnderDayRequest, SetupCheckDto, SourceDetailDto, SourceListDto, SourceRefineSuggestionDto,
     StartDraftRequest, StartMemoryExtractionRequest, StartParagraphReviewRequest, WorkflowDto,
@@ -620,6 +620,23 @@ impl<T: Transport> ApiClient<T> {
         self.send_json(
             "POST",
             &format!("/v1/workflows/{workflow_id}/local-publications"),
+            Some(b"{}".to_vec()),
+            Some(workflow_etag(revision)),
+            MAX_RESPONSE_BYTES,
+            attachment,
+        )
+    }
+
+    /// Read-only: asks why Notion and the iCloud mirror are or are not ready.
+    pub fn check_readiness(
+        &self,
+        attachment: &Attachment,
+        workflow_id: &str,
+        revision: u64,
+    ) -> ClientOutcome<PublishReadinessDto> {
+        self.send_json(
+            "POST",
+            &format!("/v1/workflows/{workflow_id}/readiness"),
             Some(b"{}".to_vec()),
             Some(workflow_etag(revision)),
             MAX_RESPONSE_BYTES,

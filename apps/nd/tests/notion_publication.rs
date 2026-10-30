@@ -276,6 +276,71 @@ fn approval_and_publication_void_when_remote_state_changes() {
     assert_eq!(notion.writes(), 0);
 }
 
+/// Notion reports the month page as the receipt, so every day of one month
+/// shares that ID. Receipts are keyed by ID, so a second day used to fail to
+/// save its receipt after the write landed, leaving the day reconciling.
+#[test]
+fn two_days_in_one_month_each_save_their_own_notion_receipt() {
+    let (_scratch, store, notion, service) = setup();
+    for text in ["2026-10-30", "2026-10-29"] {
+        let day = DiaryDay::parse(text).unwrap();
+        partial(&service, &day);
+        let approved = approved(&service, &day);
+        let done = service
+            .publish_notion(&day, approved.revision())
+            .unwrap_or_else(|error| panic!("{text}: {error:?}"));
+        assert_eq!(notion_status(&done), "verified", "{text}");
+        assert!(
+            store.unresolved_intents(Some(&day)).unwrap().is_empty(),
+            "{text} must not be left reconciling"
+        );
+        assert!(
+            store
+                .receipts(&day)
+                .unwrap()
+                .iter()
+                .any(|receipt| receipt.destination == "notion"),
+            "{text}"
+        );
+    }
+    assert_eq!(notion.writes(), 2);
+}
+
+/// The stuck-day shape: another day of the same month already holds the
+/// month-page receipt, and this day's write landed but was not confirmed.
+/// Recovery must adopt it instead of failing to save a colliding receipt.
+#[test]
+fn restart_adopts_a_landed_write_when_another_day_of_the_month_is_published() {
+    let (_scratch, store, notion, service) = setup();
+    let first = DiaryDay::parse("2026-10-29").unwrap();
+    partial(&service, &first);
+    let approved_first = approved(&service, &first);
+    service
+        .publish_notion(&first, approved_first.revision())
+        .unwrap();
+
+    let day = DiaryDay::parse("2026-10-30").unwrap();
+    partial(&service, &day);
+    let approved = approved(&service, &day);
+    notion.set(|inner| inner.mode = Mode::Ambiguous);
+    let reconciling = service.publish_notion(&day, approved.revision()).unwrap();
+    assert_eq!(reconciling.state().as_str(), "publishing");
+    assert_eq!(store.unresolved_intents(Some(&day)).unwrap().len(), 1);
+
+    notion.set(|inner| {
+        inner.inspect = InspectionOutcome::Matching {
+            receipt_id: "synthetic-month".into(),
+            returned_ids: vec!["synthetic-heading".into()],
+        };
+    });
+    service.reconcile_notion_intents().unwrap();
+    assert!(store.unresolved_intents(Some(&day)).unwrap().is_empty());
+    let done = service.load_workflow(&day).unwrap();
+    assert_eq!(done.state().as_str(), "completed");
+    assert_eq!(notion_status(&done), "verified");
+    assert_eq!(notion.writes(), 2);
+}
+
 #[test]
 fn blocked_and_conflict_previews_carry_no_plan_and_need_a_new_approval() {
     let (_scratch, _store, notion, service) = setup();

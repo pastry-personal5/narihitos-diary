@@ -454,7 +454,7 @@ fn preview_and_publish_show_exact_file_conflict_and_separate_statuses() {
     assert!(body.contains("existing content"));
     assert!(body.contains("> Save conflict under another day"));
     assert!(
-        publish_screen_body(&focus, Some(&workflow))
+        publish_screen_body(&focus, Some(&workflow), &ReadinessView::NotChecked)
             .contains("Local publication: conflict\nNotion: blocked")
     );
 }
@@ -464,7 +464,11 @@ fn verified_mirror_collapses_into_local_row_note() {
     let mut workflow = workflow_dto_for_publish_tests();
     workflow.local_status = Some("verified".to_owned());
     workflow.icloud_status = Some("verified".to_owned());
-    let body = publish_screen_body(&FocusModel::default(), Some(&workflow));
+    let body = publish_screen_body(
+        &FocusModel::default(),
+        Some(&workflow),
+        &ReadinessView::NotChecked,
+    );
     assert!(body.contains("Local publication: verified (also saved to iCloud)"));
     assert!(!body.contains("iCloud mirror:"));
 }
@@ -475,7 +479,11 @@ fn pending_blocked_or_conflict_mirror_shows_own_row() {
         let mut workflow = workflow_dto_for_publish_tests();
         workflow.local_status = Some("verified".to_owned());
         workflow.icloud_status = Some(status.to_owned());
-        let body = publish_screen_body(&FocusModel::default(), Some(&workflow));
+        let body = publish_screen_body(
+            &FocusModel::default(),
+            Some(&workflow),
+            &ReadinessView::NotChecked,
+        );
         assert!(body.contains(&format!("iCloud mirror: {status}\n")));
         assert!(!body.contains("also saved to iCloud"));
     }
@@ -484,8 +492,35 @@ fn pending_blocked_or_conflict_mirror_shows_own_row() {
 #[test]
 fn no_mirror_configured_adds_no_publish_row() {
     let workflow = workflow_dto_for_publish_tests();
-    let body = publish_screen_body(&FocusModel::default(), Some(&workflow));
-    assert!(!body.contains("iCloud"));
+    let body = publish_screen_body(
+        &FocusModel::default(),
+        Some(&workflow),
+        &ReadinessView::NotChecked,
+    );
+    assert!(!body.contains("iCloud mirror"));
+    assert!(!body.contains("also saved to iCloud"));
+}
+
+#[test]
+fn publish_offers_a_manual_readiness_check_as_its_last_control() {
+    let workflow = workflow_dto_for_publish_tests();
+    let body = publish_screen_body(
+        &FocusModel::default(),
+        Some(&workflow),
+        &ReadinessView::NotChecked,
+    );
+    assert!(body.contains("Notion  Not checked"));
+    assert!(body.contains("iCloud  Not checked"));
+    let focus = FocusModel {
+        zone: FocusZone::Main,
+        main_control_index: 2,
+        ..FocusModel::default()
+    };
+    let body = publish_screen_body(&focus, Some(&workflow), &ReadinessView::Checking);
+    assert!(body.contains("> Check Notion and iCloud readiness"));
+    assert!(body.contains("Notion  Checking..."));
+    assert!(body.contains("  Publish approved destination"));
+    assert!(body.contains("  Cancel pending publication"));
 }
 
 fn workflow_dto_for_publish_tests() -> WorkflowDto {

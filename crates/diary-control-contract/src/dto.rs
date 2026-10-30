@@ -48,6 +48,23 @@ pub struct NotionPreviewDto {
     pub reason: Option<String>,
 }
 
+/// One destination's read-only readiness. `reason` and `next_step` are closed
+/// content-free tokens; the client owns the wording.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct DestinationReadinessDto {
+    pub destination: String,
+    pub readiness: String,
+    pub reason: String,
+    pub next_step: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct PublishReadinessDto {
+    /// The workflow revision the answer describes.
+    pub revision: u64,
+    pub destinations: Vec<DestinationReadinessDto>,
+}
+
 /// Present on a workflow while a completed day is being amended.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct AmendmentDto {

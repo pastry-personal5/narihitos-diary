@@ -311,6 +311,18 @@ Notes: Completed before P1-M13 after P1-M10's implementation and synthetic
 gate were stable. The owner approved breaking compatibility and API changes;
 this refactor kept the wire contract, schema, and product behavior unchanged.
 
+### P1-M19: Publish readiness
+
+Status: Done
+
+Goal: Let a person ask, from the Publish stage, whether Notion and the iCloud
+mirror are ready and why not, without changing anything.
+
+Plan: [overview](milestone-19-publish-readiness-overview.md).
+
+Notes: Added after P1-M18 from a Notion-blocked diagnosis; it raises the
+Control API contract to version 6 with one read-only route.
+
 ### P1-M13: Release qualification
 
 Status: Planned

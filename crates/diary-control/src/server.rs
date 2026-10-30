@@ -172,6 +172,10 @@ pub fn build_router(config: ServerConfig) -> ServerHandle {
             post(publish_local_output),
         )
         .route(
+            "/v1/workflows/{id}/readiness",
+            post(check_publish_readiness),
+        )
+        .route(
             "/v1/workflows/{id}/notion-previews",
             post(preview_notion_output),
         )

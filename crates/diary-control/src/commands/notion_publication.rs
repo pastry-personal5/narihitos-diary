@@ -179,12 +179,8 @@ impl CommandService {
         let preflight = notion
             .preflight(day, &workflow.entry().text)
             .map_err(|_| CommandError::NotionUnavailable)?;
-        if preflight.status != NotionPreflightStatus::Ready
-            || preflight.target_identity != target.target_identity
-            || preflight.payload_digest != target.payload_digest
-            || preflight.observed_state_digest != target.inspected_state_digest
-        {
-            return Err(CommandError::PreconditionFailed);
+        if let Some(reason) = notion_binding_refusal(&preflight, target, true) {
+            return Err(CommandError::NotionBindingChanged(reason));
         }
         if workflow.state() == diary_core::WorkflowState::Partial {
             workflow

@@ -133,8 +133,9 @@ It shows the target path, exact Markdown with `date` and `language` front
 matter, SHA-256 digest, and initially blocked Notion status. Review the file before
 approving the plan. Publish then starts a local publication job; an existing
 different file is never replaced. The job can be cancelled before it commits,
-and an uncertain write is inspected on restart before that diary day can act
-again. A conflict shows the existing and planned text. Reread with Preview,
+and an uncertain write is read back in the same job. If that read-back is
+unavailable, restart inspects it again before that diary day can act. A
+conflict shows the existing and planned text. Reread with Preview,
 discard the workflow from Start, or choose another day in Preview; carried
 text must be confirmed again.
 
@@ -157,5 +158,13 @@ the month page's bottom. A duplicate or wrong-weekday same-day heading stops
 Notion without changing the verified local file. A blocked retry needs a new
 preview and approval, while an uncertain append is inspected before any new
 write. The token, page IDs, and unrelated Notion prose are never shown.
+On Publish, choose **Check Notion and iCloud readiness** to ask why each
+destination is or is not ready. Nothing is checked until you choose it, and the
+check never writes anything. Each destination shows `READY`, `NOT READY`,
+`CONFLICT`, or `PUBLISHED`, a plain reason (for example, Notion denied access to
+the configured page, or iCloud already has a different file for this day), and
+the next step. A ready Notion still needs its own preview and approval in the
+Preview stage before it can publish. An answer applies to the workflow as it
+was when you asked, so it returns to `Not checked` after anything changes.
 The `paths.entries_root` setting may be absolute, relative to the directory
 where `nd` starts, or begin with `~/` to resolve from the current user's home.

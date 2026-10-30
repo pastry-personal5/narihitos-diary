@@ -64,6 +64,9 @@ human run.
 - [x] A synthetic `started` or `discovered` workflow with a saved writing-choice invalidation still opens Sources; unknown invalidations remain locked.
 - [x] The stage-mapping regression test passes and affected UX and changelog docs describe the fix.
 - [x] The Rust and Swift validation gate passes for this defect fix.
+- [ ] A local write that lands before reporting an uncertain result is inspected and receipted in the same publication job, without writing again.
+- [ ] A verified local result starts the configured iCloud mirror; Notion remains available through its separate approved preview.
+- [ ] Regression coverage and the Rust and Swift validation gate pass for this publication recovery fix.
 
 The `saved_writing_choices_do_not_lock_sources_before_selection` regression
 test covers the state and invalidation pair. On 2026-10-30, Rust formatting,

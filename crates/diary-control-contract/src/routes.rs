@@ -83,6 +83,12 @@ pub const ROUTES: &[RouteSpec] = &[
     },
     RouteSpec {
         method: "POST",
+        path: "/v1/workflows/{id}/readiness",
+        capability: Some("read"),
+        authenticated: true,
+    },
+    RouteSpec {
+        method: "POST",
         path: "/v1/workflows/{id}/notion-previews",
         capability: Some("workflow:write"),
         authenticated: true,

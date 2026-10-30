@@ -74,7 +74,7 @@ impl CommandService {
                 output: output.as_ref(),
                 day: &intent.day,
                 payload: &payload,
-                receipt_id: "local".into(),
+                receipt_id: format!("local-{}", intent.attempt_id),
             };
             let result = PublicationCoordinator::reconcile(
                 self.store.as_ref(),

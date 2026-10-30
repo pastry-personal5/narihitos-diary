@@ -52,6 +52,12 @@ fn versioned(receipt_id: &str, version: u32) -> String {
     format!("{}#v{version}", base_receipt_id(receipt_id))
 }
 
+/// As [`versioned`], for a Notion receipt: the attempt keeps it unique across
+/// the other days of the same month, which share the month page ID.
+fn versioned_for_attempt(receipt_id: &str, attempt_id: &str, version: u32) -> String {
+    format!("{}#{attempt_id}#v{version}", base_receipt_id(receipt_id))
+}
+
 fn base_receipt_id(receipt_id: &str) -> &str {
     receipt_id.split('#').next().unwrap_or(receipt_id)
 }
@@ -119,26 +125,26 @@ struct AmendNotionDestination<'a> {
 }
 
 impl Destination for AmendNotionDestination<'_> {
-    fn write(&mut self, _: &OperationIntent) -> WriteOutcome {
+    fn write(&mut self, intent: &OperationIntent) -> WriteOutcome {
         match self.output.replace_section(self.request, self.cancelled) {
             WriteOutcome::Verified {
                 receipt_id,
                 returned_ids,
             } => WriteOutcome::Verified {
-                receipt_id: versioned(&receipt_id, self.version),
+                receipt_id: versioned_for_attempt(&receipt_id, &intent.attempt_id, self.version),
                 returned_ids,
             },
             other => other,
         }
     }
 
-    fn inspect(&mut self, _: &OperationIntent) -> InspectionOutcome {
+    fn inspect(&mut self, intent: &OperationIntent) -> InspectionOutcome {
         let versioned = |outcome: InspectionOutcome| match outcome {
             InspectionOutcome::Matching {
                 receipt_id,
                 returned_ids,
             } => InspectionOutcome::Matching {
-                receipt_id: versioned(&receipt_id, self.version),
+                receipt_id: versioned_for_attempt(&receipt_id, &intent.attempt_id, self.version),
                 returned_ids,
             },
             other => other,

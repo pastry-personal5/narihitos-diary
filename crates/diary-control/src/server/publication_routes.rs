@@ -142,6 +142,84 @@ pub(super) async fn run_local_publication_job(
     }
 }
 
+/// Read-only: no workflow event is published and no revision changes.
+pub(super) async fn check_publish_readiness(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    headers: HeaderMap,
+) -> Result<Json<PublishReadinessDto>, ApiError> {
+    let day = day_from_id(&id)?;
+    let revision = workflow_precondition(&headers)?;
+    let service = state.0.config.commands.clone();
+    let tag_day = day.clone();
+    let outcome =
+        tokio::task::spawn_blocking(move || service.check_publish_readiness(&day, revision))
+            .await
+            .map_err(|_| ApiError::internal())?;
+    let report = match outcome {
+        Ok(report) => report,
+        Err(error) => {
+            log_debug(
+                &state,
+                DiagnosticEvent::ReadinessRefused {
+                    reason: match &error {
+                        CommandError::PreconditionFailed => "stale-revision",
+                        CommandError::Reconciling => "reconciling",
+                        CommandError::NotFound => "not-found",
+                        _ => "state-unavailable",
+                    },
+                },
+            );
+            return Err(ApiError::from(error));
+        }
+    };
+    for item in &report.destinations {
+        log_debug(
+            &state,
+            DiagnosticEvent::PublishReadiness {
+                destination: item.destination,
+                readiness: item.readiness.as_str(),
+                reason: item.reason,
+                next_step: item.next_step,
+                decided_by: item.decided_by,
+                duration_ms: item.duration_ms,
+            },
+        );
+    }
+    if let Some(workflow) = state
+        .0
+        .config
+        .diagnostics
+        .as_ref()
+        .and_then(|log| log.tag("workflow", tag_day.as_str().as_bytes()))
+    {
+        log_debug(
+            &state,
+            DiagnosticEvent::ReadinessCheck {
+                workflow,
+                revision: report.revision,
+                local_verified: report.local_verified,
+                notion_configured: report.notion_configured,
+                icloud_configured: report.icloud_configured,
+                duration_ms: report.duration_ms,
+            },
+        );
+    }
+    Ok(Json(PublishReadinessDto {
+        revision: report.revision,
+        destinations: report
+            .destinations
+            .iter()
+            .map(|item| DestinationReadinessDto {
+                destination: item.destination.to_owned(),
+                readiness: item.readiness.as_str().to_owned(),
+                reason: item.reason.to_owned(),
+                next_step: item.next_step.to_owned(),
+            })
+            .collect(),
+    }))
+}
+
 pub(super) async fn preview_notion_output(
     State(state): State<AppState>,
     Path(id): Path<String>,

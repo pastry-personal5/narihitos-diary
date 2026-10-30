@@ -6,6 +6,27 @@ This changelog records owner decisions and material plan changes for Phase 1.
 
 ## Entries
 
+- 2026-10-30 — P1-M13 Notion receipt collision fix — Notion reports the month
+  page as its receipt ID, and receipt IDs are primary keys, so the second diary
+  day published into the same month wrote to Notion but failed to save its
+  receipt (`notion-unavailable`), leaving the day `publishing` and reconciling
+  with an unresolved intent. Each Notion receipt now carries its attempt after
+  the month page ID (`<month>#<attempt>`; amendments `<month>#<attempt>#v<n>`),
+  so the text before the first `#` is still the month page ID. A day stuck this
+  way recovers on the next server start, when recovery re-inspects Notion and
+  saves the receipt. No schema change.
+- 2026-10-30 — P1-M19 planned and implemented — Publish could send a Notion
+  publish for a partial workflow whose Notion plan was never previewed and
+  approved, and the failure said only `precondition-failed`. Publish now directs
+  the person to Preview, the publish-time check names its failing binding, and a
+  new read-only `Check Notion and iCloud readiness` control explains each
+  destination. Added `POST /v1/workflows/{id}/readiness` and raised the contract
+  version to 6.
+- 2026-10-30 — P1-M13 publication recovery fix — A local file could be created
+  before its write reported unavailable, leaving local publication reconciling
+  and the iCloud mirror pending until restart. The publication job now reads
+  back an uncertain local write, records a matching receipt, and continues to
+  the mirror. Notion still needs its separate preview and approval.
 - 2026-10-30 — P1-M13 defect fix — A newly opened workflow with inherited
   writing settings carried `composition-choice-changed`; the TUI treated that
   `started` state as unknown and locked Sources. The stage mapping now opens

@@ -171,6 +171,110 @@ fn job_and_preparation_events_reject_outside_their_closed_vocabulary() {
 }
 
 #[test]
+fn publish_readiness_records_closed_tokens_and_rejects_free_text() {
+    let scratch = Scratch::new("publish-readiness");
+    let clock = Arc::new(FixedClock::new(1));
+    let uid = fs::metadata(scratch.path()).unwrap().uid();
+    let log = DiagnosticLog::open_with_min_level(
+        scratch.path().join("logs"),
+        uid,
+        clock,
+        DiagnosticLevel::Debug,
+    )
+    .unwrap()
+    .with_tag_key([7; 32]);
+    log.write(
+        DiagnosticLevel::Debug,
+        DiagnosticEvent::PublishReadiness {
+            destination: "icloud",
+            readiness: "conflict",
+            reason: "icloud-different-file-exists",
+            next_step: "resolve-icloud-file",
+            decided_by: "mirror-inspect",
+            duration_ms: 3,
+        },
+    )
+    .unwrap();
+    log.write(
+        DiagnosticLevel::Debug,
+        DiagnosticEvent::ReadinessCheck {
+            workflow: log.tag("workflow", b"2026-10-30").unwrap(),
+            revision: 23,
+            local_verified: true,
+            notion_configured: true,
+            icloud_configured: false,
+            duration_ms: 812,
+        },
+    )
+    .unwrap();
+    log.write(
+        DiagnosticLevel::Debug,
+        DiagnosticEvent::ReadinessRefused {
+            reason: "stale-revision",
+        },
+    )
+    .unwrap();
+    let text = fs::read_to_string(log.root().join(ACTIVE_NAME)).unwrap();
+    assert!(text.contains("component=publish event=readiness "));
+    assert!(text.contains(
+        "decided_by=mirror-inspect destination=icloud duration_ms=3 \
+         next_step=resolve-icloud-file readiness=conflict reason=icloud-different-file-exists"
+    ));
+    assert!(text.contains("component=publish event=readiness-check "));
+    assert!(text.contains(
+        "duration_ms=812 icloud_configured=0 local_verified=1 notion_configured=1 revision=23"
+    ));
+    assert!(text.contains("component=publish event=readiness-refused reason=stale-revision"));
+    assert!(
+        !text.contains("2026-10-30"),
+        "the day must only appear as a tag"
+    );
+    for (destination, readiness, reason, next_step, decided_by) in [
+        (
+            "/Users/someone/iCloud",
+            "ready",
+            "none",
+            "none",
+            "local-gate",
+        ),
+        ("notion", "maybe", "none", "none", "local-gate"),
+        (
+            "notion",
+            "not-ready",
+            "page abc123 not found",
+            "none",
+            "local-gate",
+        ),
+        ("notion", "not-ready", "none", "open the page", "local-gate"),
+        ("notion", "not-ready", "none", "none", "guessed"),
+    ] {
+        assert_eq!(
+            log.write(
+                DiagnosticLevel::Debug,
+                DiagnosticEvent::PublishReadiness {
+                    destination,
+                    readiness,
+                    reason,
+                    next_step,
+                    decided_by,
+                    duration_ms: 0,
+                },
+            ),
+            Err(DiagnosticError::InvalidRecord)
+        );
+    }
+    assert_eq!(
+        log.write(
+            DiagnosticLevel::Debug,
+            DiagnosticEvent::ReadinessRefused {
+                reason: "someone typed this",
+            },
+        ),
+        Err(DiagnosticError::InvalidRecord)
+    );
+}
+
+#[test]
 fn notion_preview_records_a_closed_reason_and_rejects_free_text() {
     let scratch = Scratch::new("notion-preview");
     let clock = Arc::new(FixedClock::new(1));
