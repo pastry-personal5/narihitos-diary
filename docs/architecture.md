@@ -71,6 +71,15 @@ core from another platform with different adapters. The input-language
 indicator is presentation state: its adapter lives in `diary-tui`, not in the
 server's connectors.
 
+The Phase 1 implementation groups workflow transitions under
+`diary-core/workflow`, command use cases under `diary-control/commands`, and
+HTTP transport under `diary-control/server`. The SQLite adapter separates
+schema, record codecs, workflow storage, and operation log; the Notion adapter
+separates projection, hierarchy, retry/transport, and output. The versioned
+Control API contract keeps route metadata and wire DTOs in separate modules.
+These are module boundaries within the crates above; the dependency direction
+is unchanged. See the [M18 ownership inventory](phase-1/milestone-18-clean-architecture-refactor-architecture.md#implemented-ownership-2026-10-30).
+
 ## Domain and application contracts
 
 The core owns `DiaryDay`, `WritingLanguage` (`en-US` or `ko-KR`), `WritingStyle`
@@ -702,6 +711,10 @@ Views render Ratatui widgets from ViewModel state. ViewModels hold screen focus,
 editor cursor and unsubmitted text, loading indicators, warnings, and the last
 server revision; they map key presses into typed API commands. The typed client
 handles HTTP, authentication, ETags, and SSE reconnection on bounded workers.
+`apps/nd` assembles and attaches this client. `diary-tui/session_runtime`
+owns the connected session's ordered worker results, local pending state, and
+input dispatch; `diary-tui/session` reduces stream outcomes, while
+`screen_body` and the view modules build display content.
 Server responses update ViewModels, and rendering never blocks on network,
 filesystem, or assistant work. Persisted drafts live on the server; the TUI may
 buffer unsubmitted keystrokes but does not become a second durable authority.

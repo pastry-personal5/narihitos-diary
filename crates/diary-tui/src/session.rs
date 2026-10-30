@@ -3,6 +3,59 @@
 
 use diary_control_contract::EventDto;
 
+use crate::events::{EventError, EventWorkerResult};
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct EventEffect {
+    pub action: SessionAction,
+    pub notice: Option<&'static str>,
+}
+
+/// Reduces an SSE worker result to connection authority and a safe notice.
+/// The caller performs canonical reloads; no diary state changes here.
+pub fn reduce_stream_result(
+    authority: &mut SessionAuthority,
+    result: EventWorkerResult,
+) -> EventEffect {
+    match result {
+        EventWorkerResult::Connected => EventEffect {
+            action: SessionAction::None,
+            notice: Some("Event stream connected"),
+        },
+        EventWorkerResult::Event(event) => EventEffect {
+            action: authority.observe_event(&event),
+            notice: None,
+        },
+        EventWorkerResult::Disconnected(error) => {
+            if matches!(error, EventError::Rejected | EventError::WrongContentType) {
+                return EventEffect {
+                    action: SessionAction::Reattach,
+                    notice: None,
+                };
+            }
+            let (cause, notice) = if error == EventError::DecodeFailed {
+                (
+                    RecoveryCause::DecodeFailure,
+                    "Event stream reset; reloading canonical state",
+                )
+            } else {
+                (
+                    RecoveryCause::TransportLoss,
+                    "Event stream reconnecting; actions are paused",
+                )
+            };
+            EventEffect {
+                action: authority.recover(None, None, cause),
+                notice: Some(notice),
+            }
+        }
+        EventWorkerResult::ResultOverflow => EventEffect {
+            action: authority.recover(None, None, RecoveryCause::ResultOverflow),
+            notice: Some("Event queue overflow; reloading canonical state"),
+        },
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum RecoveryCause {
     EventReset,

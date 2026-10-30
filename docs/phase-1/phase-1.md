@@ -297,6 +297,20 @@ Plan: [overview](milestone-17-assistant-settings-overview.md).
 Notes: A focused settings milestone before release qualification; P1-M10's
 Notion acceptance remains independent.
 
+### P1-M18: Clean architecture refactor
+
+Status: Done
+
+Goal: Refactor the Phase 1 code into cohesive modules with clear domain,
+application, adapter, transport, and presentation ownership.
+
+Plan: [overview](milestone-18-clean-architecture-refactor-overview.md),
+[architecture plan](milestone-18-clean-architecture-refactor-architecture.md).
+
+Notes: Completed before P1-M13 after P1-M10's implementation and synthetic
+gate were stable. The owner approved breaking compatibility and API changes;
+this refactor kept the wire contract, schema, and product behavior unchanged.
+
 ### P1-M13: Release qualification
 
 Status: Planned
@@ -308,5 +322,5 @@ Plan: [overview](milestone-13-release-qualification-overview.md),
 [architecture plan](milestone-13-release-qualification-architecture.md).
 
 Notes: The number follows P1-M12, which ran earlier; this milestone runs after
-P1-M11, P1-M14, P1-M15, P1-M16, and P1-M17. No exit gate requires a human run; real-IME and live-service limits
+P1-M11, P1-M14, P1-M15, P1-M16, P1-M17, and P1-M18. No exit gate requires a human run; real-IME and live-service limits
 are documented instead.

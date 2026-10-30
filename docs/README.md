@@ -40,6 +40,8 @@ This index lists the design and process docs, one line each. Read only the doc y
 | [phase-1/milestone-16-simple-sources-overview.md](phase-1/milestone-16-simple-sources-overview.md) | P1-M16 simple Sources stage scope and completion checklist. |
 | [phase-1/milestone-16-simple-sources-architecture.md](phase-1/milestone-16-simple-sources-architecture.md) | P1-M16 flat menu, Confirm Source List, shortcuts, hide, help overlay, discovery, and Work Status tip plan. |
 | [phase-1/milestone-17-assistant-settings-overview.md](phase-1/milestone-17-assistant-settings-overview.md) | P1-M17 assistant settings continuity and completion checklist. |
+| [phase-1/milestone-18-clean-architecture-refactor-overview.md](phase-1/milestone-18-clean-architecture-refactor-overview.md) | P1-M18 refactoring goal, scope, checklist, and acceptance evidence. |
+| [phase-1/milestone-18-clean-architecture-refactor-architecture.md](phase-1/milestone-18-clean-architecture-refactor-architecture.md) | P1-M18 module ownership, refactor sequence, and verification boundaries. |
 | [superpowers/specs/2026-10-30-icloud-output-design.md](superpowers/specs/2026-10-30-icloud-output-design.md) | iCloud Markdown mirror output design. |
 | [superpowers/plans/2026-10-30-icloud-output.md](superpowers/plans/2026-10-30-icloud-output.md) | iCloud mirror implementation plan. |
 | [phase-1/milestone-13-release-qualification-overview.md](phase-1/milestone-13-release-qualification-overview.md) | P1-M13 automated exit-criteria evidence matrix and qualification checklist. |

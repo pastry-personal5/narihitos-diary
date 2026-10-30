@@ -44,7 +44,7 @@ Each decision is recorded in full in the doc that owns its topic; this is the in
   [docs/product-behavior.md](docs/product-behavior.md).
 - **Terminal UX:** canonical workflow stages and layout, keybindings, the Korean-IME input constraint, date display, and the target terminal. P1-M15 adds a right Utility Sidebar (Diary Day and Assistant Widgets); P1-M16 adds source-list letter shortcuts only while `IME: EN`, the one exception to no bare-letter hotkeys. P1-M17 keeps language and style across new workflows in one TUI session and restores the persisted assistant choice after restart. See [docs/ux-tui.md](docs/ux-tui.md).
 - **License:** Apache-2.0 for all project code.
-- **Process:** numbered phases contain numbered milestones; milestone numbering restarts per phase. IDs use `P1-M2`. See [docs/development-process.md](docs/development-process.md).
+- **Process:** numbered phases contain numbered milestones; milestone numbering restarts per phase. IDs use `P1-M2`. P1-M18 may break compatibility and change APIs during its refactor, with no numeric line or complexity limit; avoid very large files by responsibility. See [docs/development-process.md](docs/development-process.md) and [P1-M18](docs/phase-1/milestone-18-clean-architecture-refactor-overview.md).
 
 ## Undecided — ask before inventing
 

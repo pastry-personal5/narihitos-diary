@@ -6,6 +6,19 @@ This changelog records owner decisions and material plan changes for Phase 1.
 
 ## Entries
 
+- 2026-10-30 — P1-M18 implemented — Split the binary's connected TUI session,
+  Control API handlers and commands, workflow transitions, SQLite storage,
+  Notion projection/transport/output, and contract route/DTO modules by
+  responsibility. Moved saved assistant selection at workflow start into the
+  command service. Wire contract, SQLite schema, and Notion payloads are
+  unchanged. Rust and Swift gates passed; the remaining large TUI dispatcher
+  and its rationale are recorded in the M18 architecture plan.
+- 2026-10-30 — P1-M18 planned — Owner requested a clean-code and
+  clean-architecture refactor, permitted breaking compatibility and free API
+  changes, and rejected numeric line or complexity limits while asking to
+  avoid very large files. M18 is planned before release qualification; it
+  keeps the existing privacy and durable-data rules and uses responsibility
+  boundaries rather than a file-length target.
 - 2026-10-30 — P1-M17 implemented — Owner requested TUI session continuity
   for writing settings and persistent restoration of assistant selection.
   New workflows inherit the current session language and style and the saved
