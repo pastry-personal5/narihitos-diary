@@ -768,12 +768,9 @@ impl CommandService {
                 .as_ref()
                 .ok_or(CommandError::NotionUnavailable)?
                 .preflight_replace(&request)
-                .map_err(|_| CommandError::NotionUnavailable)?;
-            if fresh.preflight.status != NotionPreflightStatus::Ready
-                || fresh.preflight.observed_state_digest != target.inspected_state_digest
-                || fresh.preflight.payload_digest != target.payload_digest
-            {
-                return Err(CommandError::PreconditionFailed);
+                .map_err(|reason| notion_preflight_error(&reason))?;
+            if let Some(reason) = notion_binding_refusal(&fresh.preflight, target, false) {
+                return Err(CommandError::NotionBindingChanged(reason));
             }
             workflow
                 .approve_blocked_retry(expected_revision, "notion", digest, self.clock.now())
@@ -837,12 +834,9 @@ impl CommandService {
                 .as_ref()
                 .ok_or(CommandError::NotionUnavailable)?
                 .preflight_replace(&request)
-                .map_err(|_| CommandError::NotionUnavailable)?;
-            if fresh.preflight.status != NotionPreflightStatus::Ready
-                || fresh.preflight.observed_state_digest != notion.inspected_state_digest
-                || fresh.preflight.payload_digest != notion.payload_digest
-            {
-                return Err(CommandError::PreconditionFailed);
+                .map_err(|reason| notion_preflight_error(&reason))?;
+            if let Some(reason) = notion_binding_refusal(&fresh.preflight, notion, false) {
+                return Err(CommandError::NotionBindingChanged(reason));
             }
         }
         workflow
@@ -1001,14 +995,11 @@ impl CommandService {
             .as_ref()
             .ok_or(CommandError::NotionUnavailable)?
             .preflight_replace(&request)
-            .map_err(|_| CommandError::NotionUnavailable)?;
+            .map_err(|reason| notion_preflight_error(&reason))?;
         // After a local success the owned section is unchanged until our own
         // replacement lands, so the bound state digest must still match.
-        if fresh.preflight.status != NotionPreflightStatus::Ready
-            || fresh.preflight.payload_digest != target.payload_digest
-            || fresh.preflight.observed_state_digest != target.inspected_state_digest
-        {
-            return Err(CommandError::PreconditionFailed);
+        if let Some(reason) = notion_binding_refusal(&fresh.preflight, target, false) {
+            return Err(CommandError::NotionBindingChanged(reason));
         }
         workflow
             .begin_pending_retry(

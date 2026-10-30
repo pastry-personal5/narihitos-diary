@@ -1418,13 +1418,9 @@ impl CommandService {
             .ok_or(CommandError::Workflow(WorkflowError::MissingPlan))?;
         let preflight = notion
             .preflight(day, &workflow.entry().text)
-            .map_err(|_| CommandError::NotionUnavailable)?;
-        if preflight.status != NotionPreflightStatus::Ready
-            || preflight.target_identity != target.target_identity
-            || preflight.payload_digest != target.payload_digest
-            || preflight.observed_state_digest != target.inspected_state_digest
-        {
-            return Err(CommandError::PreconditionFailed);
+            .map_err(|reason| notion_preflight_error(&reason))?;
+        if let Some(reason) = notion_binding_refusal(&preflight, target, true) {
+            return Err(CommandError::NotionBindingChanged(reason));
         }
         workflow
             .approve_blocked_retry(expected_revision, "notion", digest, self.clock.now())
@@ -2288,6 +2284,47 @@ pub enum CommandError {
     DeleteNotConfirmed,
     LocalOutput(LocalOutputError),
     NotionUnavailable,
+    /// The Notion preflight no longer matches the approved plan. The wire code
+    /// stays `precondition-failed`; the token names the check for the log.
+    NotionBindingChanged(&'static str),
+    /// The Notion preflight could not run. The wire code stays
+    /// `notion-unavailable`; the token is the closed `notion-*` reason.
+    NotionUnavailableAt(&'static str),
+}
+
+/// Maps a connector preflight failure onto a closed token so the diagnostic
+/// log can name it; anything unlisted collapses to `notion-unavailable`.
+fn notion_preflight_error(reason: &str) -> CommandError {
+    let token = crate::diagnostics::NOTION_PREVIEW_REASONS
+        .iter()
+        .copied()
+        .find(|known| *known == reason)
+        .unwrap_or("notion-unavailable");
+    CommandError::NotionUnavailableAt(token)
+}
+
+/// Names the first way a fresh Notion preflight departs from the approved
+/// target, or `None` while it still matches. `check_target` is false for the
+/// replace preflight, which has no target identity in the plan to compare.
+fn notion_binding_refusal(
+    preflight: &diary_core::NotionPreflight,
+    target: &DestinationPlan,
+    check_target: bool,
+) -> Option<&'static str> {
+    match preflight.status {
+        NotionPreflightStatus::Ready => {}
+        NotionPreflightStatus::Blocked => return Some("notion-preflight-blocked"),
+        NotionPreflightStatus::Conflict => return Some("notion-preflight-conflict"),
+    }
+    if check_target && preflight.target_identity != target.target_identity {
+        Some("notion-target-changed")
+    } else if preflight.payload_digest != target.payload_digest {
+        Some("notion-payload-changed")
+    } else if preflight.observed_state_digest != target.inspected_state_digest {
+        Some("notion-state-changed")
+    } else {
+        None
+    }
 }
 
 /// Buckets a SQLite failure message into a closed token so the diagnostic log
@@ -2331,6 +2368,7 @@ impl CommandError {
             Self::Store(StoreError::Corrupt(_)) => "state-corrupt",
             Self::Store(StoreError::InvalidRecord(_)) => "state-invalid-record",
             Self::Store(StoreError::Unavailable(detail)) => unavailable_diagnostic_code(detail),
+            Self::NotionBindingChanged(reason) | Self::NotionUnavailableAt(reason) => reason,
             other => other.code(),
         }
     }
@@ -2389,7 +2427,8 @@ impl CommandError {
             Self::DeleteNotConfirmed => "source-delete-not-confirmed",
             Self::LocalOutput(LocalOutputError::UnsafePath) => "local-output-unsafe-path",
             Self::LocalOutput(LocalOutputError::Unavailable) => "local-output-unavailable",
-            Self::NotionUnavailable => "notion-unavailable",
+            Self::NotionUnavailable | Self::NotionUnavailableAt(_) => "notion-unavailable",
+            Self::NotionBindingChanged(_) => "precondition-failed",
             Self::Store(_) => "state-unavailable",
         }
     }
@@ -2465,6 +2504,96 @@ mod tests {
         assert_eq!(
             CommandError::NotFound.diagnostic_code(),
             CommandError::NotFound.code()
+        );
+    }
+
+    #[test]
+    fn notion_refusals_keep_their_wire_codes_but_name_the_failed_check() {
+        let changed = CommandError::NotionBindingChanged("notion-state-changed");
+        assert_eq!(changed.code(), "precondition-failed");
+        assert_eq!(changed.diagnostic_code(), "notion-state-changed");
+        let unavailable = notion_preflight_error("notion-permission-denied");
+        assert_eq!(unavailable.code(), "notion-unavailable");
+        assert_eq!(unavailable.diagnostic_code(), "notion-permission-denied");
+        // Free text from a connector never reaches the log.
+        assert_eq!(
+            notion_preflight_error("page 1234 exploded").diagnostic_code(),
+            "notion-unavailable"
+        );
+    }
+
+    #[test]
+    fn notion_binding_refusal_names_the_first_departure() {
+        let digest = |text: &str| Digest::of_bytes(text.as_bytes());
+        let target = DestinationPlan::new(
+            DestinationKind::Remote,
+            "notion",
+            "root",
+            digest("payload"),
+            digest("payload"),
+            digest("state"),
+        )
+        .unwrap();
+        let preflight =
+            |status, identity: &str, payload: &str, state: &str| diary_core::NotionPreflight {
+                target_identity: identity.to_owned(),
+                root_label: String::new(),
+                year_title: String::new(),
+                month_title: String::new(),
+                year_exists: true,
+                month_exists: true,
+                renderer_version: 1,
+                api_version: String::new(),
+                payload_digest: digest(payload),
+                observed_state_digest: digest(state),
+                blocks: Vec::new(),
+                status,
+                reason: None,
+            };
+        let ready = NotionPreflightStatus::Ready;
+        assert_eq!(
+            notion_binding_refusal(&preflight(ready, "root", "payload", "state"), &target, true),
+            None
+        );
+        assert_eq!(
+            notion_binding_refusal(
+                &preflight(ready, "other", "payload", "state"),
+                &target,
+                true
+            ),
+            Some("notion-target-changed")
+        );
+        assert_eq!(
+            notion_binding_refusal(
+                &preflight(ready, "other", "payload", "state"),
+                &target,
+                false
+            ),
+            None
+        );
+        assert_eq!(
+            notion_binding_refusal(&preflight(ready, "root", "edited", "state"), &target, true),
+            Some("notion-payload-changed")
+        );
+        assert_eq!(
+            notion_binding_refusal(&preflight(ready, "root", "payload", "moved"), &target, true),
+            Some("notion-state-changed")
+        );
+        assert_eq!(
+            notion_binding_refusal(
+                &preflight(NotionPreflightStatus::Conflict, "root", "payload", "state"),
+                &target,
+                true
+            ),
+            Some("notion-preflight-conflict")
+        );
+        assert_eq!(
+            notion_binding_refusal(
+                &preflight(NotionPreflightStatus::Blocked, "root", "payload", "state"),
+                &target,
+                true
+            ),
+            Some("notion-preflight-blocked")
         );
     }
 

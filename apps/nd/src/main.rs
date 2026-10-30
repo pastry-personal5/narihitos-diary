@@ -2228,7 +2228,11 @@ fn run_connected_session(
                     },
                     ResourceRow {
                         label: "Notion".to_owned(),
-                        state: "blocked".to_owned(),
+                        state: current_workflow
+                            .as_ref()
+                            .and_then(|w| w.notion_status.as_deref())
+                            .unwrap_or("blocked")
+                            .to_owned(),
                         indent: 0,
                     },
                 ],

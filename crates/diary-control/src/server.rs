@@ -3455,6 +3455,7 @@ impl From<CommandError> for ApiError {
             CommandError::NotFound => StatusCode::NOT_FOUND,
             CommandError::PreconditionRequired => StatusCode::PRECONDITION_REQUIRED,
             CommandError::PreconditionFailed
+            | CommandError::NotionBindingChanged(_)
             | CommandError::Store(
                 diary_core::StoreError::StaleRevision | diary_core::StoreError::StaleBuffer,
             ) => StatusCode::PRECONDITION_FAILED,

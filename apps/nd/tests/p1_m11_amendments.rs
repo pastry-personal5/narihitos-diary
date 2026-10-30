@@ -571,7 +571,7 @@ fn a_notion_failure_after_the_local_replace_leaves_partial_and_retries_notion_al
         f.service
             .retry_amendment_notion(&f.day, partial.revision(), &AtomicBool::new(false))
             .unwrap_err(),
-        CommandError::PreconditionFailed
+        CommandError::NotionBindingChanged("notion-state-changed")
     );
     f.notion.set(|inner| inner.owned_state = b"owned");
     let local_before = fs::read_to_string(f.file()).unwrap();
