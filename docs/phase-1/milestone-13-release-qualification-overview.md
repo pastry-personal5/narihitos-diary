@@ -59,6 +59,18 @@ human run.
   run recording results and toolchain versions.
 - Defect fixes needed to satisfy existing Phase 1 scope.
 
+## Current defect checklist
+
+- [x] A synthetic `started` or `discovered` workflow with a saved writing-choice invalidation still opens Sources; unknown invalidations remain locked.
+- [x] The stage-mapping regression test passes and affected UX and changelog docs describe the fix.
+- [x] The Rust and Swift validation gate passes for this defect fix.
+
+The `saved_writing_choices_do_not_lock_sources_before_selection` regression
+test covers the state and invalidation pair. On 2026-10-30, Rust formatting,
+Clippy with warnings denied, all-feature Rust tests, Swift build, and Swift
+tests (13 passed) completed successfully. This defect checklist does not
+complete the broader release-qualification evidence matrix below.
+
 ## Out of scope
 
 - Any checklist item that requires a human to run a terminal, an input method,

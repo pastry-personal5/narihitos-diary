@@ -6,6 +6,10 @@ This changelog records owner decisions and material plan changes for Phase 1.
 
 ## Entries
 
+- 2026-10-30 — P1-M13 defect fix — A newly opened workflow with inherited
+  writing settings carried `composition-choice-changed`; the TUI treated that
+  `started` state as unknown and locked Sources. The stage mapping now opens
+  Sources for this valid combination, with a regression test.
 - 2026-10-30 — P1-M18 implemented — Split the binary's connected TUI session,
   Control API handlers and commands, workflow transitions, SQLite storage,
   Notion projection/transport/output, and contract route/DTO modules by

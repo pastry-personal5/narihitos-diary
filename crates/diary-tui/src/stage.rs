@@ -124,10 +124,17 @@ pub fn map_workflow(
     let reason = invalidation_reason(workflow.invalidation_code.as_deref());
 
     match workflow.state.as_str() {
-        "started" | "discovered" if matches!(reason, InvalidationReason::None) => StageModel {
-            progress: [Done, Available, Locked, Locked, Locked, Locked],
-            default_current: Stage::Sources,
-        },
+        "started" | "discovered"
+            if matches!(
+                reason,
+                InvalidationReason::None | InvalidationReason::CompositionChoiceChanged
+            ) =>
+        {
+            StageModel {
+                progress: [Done, Available, Locked, Locked, Locked, Locked],
+                default_current: Stage::Sources,
+            }
+        }
         "discovered"
             if matches!(
                 reason,
@@ -239,6 +246,21 @@ mod tests {
         assert_eq!(model.default_current, Stage::Start);
         assert_eq!(model.progress_of(Stage::Start), Progress::Available);
         assert_eq!(model.progress_of(Stage::Sources), Progress::Locked);
+    }
+
+    #[test]
+    fn saved_writing_choices_do_not_lock_sources_before_selection() {
+        for state in ["started", "discovered"] {
+            let model = map_workflow(
+                Some(&workflow(state, Some("composition-choice-changed"))),
+                false,
+            );
+            assert_eq!(model.default_current, Stage::Sources);
+            assert_eq!(model.progress_of(Stage::Sources), Progress::Available);
+            assert_eq!(model.progress_of(Stage::Compose), Progress::Locked);
+        }
+        let unknown = map_workflow(Some(&workflow("started", Some("unknown-change"))), false);
+        assert_eq!(unknown.progress_of(Stage::Sources), Progress::Locked);
     }
 
     #[test]

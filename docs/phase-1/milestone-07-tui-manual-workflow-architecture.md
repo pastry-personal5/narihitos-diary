@@ -62,7 +62,7 @@ but never synthesize or mutate server workflow state.
 | Server condition | Start | Sources | Compose | Review | Preview | Publish | Default current |
 |---|---|---|---|---|---|---|---|
 | No attached workflow | available | locked | locked | locked | locked | locked | Start |
-| `Started`, or initial `Discovered` | done | available | locked | locked | locked | locked | Sources |
+| `Started`, or initial `Discovered` (including a `composition-choice-changed` code from writing settings) | done | available | locked | locked | locked | locked | Sources |
 | `Discovered` after `selection-changed`, `source-changed`, or `freshness-unverifiable` | done | stale | stale when a recovered entry buffer exists, otherwise locked | locked | locked | locked | Sources |
 | `SourcesConfirmed` | done | done | available | locked | locked | locked | Compose |
 | `Composing` | done | done | available | available | locked | locked | Compose |
