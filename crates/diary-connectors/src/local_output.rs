@@ -11,6 +11,9 @@ pub use diary_core::{LocalOutputError as LocalError, LocalOutputState as LocalSt
 #[derive(Clone, Debug)]
 pub struct LocalOutput {
     root: PathBuf,
+    /// Canonical `~/Library/Mobile Documents` for an iCloud mirror root,
+    /// re-checked before every inspect and write.
+    icloud_base: Option<PathBuf>,
 }
 
 impl LocalOutput {
@@ -22,7 +25,58 @@ impl LocalOutput {
         {
             return Err(LocalError::UnsafePath);
         }
-        Ok(Self { root })
+        Ok(Self {
+            root,
+            icloud_base: None,
+        })
+    }
+
+    /// An output whose root must stay under `home/Library/Mobile Documents`.
+    /// The root itself may not exist yet, but it must exist when used.
+    pub fn new_icloud(root: PathBuf, home: &Path) -> Result<Self, LocalError> {
+        let mut output = Self::new(root)?;
+        let base = fs::canonicalize(home.join("Library").join("Mobile Documents"))
+            .map_err(|_| LocalError::UnsafePath)?;
+        output.icloud_base = Some(base);
+        output.check_icloud_root()?;
+        Ok(output)
+    }
+
+    fn check_icloud_root(&self) -> Result<(), LocalError> {
+        let Some(base) = &self.icloud_base else {
+            return Ok(());
+        };
+        let existing = self
+            .root
+            .ancestors()
+            .find(|path| fs::symlink_metadata(path).is_ok())
+            .ok_or(LocalError::UnsafePath)?;
+        let canonical = fs::canonicalize(existing).map_err(|_| LocalError::Unavailable)?;
+        if !canonical.starts_with(base) {
+            return Err(LocalError::UnsafePath);
+        }
+        Ok(())
+    }
+
+    fn check_mirror_ready(&self) -> Result<(), LocalError> {
+        if self.icloud_base.is_none() {
+            return Ok(());
+        }
+        self.check_icloud_root()?;
+        match fs::metadata(&self.root) {
+            Ok(metadata) if metadata.is_dir() => Ok(()),
+            _ => Err(LocalError::Unavailable),
+        }
+    }
+
+    fn has_icloud_placeholder(target: &Path) -> bool {
+        let (Some(parent), Some(name)) = (target.parent(), target.file_name()) else {
+            return false;
+        };
+        let mut placeholder = std::ffi::OsString::from(".");
+        placeholder.push(name);
+        placeholder.push(".icloud");
+        fs::symlink_metadata(parent.join(placeholder)).is_ok()
     }
 
     pub fn target(&self, day: &DiaryDay) -> PathBuf {
@@ -38,7 +92,11 @@ impl LocalOutput {
 
     pub fn inspect(&self, day: &DiaryDay, payload: &str) -> Result<LocalState, LocalError> {
         let target = self.target(day);
+        self.check_mirror_ready()?;
         self.validate_ancestors(&target)?;
+        if Self::has_icloud_placeholder(&target) {
+            return Err(LocalError::Unavailable);
+        }
         match fs::symlink_metadata(&target) {
             Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(LocalState::Absent),
             Err(_) => Err(LocalError::Unavailable),
@@ -84,6 +142,7 @@ impl LocalOutput {
             .create(parent)
             .map_err(|_| LocalError::Unavailable)?;
         self.validate_ancestors(&target)?;
+        self.check_mirror_ready()?;
         let mut temp = None;
         for attempt in 0..32 {
             let name = format!(".nd-{}-{}-{attempt}.tmp", std::process::id(), day);
@@ -238,5 +297,93 @@ mod tests {
             final_text == "second"
         );
         fs::remove_dir_all(root).unwrap();
+    }
+
+    fn icloud_home(name: &str) -> (PathBuf, PathBuf) {
+        let home = scratch(name);
+        let root = home
+            .join("Library")
+            .join("Mobile Documents")
+            .join("com~apple~CloudDocs")
+            .join("entries");
+        fs::create_dir_all(&root).unwrap();
+        (home, root)
+    }
+
+    #[test]
+    fn new_icloud_accepts_root_under_mobile_documents() {
+        let (home, root) = icloud_home("icloud-ok");
+        let day = DiaryDay::parse("2026-10-30").unwrap();
+        let output = LocalOutput::new_icloud(root, &home).unwrap();
+        assert_eq!(output.write(&day, "entry"), Ok(LocalState::Identical));
+        fs::remove_dir_all(home).unwrap();
+    }
+
+    #[test]
+    fn new_icloud_rejects_root_outside_mobile_documents() {
+        let (home, _) = icloud_home("icloud-outside");
+        let outside = home.join("Documents").join("entries");
+        fs::create_dir_all(&outside).unwrap();
+        assert!(matches!(
+            LocalOutput::new_icloud(outside, &home),
+            Err(LocalError::UnsafePath)
+        ));
+        fs::remove_dir_all(home).unwrap();
+    }
+
+    #[test]
+    fn new_icloud_rejects_parent_dir_component() {
+        let (home, root) = icloud_home("icloud-dotdot");
+        let sneaky = root
+            .join("..")
+            .join("..")
+            .join("..")
+            .join("..")
+            .join("Documents");
+        assert!(matches!(
+            LocalOutput::new_icloud(sneaky, &home),
+            Err(LocalError::UnsafePath)
+        ));
+        fs::remove_dir_all(home).unwrap();
+    }
+
+    #[test]
+    fn new_icloud_rejects_symlink_escaping_mobile_documents() {
+        let (home, root) = icloud_home("icloud-symlink");
+        let elsewhere = home.join("Elsewhere");
+        fs::create_dir_all(&elsewhere).unwrap();
+        let link = root.join("link");
+        symlink(&elsewhere, &link).unwrap();
+        assert!(matches!(
+            LocalOutput::new_icloud(link.join("entries"), &home),
+            Err(LocalError::UnsafePath)
+        ));
+        fs::remove_dir_all(home).unwrap();
+    }
+
+    #[test]
+    fn icloud_root_that_vanishes_is_unavailable_and_not_recreated() {
+        let (home, root) = icloud_home("icloud-missing");
+        let day = DiaryDay::parse("2026-10-30").unwrap();
+        let output = LocalOutput::new_icloud(root.clone(), &home).unwrap();
+        fs::remove_dir_all(&root).unwrap();
+        assert_eq!(output.inspect(&day, "entry"), Err(LocalError::Unavailable));
+        assert_eq!(output.write(&day, "entry"), Err(LocalError::Unavailable));
+        assert!(!root.exists());
+        fs::remove_dir_all(home).unwrap();
+    }
+
+    #[test]
+    fn icloud_placeholder_makes_inspect_and_write_unavailable() {
+        let (home, root) = icloud_home("icloud-placeholder");
+        let day = DiaryDay::parse("2026-10-30").unwrap();
+        let output = LocalOutput::new_icloud(root, &home).unwrap();
+        let target = output.target(&day);
+        fs::create_dir_all(target.parent().unwrap()).unwrap();
+        fs::write(target.parent().unwrap().join(".2026-10-30.md.icloud"), "").unwrap();
+        assert_eq!(output.inspect(&day, "entry"), Err(LocalError::Unavailable));
+        assert_eq!(output.write(&day, "entry"), Err(LocalError::Unavailable));
+        assert!(!target.exists());
+        fs::remove_dir_all(home).unwrap();
     }
 }

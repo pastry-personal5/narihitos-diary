@@ -48,6 +48,7 @@ pub struct LifecycleConfig {
     pub port_fallback_count: u16,
     pub ayumi_directory_name: String,
     pub entries_root: PathBuf,
+    pub icloud_entries_root: Option<PathBuf>,
     pub notion_configured: bool,
     pub codex_profiles: Vec<CodexProfileConfig>,
     pub expected_uid: u32,
@@ -79,6 +80,9 @@ impl LifecycleConfig {
             .unwrap_or_else(|| home.join("Library/Application Support/narihitos-diary"));
         let runtime_dir = application_support.join("runtime");
         let entries_root = resolve_entries_root(&launch_root, &home, parsed.entries_root);
+        let icloud_entries_root = parsed
+            .icloud_entries_root
+            .map(|configured| resolve_entries_root(&launch_root, &home, configured));
         Ok(Self {
             launch_root: launch_root.clone(),
             config_path,
@@ -89,6 +93,7 @@ impl LifecycleConfig {
             port_fallback_count: parsed.port_fallback_count,
             ayumi_directory_name: parsed.ayumi_directory_name,
             entries_root,
+            icloud_entries_root,
             notion_configured: parsed.notion_configured,
             codex_profiles: parsed.codex_profiles,
             expected_uid,
@@ -513,6 +518,7 @@ struct ParsedConfig {
     notion: Option<NotionRuntimeConfig>,
     ayumi_directory_name: String,
     entries_root: PathBuf,
+    icloud_entries_root: Option<PathBuf>,
     codex_profiles: Vec<CodexProfileConfig>,
 }
 
@@ -523,6 +529,7 @@ fn parse_config(raw: &str) -> Result<ParsedConfig, LifecycleError> {
         notion: None,
         ayumi_directory_name: String::new(),
         entries_root: PathBuf::new(),
+        icloud_entries_root: None,
         codex_profiles: Vec::new(),
     };
     let mut section = "";
@@ -530,6 +537,7 @@ fn parse_config(raw: &str) -> Result<ParsedConfig, LifecycleError> {
     let mut saw_fallback = false;
     let mut saw_sources = false;
     let mut saw_entries_root = false;
+    let mut saw_icloud_entries_root = false;
     let mut saw_notion_token = false;
     let mut saw_notion_root = false;
     let mut saw_codex_profiles = false;
@@ -614,6 +622,13 @@ fn parse_config(raw: &str) -> Result<ParsedConfig, LifecycleError> {
                 }
                 parsed.entries_root = PathBuf::from(value);
                 saw_entries_root = true;
+            }
+            ("paths", "icloud_entries_root") => {
+                if saw_icloud_entries_root || value.is_empty() {
+                    return Err(LifecycleError::InvalidConfig);
+                }
+                parsed.icloud_entries_root = Some(PathBuf::from(value));
+                saw_icloud_entries_root = true;
             }
             ("notion", "token") => {
                 if saw_notion_token {
@@ -907,6 +922,42 @@ mod tests {
         assert_eq!(
             resolve_entries_root(launch_root, home, PathBuf::from("entries")),
             launch_root.join("entries")
+        );
+    }
+
+    #[test]
+    fn parses_optional_icloud_entries_root() {
+        let parsed = parse_config(
+            "sources:\n  ayumi_directory_name: Ayumi\npaths:\n  entries_root: \"entries\"\n  icloud_entries_root: \"~/Library/Mobile Documents/com~apple~CloudDocs/d\"\n",
+        )
+        .unwrap();
+        let home = Path::new("/Users/diary-owner");
+        let resolved = resolve_entries_root(
+            Path::new("/workspace"),
+            home,
+            parsed.icloud_entries_root.unwrap(),
+        );
+        assert_eq!(
+            resolved,
+            home.join("Library/Mobile Documents/com~apple~CloudDocs/d")
+        );
+    }
+
+    #[test]
+    fn absent_icloud_root_is_none() {
+        let parsed =
+            parse_config("sources:\n  ayumi_directory_name: Ayumi\npaths:\n  entries_root: x\n")
+                .unwrap();
+        assert!(parsed.icloud_entries_root.is_none());
+    }
+
+    #[test]
+    fn duplicate_icloud_root_is_invalid() {
+        assert!(
+            parse_config(
+                "sources:\n  ayumi_directory_name: Ayumi\npaths:\n  icloud_entries_root: a\n  icloud_entries_root: b\n"
+            )
+            .is_err()
         );
     }
 
@@ -1276,6 +1327,7 @@ mod tests {
             port_fallback_count: 0,
             ayumi_directory_name: "Synthetic".to_owned(),
             entries_root: scratch.path().join("entries"),
+            icloud_entries_root: None,
             notion_configured: false,
             codex_profiles: Vec::new(),
             expected_uid: uid,
