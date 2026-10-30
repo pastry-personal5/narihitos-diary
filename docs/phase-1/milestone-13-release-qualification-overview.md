@@ -43,10 +43,10 @@ human run.
   retry).
 - Terminal tests of startup, restoration, multiline English and Korean input,
   display width, 2-Set mapping, the IME-gated source-list shortcuts, and IME
-  status through a fake input-source notifier. They render through
-  ratatui's in-memory test backend with scripted crossterm events. A real pty
-  harness needs a new dev-dependency and is not assumed; see the architecture
-  plan.
+  status through a fake input-source notifier. Real-binary tests run `nd`
+  under a pseudo-terminal (`portable-pty`, `vt100`; owner-approved dev-only
+  dependencies); fine-grained cases render through ratatui's in-memory backend
+  with scripted crossterm events. See the architecture plan.
 - A fake Notion HTTP server modelling pagination, block ordering, rate limits
   and `Retry-After`, ambiguous writes, and trash, and a temp-directory iCloud
   simulation including cloud-only placeholders.
@@ -63,7 +63,8 @@ human run.
 
 - Any checklist item that requires a human to run a terminal, an input method,
   or a live Notion or iCloud environment.
-- New product behavior, new dependencies, MCP, remote access, additional
+- New product behavior, new dependencies beyond the approved `portable-pty` and
+  `vt100` dev-dependencies, MCP, remote access, additional
   connectors, or iOS.
 - Live model calls or private diary prose in tests. Tests never read the
   Application Support directory, its control token, or `diagnostic-tag-key`;
@@ -106,9 +107,8 @@ Shipped Phase 1 scope that no exit criterion above states.
   fake notifier. A human spot check is welcome but does not gate completion.
 - Live Notion and live iCloud behavior is covered by fakes and by the P1-M10
   disposable-hierarchy evidence where it exists. The docs state this plainly.
-- Terminal tests use an in-memory backend, so raw-mode setup, resize signals,
-  and terminal-emulator rendering are covered only by existing unit tests and
-  a documented manual check.
+- Pty tests use an emulated screen (`vt100`), not a real terminal application,
+  so terminal-emulator-specific rendering is not covered.
 
 ## Completion checklist
 
@@ -127,8 +127,8 @@ Shipped Phase 1 scope that no exit criterion above states.
 - [ ] The standard Rust and Swift gate passes from a clean checkout, and the
   dated results and supported toolchain versions (`rustc`, `cargo`, `swift`,
   macOS) are recorded here.
-- [ ] No new dependency, state-directory read, or live service call was
-  introduced (`git diff` of `Cargo.toml` and `Cargo.lock` is empty).
+- [ ] No dependency beyond `portable-pty` and `vt100` (dev-only), no
+  state-directory read, and no live service call was introduced.
 
 ## Gate record
 

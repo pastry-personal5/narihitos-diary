@@ -23,14 +23,17 @@ terminal boundaries using only automated, synthetic fixtures.
 - Packaging, setup, troubleshooting docs, and the evidence matrix. Troubleshooting
   goes in `user-guide-tui.md` or a new indexed doc, not `README.md`.
 
-## Terminal test approach (decision needed)
+## Terminal test approach (decided)
 
-No pty or terminal-emulator crate is a dependency today, and adding one
-conflicts with "no new dependencies" in `AGENTS.md`. Default plan: in-memory
-backend plus scripted events, which covers layout, width, multiline editing,
-2-Set mapping, and IME gating deterministically. If the owner approves a
-dev-dependency for a real pty harness, add it as a separate, reviewed change
-first; otherwise the "Known limits" entry stands.
+The owner approved two `apps/nd` dev-dependencies on 2026-10-30:
+`portable-pty` (spawn the real `nd` binary under a pseudo-terminal) and
+`vt100` (parse its output into a screen), both MIT-licensed and pinned in the
+workspace. They are test-only and never ship in the binary. Use them for
+startup, restoration, raw-mode entry and exit, resize, and the real byte stream
+for wide Korean text. Keep the in-memory ratatui backend with scripted events
+for fine-grained layout, editing, 2-Set mapping, and IME-gating cases, which
+are faster and deterministic. Pty tests wait on screen content with a bounded
+poll, never fixed sleeps, and always kill the child on failure.
 
 ## Approach and sequence
 

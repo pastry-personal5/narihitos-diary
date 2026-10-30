@@ -28,6 +28,7 @@ diary-tui = { version = "0.1.0", path = "crates/diary-tui", default-features = f
 fs2 = { version = "=0.4.3", default-features = false }
 futures-core = { version = "=0.3.34", default-features = false }
 getrandom = { version = "=0.3.4", default-features = false, features = ["std"] }
+portable-pty = { version = "=0.9.0", default-features = false }
 pulldown-cmark = { version = "=0.13.5", default-features = false }
 ratatui = { version = "=0.30.2", default-features = false, features = ["crossterm_0_29"] }
 ratatui-textarea = { version = "=0.9.3", default-features = false }
@@ -37,3 +38,4 @@ serde_json = { version = "=1.0.151", default-features = false, features = ["std"
 subtle = { version = "=2.6.1", default-features = false, features = ["std"] }
 tokio = { version = "=1.53.1", default-features = false, features = ["macros", "net", "rt-multi-thread", "signal", "sync", "time"] }
 ureq = { version = "=3.4.2", default-features = false }
+vt100 = { version = "=0.18.1", default-features = false }

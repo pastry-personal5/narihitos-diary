@@ -16,3 +16,7 @@ diary-control-contract.workspace = true
 diary-core.workspace = true
 diary-tui.workspace = true
 tokio.workspace = true
+
+[dev-dependencies]
+portable-pty.workspace = true
+vt100.workspace = true
