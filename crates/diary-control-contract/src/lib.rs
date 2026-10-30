@@ -5,7 +5,7 @@
 use serde::{Deserialize, Serialize};
 
 pub const API_VERSION: &str = "v1";
-pub const CONTRACT_VERSION: u32 = 3;
+pub const CONTRACT_VERSION: u32 = 4;
 /// Covers one maximum-size source body plus a bounded JSON envelope. Individual
 /// routes still enforce their narrower action-specific limits.
 pub const MAX_REQUEST_BYTES: usize = 8 * 1024 * 1024 + 64 * 1024;
@@ -80,6 +80,28 @@ pub struct LocalPreviewDto {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct LocalApprovalRequest {
     pub plan_digest: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct NotionBlockDto {
+    pub kind: String,
+    pub text: String,
+    pub depth: u8,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct NotionPreviewDto {
+    pub workflow: WorkflowDto,
+    pub path: Vec<String>,
+    pub year_exists: bool,
+    pub month_exists: bool,
+    pub renderer_version: u32,
+    pub api_version: String,
+    pub payload_digest: String,
+    pub plan_digest: Option<String>,
+    pub blocks: Vec<NotionBlockDto>,
+    pub status: String,
+    pub reason: Option<String>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -165,6 +187,24 @@ pub const ROUTES: &[RouteSpec] = &[
     RouteSpec {
         method: "POST",
         path: "/v1/workflows/{id}/local-publications",
+        capability: Some("workflow:write"),
+        authenticated: true,
+    },
+    RouteSpec {
+        method: "POST",
+        path: "/v1/workflows/{id}/notion-previews",
+        capability: Some("workflow:write"),
+        authenticated: true,
+    },
+    RouteSpec {
+        method: "POST",
+        path: "/v1/workflows/{id}/notion-approvals",
+        capability: Some("workflow:write"),
+        authenticated: true,
+    },
+    RouteSpec {
+        method: "POST",
+        path: "/v1/workflows/{id}/notion-publications",
         capability: Some("workflow:write"),
         authenticated: true,
     },
@@ -421,6 +461,7 @@ dto!(
         pub database_ready: bool,
         pub apple_helper_available: bool,
         pub notion_configured: bool,
+        pub notion_reason_code: Option<String>,
         pub manual_workflow_available: bool,
     }
 );
@@ -959,7 +1000,7 @@ mod tests {
     }
 
     #[test]
-    fn route_table_contains_m9_local_publication_and_excludes_future_surfaces() {
+    fn route_table_contains_local_and_notion_publication_and_excludes_future_surfaces() {
         assert!(
             ROUTES
                 .iter()
@@ -970,6 +1011,13 @@ mod tests {
                 .iter()
                 .any(|route| route.path.ends_with("/local-publications"))
         );
+        for suffix in [
+            "/notion-previews",
+            "/notion-approvals",
+            "/notion-publications",
+        ] {
+            assert!(ROUTES.iter().any(|route| route.path.ends_with(suffix)));
+        }
         for path in [
             "/v1/assistant-backends",
             "/v1/workflows/{id}/memory-extractions",

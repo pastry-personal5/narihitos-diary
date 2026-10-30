@@ -115,7 +115,7 @@ the configured root's read-only preflight before any real publication.
 | Local path absent | Atomically create `YYYY/MM/YYYY-MM-DD.md`, then mark Notion pending. |
 | Same local path, same digest | Resume the recorded state; do not rewrite or republish. |
 | Same local path, different content | Refuse automatic overwrite; reopen for explicit user resolution. |
-| No same-day Notion heading in the target month page | Append one `heading_2` and the confirmed body as paragraph blocks at the month page's end. |
+| No same-day Notion heading in the target month page | Append one `heading_2` and the confirmed body at the month page's end. P1-M10 later fixed the heading as `YYYY-MM-DD (DDD)` and selected a lossless native-block projection. |
 | Same heading and recorded block IDs/digest | Treat a read-back match as already published. |
 | Same heading without a matching receipt | Stop before writing and require user resolution; do not append a duplicate. |
 | Timeout or ambiguous `5xx` | Paginate and read before retrying; match heading and intended text. |

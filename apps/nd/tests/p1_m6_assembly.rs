@@ -352,7 +352,7 @@ fn real_loopback_enforces_headers_authorization_and_conditional_mutations() {
 
         let response = request(port, "GET", "/v1/health", "", &[], None).await;
         assert!(response.starts_with("HTTP/1.1 200"));
-        assert!(response.contains("\"contract_version\":3"));
+        assert!(response.contains("\"contract_version\":4"));
         assert!(
             response
                 .to_ascii_lowercase()
@@ -562,6 +562,53 @@ fn real_loopback_enforces_headers_authorization_and_conditional_mutations() {
 
         let _ = shutdown_tx.send(());
         server.await.unwrap().unwrap();
+    });
+}
+
+#[test]
+fn graceful_shutdown_ends_open_event_streams() {
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    runtime.block_on(async {
+        let scratch = Scratch::new("sse-shutdown");
+        let store = Arc::new(SqliteStore::open(scratch.path().join("state.sqlite3")).unwrap());
+        let listener = match TcpListener::bind(("127.0.0.1", 0)).await {
+            Ok(listener) => listener,
+            Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => return,
+            Err(error) => panic!("test listener bind failed: {error}"),
+        };
+        let port = listener.local_addr().unwrap().port();
+        let token = format!("token_{}", "11".repeat(32));
+        let config = ServerConfig {
+            instance_id: format!("instance_{}", "22".repeat(32)),
+            control_token: token.clone(),
+            port,
+            commands: prepared_service(store),
+            apple_helper_available: true,
+            notion_configured: false,
+            assistant_registry: Arc::new(
+                diary_core::DraftAssistantRegistry::new(Vec::new(), None).unwrap(),
+            ),
+            diagnostics: None,
+            diagnostic_failure: None,
+        };
+        let (shutdown_tx, shutdown_rx) = oneshot::channel();
+        let server = tokio::spawn(serve(listener, config, async move {
+            let _ = shutdown_rx.await;
+        }));
+
+        // Held open across shutdown, like the TUI's event connection.
+        let _sse = open_sse(port, &token).await;
+        tokio::time::sleep(std::time::Duration::from_millis(30)).await;
+
+        let _ = shutdown_tx.send(());
+        tokio::time::timeout(std::time::Duration::from_secs(3), server)
+            .await
+            .expect("server did not stop while an event stream was open")
+            .unwrap()
+            .unwrap();
     });
 }
 

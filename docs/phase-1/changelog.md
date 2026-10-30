@@ -6,6 +6,34 @@ This changelog records owner decisions and material plan changes for Phase 1.
 
 ## Entries
 
+- 2026-10-30 — P1-M10 documentation aligned with implementation — The
+  architecture plan now describes the shipped request queue (first-in-first-out
+  per request, turn held through retries, cancellable waiters), the 30-second
+  transport timeout, and deterministic exponential backoff without jitter. The
+  terminal UX doc records the shared Preview/Publish controls that retarget
+  Notion after local read-back. Retry and lost-response matrices are checked off
+  in the overview; TUI state coverage and both live checks remain open.
+
+- 2026-10-30 — P1-M10 implementation started — Added the pinned Markdown
+  renderer and Notion HTTPS adapter, normalized owner-only configuration,
+  fail-closed paginated hierarchy and same-day classification, bounded retry,
+  chunked append/read-back, restart reconciliation, contract-v4 Notion-only
+  preview/approval/publication resources, and the TUI client/worker Notion-only
+  flow. Synthetic
+  coverage includes lost append replies without duplicate writes. Live
+  configured-root and disposable-hierarchy acceptance remain separately
+  authorized gates and were not run.
+
+- 2026-10-30 — Owner decision and P1-M10 plan review — Notion daily sections
+  use `heading_2: YYYY-MM-DD (DDD)` with fixed uppercase English weekdays and
+  a lossless native-block projection of the confirmed Markdown body;
+  unsupported constructs remain literal. Unrelated hierarchy content is
+  compatible, canonical year/month matches must be unique, configuration stays
+  manual, and retry is capped at five total attempts with cancellable
+  `Retry-After` waits over 60 seconds deferred to pending. The revised plan now
+  specifies renderer/digest identity, paginated compatibility rules, chunked
+  append reconciliation, redaction, state transitions, and acceptance evidence.
+
 - 2026-10-30 — P1-M9 completed — Added canonical local
   Markdown rendering, configured entry-root plumbing, read-only preview,
   digest-bound approval, atomic no-clobber local creation, receipt/read-back,

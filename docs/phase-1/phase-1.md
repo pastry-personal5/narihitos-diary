@@ -219,16 +219,22 @@ P1-M10.
 
 ### P1-M10: Notion publication
 
-Status: Planned
+Status: In progress
 
-Goal: Publish local-first to a runtime-validated Notion hierarchy with safe
-conflict and retry behavior.
+Goal: Publish local-first to a runtime-validated Notion hierarchy with a
+lossless native-block projection and safe conflict and retry behavior.
 
 Plan: [overview](milestone-10-notion-publication-overview.md),
 [architecture plan](milestone-10-notion-publication-architecture.md).
 
 Notes: Work against the configured root requires an owner-authorized read-only
-compatibility check; live writes use an authorized disposable hierarchy.
+compatibility check; live writes use an authorized disposable hierarchy. The
+daily heading is `YYYY-MM-DD (DDD)` with a fixed uppercase English weekday,
+unrelated hierarchy content is allowed, retry is bounded and cancellable, and
+configuration remains manual. The renderer, connector, local-first command/API
+path, restart reconciliation, and TUI flow are implemented and the standard
+gate passes; the broader failure/cancellation matrix plus separately authorized
+configured-root and disposable-hierarchy acceptance remain open.
 
 ### P1-M11: Amendments and release qualification
 

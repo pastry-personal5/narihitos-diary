@@ -5,8 +5,8 @@ use std::sync::atomic::AtomicBool;
 
 use crate::{
     AssistantBackendDescriptor, AssistantRequest, AssistantResponse, CatalogRequest, DiaryDay,
-    DraftAssistantError, FreshnessCheckpoint, FreshnessOutcome, InspectionOutcome, OperationIntent,
-    Preferences, Receipt, ReconciliationGate, SourceAccessError, SourceDiscovery,
+    Digest, DraftAssistantError, FreshnessCheckpoint, FreshnessOutcome, InspectionOutcome,
+    OperationIntent, Preferences, Receipt, ReconciliationGate, SourceAccessError, SourceDiscovery,
     SourceReadOutcome, SourceSnapshot, Timestamp, Workflow, WorkflowError, WorkflowSummary,
     WriteOutcome,
 };
@@ -132,6 +132,55 @@ pub trait LocalOutputPort: Send + Sync {
     fn target(&self, day: &DiaryDay) -> String;
     fn inspect(&self, day: &DiaryDay, payload: &str) -> Result<LocalOutputState, LocalOutputError>;
     fn write(&self, day: &DiaryDay, payload: &str) -> Result<LocalOutputState, LocalOutputError>;
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct NotionBlockPreview {
+    pub kind: String,
+    pub text: String,
+    pub depth: u8,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum NotionPreflightStatus {
+    Ready,
+    Blocked,
+    Conflict,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct NotionPreflight {
+    /// Stable server-only identity. It must never enter a DTO or diagnostic.
+    pub target_identity: String,
+    pub root_label: String,
+    pub year_title: String,
+    pub month_title: String,
+    pub year_exists: bool,
+    pub month_exists: bool,
+    pub renderer_version: u32,
+    pub api_version: String,
+    pub payload_digest: Digest,
+    pub observed_state_digest: Digest,
+    pub blocks: Vec<NotionBlockPreview>,
+    pub status: NotionPreflightStatus,
+    pub reason: Option<String>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct NotionRequest {
+    pub day: DiaryDay,
+    pub markdown: String,
+    pub expected_target_identity: String,
+    pub expected_payload_digest: Digest,
+    pub expected_state_digest: Digest,
+}
+
+/// Secret-bearing remote destination. Implementations own credentials and
+/// remote IDs; neither is exposed through preview DTOs or diagnostics.
+pub trait NotionOutputPort: Send + Sync {
+    fn preflight(&self, day: &DiaryDay, markdown: &str) -> Result<NotionPreflight, String>;
+    fn write(&self, request: &NotionRequest, cancelled: &AtomicBool) -> WriteOutcome;
+    fn inspect(&self, request: &NotionRequest) -> InspectionOutcome;
 }
 
 pub trait SourceCatalog {

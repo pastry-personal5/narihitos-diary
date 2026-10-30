@@ -37,7 +37,7 @@ Notion workflow without overwriting content the app does not own.
 - [ ] Local amendment rechecks the seed-time digest immediately before atomic
   replacement and refuses any intervening change.
 - [ ] Notion amendment locates only the receipted section, verifies its blocks,
-  inserts and reads back replacement paragraphs before trashing old paragraphs,
+  inserts and reads back replacement body blocks before trashing old body blocks,
   and conflicts on any ownership mismatch.
 - [ ] Tests reconcile interruption at every Notion replacement boundary without
   data loss, blind replay, or deletion of unrelated blocks.

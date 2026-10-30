@@ -1309,7 +1309,10 @@ impl Workflow {
             .iter()
             .find(|progress| progress.destination == destination)
             .ok_or(WorkflowError::UnknownDestination)?;
-        if progress.status != DestinationStatus::Blocked {
+        if !matches!(
+            progress.status,
+            DestinationStatus::Blocked | DestinationStatus::Pending
+        ) {
             return Err(WorkflowError::RetryNeedsPreview);
         }
         let plan = self
@@ -1342,8 +1345,9 @@ impl Workflow {
         Ok(())
     }
 
-    /// Replaces one blocked remote target with a newly inspected preview while
-    /// preserving verified local progress. Approval is deliberately cleared.
+    /// Replaces a blocked remote target, or a pending target whose complete
+    /// binding changed, with a newly inspected preview while preserving
+    /// verified local progress. Approval is deliberately cleared.
     pub fn preview_blocked_retry(
         &mut self,
         expected_revision: u64,
@@ -1353,7 +1357,11 @@ impl Workflow {
         now: Timestamp,
     ) -> Result<OutputPlan, WorkflowError> {
         self.expect_revision(expected_revision)?;
-        if self.state != WorkflowState::Partial {
+        // A stale, unapproved preview (`OutputPlanned`) may be re-previewed.
+        if !matches!(
+            self.state,
+            WorkflowState::Partial | WorkflowState::OutputPlanned
+        ) {
             return Err(WorkflowError::WrongState);
         }
         if replacement.kind != DestinationKind::Remote || replacement.destination != destination {
@@ -1364,7 +1372,10 @@ impl Workflow {
             .iter()
             .find(|item| item.destination == destination)
             .ok_or(WorkflowError::UnknownDestination)?;
-        if progress.status != DestinationStatus::Blocked {
+        if !matches!(
+            progress.status,
+            DestinationStatus::Blocked | DestinationStatus::Pending
+        ) {
             return Err(WorkflowError::RetryNeedsPreview);
         }
         let old_plan = self

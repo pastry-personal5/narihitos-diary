@@ -9,10 +9,12 @@ use diary_connectors::{LocalOutput, LocalState, SqliteStore};
 use diary_control::CommandService;
 use diary_control::ServerConfig;
 use diary_core::{
-    CatalogRequest, Clock, DiaryDay, DraftAssistantRegistry, FreshnessOutcome, LocalOutputError,
-    LocalOutputPort, LocalOutputState, OperationIntent, OperationLog, Receipt, SourceAccessError,
-    SourceCatalog, SourceDiscovery, SourceReadOutcome, SourceReader, SourceRef, SourceSnapshot,
-    StartOutcome, Timestamp, Workflow, WorkflowStore, WritingLanguage, WritingStyle,
+    CatalogRequest, Clock, DiaryDay, Digest, DraftAssistantRegistry, FreshnessOutcome,
+    InspectionOutcome, LocalOutputError, LocalOutputPort, LocalOutputState, NotionBlockPreview,
+    NotionOutputPort, NotionPreflight, NotionPreflightStatus, NotionRequest, OperationIntent,
+    OperationLog, Receipt, SourceAccessError, SourceCatalog, SourceDiscovery, SourceReadOutcome,
+    SourceReader, SourceRef, SourceSnapshot, StartOutcome, Timestamp, Workflow, WorkflowStore,
+    WriteOutcome, WritingLanguage, WritingStyle,
 };
 use diary_tui::client::{Attachment, ClientOutcome, UreqTransport};
 use diary_tui::worker::{Intent, Worker, WorkerResult};
@@ -28,6 +30,54 @@ impl Clock for FixedClock {
     fn local_day(&self) -> DiaryDay {
         DiaryDay::parse("2026-10-30").unwrap()
     }
+}
+
+#[test]
+fn verified_local_receipt_gates_notion_preview_approval_and_publication() {
+    let scratch = Scratch::new();
+    let store = Arc::new(SqliteStore::open(scratch.0.join("state.sqlite3")).unwrap());
+    let output = Arc::new(LocalOutput::new(scratch.0.join("entries")).unwrap());
+    let service = service_with_notion(store.clone(), output);
+    let day = DiaryDay::parse("2026-10-30").unwrap();
+    let confirmed = confirmed(&service, &day);
+
+    assert!(service.preview_notion(&day, confirmed.revision()).is_err());
+    let local = service.preview_local(&day, confirmed.revision()).unwrap();
+    let local = service
+        .approve_local(
+            &day,
+            local.workflow.revision(),
+            &local.workflow.output_plan().unwrap().plan_digest,
+        )
+        .unwrap();
+    let partial = service.publish_local(&day, local.revision()).unwrap();
+    assert_eq!(partial.state().as_str(), "partial");
+
+    let notion = service.preview_notion(&day, partial.revision()).unwrap();
+    assert_eq!(notion.status.as_str(), "pending");
+    assert_eq!(notion.blocks[0].kind, "heading_2");
+    let approved = service
+        .approve_notion(
+            &day,
+            notion.workflow.revision(),
+            notion.plan_digest.as_ref().unwrap(),
+        )
+        .unwrap();
+    let completed = service.publish_notion(&day, approved.revision()).unwrap();
+    assert_eq!(completed.state().as_str(), "completed");
+    assert_eq!(
+        completed
+            .destination_progress()
+            .iter()
+            .find(|item| item.destination == "notion")
+            .unwrap()
+            .status
+            .as_str(),
+        "verified"
+    );
+    assert!(store.receipts(&day).unwrap().iter().any(|receipt| {
+        receipt.destination == "notion" && receipt.returned_ids == ["synthetic-heading".to_owned()]
+    }));
 }
 
 struct EmptySources;
@@ -82,6 +132,54 @@ fn service(store: Arc<SqliteStore>, output: Arc<LocalOutput>) -> CommandService 
         Arc::new(FixedClock),
     )
     .with_local_output(output)
+}
+
+fn service_with_notion(store: Arc<SqliteStore>, output: Arc<LocalOutput>) -> CommandService {
+    service(store, output).with_notion_output(Arc::new(SyntheticNotion))
+}
+
+struct SyntheticNotion;
+
+impl NotionOutputPort for SyntheticNotion {
+    fn preflight(&self, day: &DiaryDay, markdown: &str) -> Result<NotionPreflight, String> {
+        Ok(NotionPreflight {
+            target_identity: "synthetic-root".into(),
+            root_label: "Notion root".into(),
+            year_title: day.as_str()[..4].to_owned(),
+            month_title: day.as_str()[..7].to_owned(),
+            year_exists: false,
+            month_exists: false,
+            renderer_version: 1,
+            api_version: "2026-03-11".into(),
+            payload_digest: Digest::of_bytes(markdown.as_bytes()),
+            observed_state_digest: Digest::of_bytes(b"synthetic-empty"),
+            blocks: vec![NotionBlockPreview {
+                kind: "heading_2".into(),
+                text: format!("{} (FRI)", day.as_str()),
+                depth: 0,
+            }],
+            status: NotionPreflightStatus::Ready,
+            reason: None,
+        })
+    }
+
+    fn write(&self, request: &NotionRequest, _: &AtomicBool) -> WriteOutcome {
+        if request.expected_payload_digest == Digest::of_bytes(request.markdown.as_bytes()) {
+            WriteOutcome::Verified {
+                receipt_id: "synthetic-month".into(),
+                returned_ids: vec!["synthetic-heading".into()],
+            }
+        } else {
+            WriteOutcome::Conflict
+        }
+    }
+
+    fn inspect(&self, _: &NotionRequest) -> InspectionOutcome {
+        InspectionOutcome::Matching {
+            receipt_id: "synthetic-month".into(),
+            returned_ids: vec!["synthetic-heading".into()],
+        }
+    }
 }
 
 struct AmbiguousOutput {

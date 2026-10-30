@@ -8,6 +8,35 @@ use diary_control_contract::MAX_COLLECTION_ITEMS;
 use fs2::FileExt;
 use serde::{Deserialize, Serialize};
 
+/// Secret-bearing Notion settings. Debug output is intentionally redacted.
+#[derive(Clone, Eq, PartialEq)]
+pub struct NotionRuntimeConfig {
+    token: String,
+    root_page_id: String,
+}
+
+impl NotionRuntimeConfig {
+    #[must_use]
+    pub fn token(&self) -> &str {
+        &self.token
+    }
+
+    #[must_use]
+    pub fn root_page_id(&self) -> &str {
+        &self.root_page_id
+    }
+}
+
+impl std::fmt::Debug for NotionRuntimeConfig {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("NotionRuntimeConfig")
+            .field("token", &"[REDACTED]")
+            .field("root_page_id", &"[REDACTED]")
+            .finish()
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct LifecycleConfig {
     pub launch_root: PathBuf,
@@ -110,6 +139,13 @@ impl LifecycleConfig {
             }
         }
         Ok(())
+    }
+
+    /// Re-reads the owner-only file only when the composition root needs the
+    /// secret-bearing connector. Callers must not log or serialize the result.
+    pub fn notion_runtime_config(&self) -> Result<Option<NotionRuntimeConfig>, LifecycleError> {
+        let raw = read_private_file(&self.config_path, self.expected_uid, 256 * 1024)?;
+        Ok(parse_config(&raw)?.notion)
     }
 }
 
@@ -474,6 +510,7 @@ fn read_private_file(
 struct ParsedConfig {
     port_fallback_count: u16,
     notion_configured: bool,
+    notion: Option<NotionRuntimeConfig>,
     ayumi_directory_name: String,
     entries_root: PathBuf,
     codex_profiles: Vec<CodexProfileConfig>,
@@ -483,6 +520,7 @@ fn parse_config(raw: &str) -> Result<ParsedConfig, LifecycleError> {
     let mut parsed = ParsedConfig {
         port_fallback_count: 8,
         notion_configured: false,
+        notion: None,
         ayumi_directory_name: String::new(),
         entries_root: PathBuf::new(),
         codex_profiles: Vec::new(),
@@ -495,8 +533,8 @@ fn parse_config(raw: &str) -> Result<ParsedConfig, LifecycleError> {
     let mut saw_notion_token = false;
     let mut saw_notion_root = false;
     let mut saw_codex_profiles = false;
-    let mut notion_token = false;
-    let mut notion_root = false;
+    let mut notion_token = None;
+    let mut notion_root = None;
     let mut profile = None;
     for original in raw.lines() {
         let line = original.trim();
@@ -581,14 +619,18 @@ fn parse_config(raw: &str) -> Result<ParsedConfig, LifecycleError> {
                 if saw_notion_token {
                     return Err(LifecycleError::InvalidConfig);
                 }
-                notion_token = !value.is_empty() && !value.starts_with("REPLACE_");
+                if !value.is_empty() && !value.starts_with("REPLACE_") {
+                    notion_token = Some(value);
+                }
                 saw_notion_token = true;
             }
             ("notion", "root_page_id") => {
                 if saw_notion_root {
                     return Err(LifecycleError::InvalidConfig);
                 }
-                notion_root = !value.is_empty() && !value.starts_with("REPLACE_");
+                if !value.is_empty() && !value.starts_with("REPLACE_") {
+                    notion_root = Some(normalize_notion_page_id(&value)?);
+                }
                 saw_notion_root = true;
             }
             _ => return Err(LifecycleError::InvalidConfig),
@@ -598,11 +640,29 @@ fn parse_config(raw: &str) -> Result<ParsedConfig, LifecycleError> {
     if sections.contains("assistants") && !saw_codex_profiles {
         return Err(LifecycleError::InvalidConfig);
     }
-    parsed.notion_configured = notion_token && notion_root;
+    parsed.notion =
+        notion_token
+            .zip(notion_root)
+            .map(|(token, root_page_id)| NotionRuntimeConfig {
+                token,
+                root_page_id,
+            });
+    parsed.notion_configured = parsed.notion.is_some();
     if parsed.ayumi_directory_name.is_empty() {
         return Err(LifecycleError::InvalidConfig);
     }
     Ok(parsed)
+}
+
+fn normalize_notion_page_id(value: &str) -> Result<String, LifecycleError> {
+    let compact: String = value
+        .chars()
+        .filter(|character| *character != '-')
+        .collect();
+    if compact.len() != 32 || !compact.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return Err(LifecycleError::InvalidConfig);
+    }
+    Ok(compact.to_ascii_lowercase())
 }
 
 #[derive(Default)]
@@ -879,6 +939,19 @@ mod tests {
         assert_eq!(parsed.port_fallback_count, 16);
         assert_eq!(parsed.ayumi_directory_name, "Ayumi");
         assert!(!parsed.notion_configured);
+        let configured = parse_config(
+            "sources:\n  ayumi_directory_name: Ayumi\nnotion:\n  token: secret\n  root_page_id: 01234567-89AB-CDEF-0123-456789ABCDEF\n",
+        )
+        .unwrap();
+        let notion = configured.notion.unwrap();
+        assert_eq!(notion.root_page_id(), "0123456789abcdef0123456789abcdef");
+        assert!(!format!("{notion:?}").contains("secret"));
+        assert!(
+            parse_config(
+                "sources:\n  ayumi_directory_name: Ayumi\nnotion:\n  token: secret\n  root_page_id: not-a-page-id\n"
+            )
+            .is_err()
+        );
         assert!(
             parse_config(
                 "sources:\n  ayumi_directory_name: Ayumi\nserver:\n  port_fallback_count: 17\n"

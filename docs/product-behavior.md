@@ -8,7 +8,8 @@ the [terminal UX](ux-tui.md) describes how it appears to a person.
 
 P1-M7 implements the manual journey through complete-entry Review. P1-M8 adds
 the optional Codex hosted and Apple Foundation Models assistant paths inside
-Compose. P1-M9 adds local Preview and Publish while keeping Notion blocked;
+Compose. P1-M9 adds local Preview and Publish; P1-M10 adds the local-first
+Notion-only retry flow while keeping live hierarchy qualification gated;
 amendments remain planned for a later milestone.
 
 ## Core journey
@@ -65,11 +66,14 @@ stage, and activating one displays its content in the right Main Pane.
    before writing.
 7. **Publish:** Write the local file first, at the configurable default path
    `~/Documents/narihitos-diary/entries/YYYY/MM/YYYY-MM-DD.md`. Publish the
-   confirmed Markdown body, with YAML front matter stripped, under a
-   `heading_2: YYYY-MM-DD` section at the bottom of the configured Notion
-   root's `YYYY` year and `YYYY-MM` month subpages, creating missing subpages
-   as needed, only after the read-only preflight and conflict checks. Show
-   success, pending, or blocked state separately for each destination.
+   confirmed Markdown body, with YAML front matter stripped, under a native
+   `heading_2: YYYY-MM-DD (DDD)` section at the bottom of the configured Notion
+   root's `YYYY` year and `YYYY-MM` month subpages. `DDD` is the fixed uppercase
+   English weekday. Convert the body losslessly to native Notion blocks,
+   preserving unsupported constructs literally. Allow unrelated hierarchy
+   content, create only missing unique canonical subpages, and write only after
+   the read-only preflight and conflict checks. Show success, pending, or
+   blocked state separately for each destination.
 
 ## Boundaries people can rely on
 

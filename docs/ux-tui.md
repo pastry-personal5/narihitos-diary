@@ -11,7 +11,9 @@ component vocabulary is in [ux-terms.md](ux-terms.md).
 The `nd` terminal client implements Start → Sources → Compose → Review,
 including M8 backend selection, two-pass memory review and drafting, paragraph
 suggestions, assistant job progress/cancellation, and manual fallback. P1-M9
-adds the local Preview and Publish controls; Notion output stays blocked.
+adds the local Preview and Publish controls. P1-M10 now adds the separate
+Notion-only preview, approval, and publication controls after local read-back
+is verified; live hierarchy qualification remains pending owner authorization.
 The adaptive shell keeps both sidebars inline at 120 columns or wider, overlays
 Resources from 100 through 119, and opens either focused sidebar over the Main
 Pane from 80 through 99. Work Status keeps its four content rows, while Command
@@ -65,8 +67,10 @@ bypass review.
   expected to be en-US. Mark assistant-inferred reflections for human review.
 - Require confirmation of the complete edited entry and then show the exact
   local and Notion outputs before the first write. Display the root/year/month
-  path and any subpages that would be created. Show conflicts and partial
-  success plainly.
+  path and any subpages that would be created. The Notion projection begins
+  with `YYYY-MM-DD (DDD)`, using a fixed uppercase English weekday, and shows
+  the ordered native blocks produced by lossless Markdown conversion. Show
+  conflicts and partial success plainly.
 - When the local file differs, stop the whole plan; when Notion holds
   conflicting same-day content, stop Notion only. Show both versions and offer
   only reread, discard the entry, or save under a different diary day, as
@@ -76,7 +80,9 @@ bypass review.
   blocked in the preview and still allow the local entry to be approved and
   written. Notion can be retried later: a blocked destination needs a new
   Notion-only preview and approval, and a pending one reuses the approval only
-  while its plan is unchanged.
+  while its plan is unchanged. The Preview and Publish controls are shared:
+  once the local file is verified, the same preview, approve, and publish
+  actions target Notion only and never rewrite the local file.
 - Offer to amend a completed day. The editor opens with the saved text and, if
   the file was hand-edited, a banner saying it changed since publication. The
   output preview shows current and replacement content per destination, and a
@@ -162,12 +168,15 @@ explains what must be reread and recovered edits stay visible without being
 treated as confirmed.
 
 The output preview should show the local file path and rendered Markdown,
-followed by the Notion destination, heading, and exact body. It separates
-read-only preflight results from actions that create pages or append text, and
-marks a blocked destination with its reason. Approval is a deliberate action on
-this screen, tied to the displayed plan, and no typed command bypasses it. The
-publication screen should distinguish local success, Notion pending, Notion
-blocked, verified success, and a conflict. The Conflict view lays the existing
+followed by the Notion destination, `YYYY-MM-DD (DDD)` heading, and exact
+ordered native-block projection. It separates read-only preflight results from
+actions that create pages or append blocks, allows unrelated hierarchy content,
+and marks a blocked destination with its reason. Approval is a deliberate
+action on this screen, tied to the displayed plan, and no typed command bypasses it. The
+publication screen shows the local and Notion statuses on separate lines and
+distinguishes local success, Notion pending, Notion blocked, verified success,
+and a conflict. Cancelling a publication that may already have written leaves
+the destination reconciling rather than claiming rollback. The Conflict view lays the existing
 content beside the planned payload and offers the three resolutions above.
 Connection loss disables publication until the client reloads the server's
 current workflow.

@@ -25,7 +25,7 @@ external-adapter boundaries.
    and bind approval to the seed-time and current destination digests.
 3. Implement atomic local replacement only after an immediate digest guard.
 4. Implement Notion replacement as insert-after-heading, read-back, then trash
-   old receipted paragraphs; persist enough intent data to reconcile duplicates
+   old receipted body blocks; persist enough intent data to reconcile duplicates
    after interruption.
 5. Add API/TUI amendment states and run deterministic crash-boundary tests.
 6. Exercise every Phase 1 exit criterion across real process boundaries with

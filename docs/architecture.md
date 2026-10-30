@@ -331,10 +331,12 @@ includes destination identity, rendered payload digest, and all intended
 side effects. Approval binds the plan to the entry revision and selected
 source digests; a changed entry, source, target, or payload requires another
 preview and approval. The plan digest covers the intended final state of each
-destination (for Notion, the heading and paragraphs as they should read after
-the write), so a partial write found during reconciliation changes it and needs
-a fresh approval. Long-running work has a job ID, progress state, bounded
-worker execution, timeout, and cancellation request. Cancelling a job cannot
+destination (for Notion, the heading and ordered native body blocks as they
+should read after the write). Progress proven to belong to that plan by its
+active intent can reconcile and resume under the existing approval; an
+unowned destination change requires a fresh plan and approval. Long-running
+work has a job ID, progress state, bounded worker execution, timeout, and
+cancellation request. Cancelling a job cannot
 undo an external write; the server reconciles its result before further
 publication. The TUI event/render loop never performs filesystem, model, or
 network work.
@@ -370,15 +372,23 @@ approved amendment replaces the app's own receipted file. The local file
 is the durable source of truth for retrying later destinations.
 
 The Notion adapter sends only the confirmed body, without YAML front matter.
-It treats the configured page as a root, resolves or creates unambiguous `YYYY`
-and `YYYY-MM` child pages, and appends a `heading_2: YYYY-MM-DD` section at the
-bottom of the month page. It paginates relevant reads, checks for an existing
-same-day section, splits text to API limits without truncation, and reads back
-the written heading and content. A matching local receipt plus matching
-read-back identifies an already published entry. Conflicting same-day content
-stops publication. After an uncertain page creation or append, inspect the
-relevant parent or month page before retrying; never blindly replay the write.
-Respect Notion `Retry-After` and bounded retry rules for rate limits. The
+It treats the configured page as a root, tolerates unrelated content, resolves
+or creates unique direct `YYYY` and `YYYY-MM` child pages, and appends a native
+`heading_2: YYYY-MM-DD (DDD)` section at the bottom of the month page. The
+weekday is derived from the diary day and uses fixed uppercase English
+abbreviations. A versioned renderer converts Markdown losslessly to native
+Notion blocks; unsupported constructs remain literal, and preview, digest,
+write, read-back, and reconciliation share its canonical block plan. The
+adapter paginates relevant reads, checks for an existing same-day section,
+splits blocks and text to API limits without truncation, and reads back every
+owned block. A matching local receipt plus matching read-back identifies an
+already published entry; a matching unresolved intent can establish the same
+ownership only through reconciliation of that exact plan. Other same-day
+content stops publication. After an uncertain page creation or append, inspect
+the relevant parent or month page before retrying; never blindly replay the
+write. Respect Notion `Retry-After`
+with the bounded, cancellable policy in the
+[P1-M10 plan](phase-1/milestone-10-notion-publication-architecture.md). The
 [Notion research](research/notion-diary-section.md) and [current rate-limit guidance](https://developers.notion.com/reference/request-limits)
 support these behaviors.
 
@@ -449,11 +459,11 @@ directory, flush it, and rename it over the target, but only when the current
 file digest equals the digest recorded when the editor was seeded, rechecked
 immediately before the rename. For Notion, the adapter reads the month page,
 finds the section by the receipt's heading block ID, and requires the heading
-and paragraph blocks to match the receipt's digests; otherwise the section is a
-Conflict with the usual resolutions. It then inserts the new paragraphs after
+and body blocks to match the receipt's digests; otherwise the section is a
+Conflict with the usual resolutions. It then inserts the new body blocks after
 the heading block using the append-children `position` of type `after_block`
 (at most 100 blocks per request), reads them back, and only then trashes the
-old paragraph blocks. Notion's delete moves blocks to the trash rather than
+old body blocks. Notion's delete moves blocks to the trash rather than
 destroying them, and blocks cannot be moved, so an interruption leaves
 duplicate content instead of lost content. The intent records the old block
 IDs, and the next reconciliation trashes whichever set is stale. A completed
@@ -574,6 +584,8 @@ previous plan and its approval.
 | `POST /v1/workflows/{id}/paragraph-reviews`, `POST /v1/workflows/{id}/paragraph-reviews/{suggestion_id}/acceptances`, `POST /v1/workflows/{id}/paragraph-reviews/{suggestion_id}/rejections` | Ask one backend to review a versioned paragraph target, then explicitly accept its still-current replacement or reject it without changing the entry. |
 | `POST /v1/workflows/{id}/output-plans`, `GET /v1/workflows/{id}/output-plan`, `POST /v1/workflows/{id}/approvals` | Build exact per-destination previews and record an interactive approval bound to their digests. |
 | `POST /v1/workflows/{id}/publications`, `GET /v1/workflows/{id}/publications` | Execute the approved plan and inspect each destination's receipt or pending state. |
+| `POST /v1/workflows/{id}/output-previews`, `POST /v1/workflows/{id}/output-approvals`, `POST /v1/workflows/{id}/local-publications` | P1-M9's shipped local preview, approval, and background publication resources. |
+| `POST /v1/workflows/{id}/notion-previews`, `POST /v1/workflows/{id}/notion-approvals`, `POST /v1/workflows/{id}/notion-publications` | P1-M10's local-receipt-gated Notion-only preflight, approval, and background publication resources. Preview returns labels and exact blocks but no page/block IDs. |
 | `POST /v1/workflows/{id}/conflict-resolutions` | Apply reread, discard the entry, or save under a different diary day. |
 | `GET /v1/jobs/{id}`, `DELETE /v1/jobs/{id}` | Observe or request cancellation of background work. |
 | `GET /v1/events?workflow_id={id}` | Receive server changes over SSE; reconnect by fetching the latest workflow representation. |

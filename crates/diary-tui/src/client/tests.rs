@@ -146,6 +146,7 @@ fn capabilities_and_setup_check_use_their_typed_authenticated_routes() {
                 database_ready: true,
                 apple_helper_available: false,
                 notion_configured: false,
+                notion_reason_code: Some("notion-not-configured".to_owned()),
                 manual_workflow_available: true,
             })
             .unwrap(),

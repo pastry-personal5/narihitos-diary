@@ -32,6 +32,12 @@ a safe alias, an absolute owner-controlled `codex_home`, and an optional
 absolute `codex_executable`. Each valid record becomes a separate hosted
 backend; a runtime readiness failure disables that descriptor without stopping
 manual editing or other backends.
+The Notion root value accepts the page's 32 hexadecimal identifier with or
+without UUID hyphens and is normalized internally. The token and root stay in
+this owner-only file: they are never returned by the Control API, written to
+SQLite, or included in diagnostics. A configured connector is not proof that
+the hierarchy is compatible; the Notion-only Preview performs the paginated,
+read-only check after local publication is verified.
 By default the server will resolve `config/global_config.yaml` from its working
 directory. `ND_CONFIG_PATH` selects a different file and takes precedence.
 
@@ -50,8 +56,9 @@ directories, binds only numeric IPv4 loopback using the documented bounded
 port sequence, and publishes an ephemeral attachment file only after its
 health check succeeds. Run it in one terminal, then open the TUI from a second
 terminal. The implemented client supports Start, Sources, manual or assisted
-Compose, and complete-entry Review; Preview and Publish are visible but locked
-until their later milestones. The TUI needs at least 80 columns by 30 rows and
+Compose, complete-entry Review, local Preview/Publish, and the local-receipt-
+gated Notion-only Preview/Publish flow. The TUI needs at least 80 columns by 30
+rows and
 never starts the server itself.
 
 ```sh

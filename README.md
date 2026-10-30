@@ -19,9 +19,13 @@ memory extraction, drafting, paragraph review, and source refinement. Codex prof
 configured explicitly and each call
 uses a fresh confined `codex app-server` process; Apple assistance is available
 only when Foundation Models reports ready. Manual editing remains available.
-P1-M9 (local publication and recovery) is done. Preview displays the
-exact local Markdown file for approval; Publish writes the local file without
-replacing different content. Notion publication remains blocked until P1-M10.
+P1-M9 (local publication and recovery) is done. P1-M10 is in progress: after
+the local file is verified, Preview can inspect the configured Notion
+`Root → YYYY → YYYY-MM` path and show the exact native-block projection for a
+separate approval. Publish creates only missing canonical pages, appends the
+daily section in bounded chunks, and reads it back before completing. The live
+configured-root compatibility check and disposable-hierarchy acceptance remain
+owner-authorized gates; synthetic tests never access a contributor's Notion.
 
 ## Quick start
 

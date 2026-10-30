@@ -102,12 +102,23 @@ remains.
 
 After confirming the entry, open Preview and generate the local output plan.
 It shows the target path, exact Markdown with `date` and `language` front
-matter, SHA-256 digest, and blocked Notion status. Review the file before
+matter, SHA-256 digest, and initially blocked Notion status. Review the file before
 approving the plan. Publish then starts a local publication job; an existing
 different file is never replaced. The job can be cancelled before it commits,
 and an uncertain write is inspected on restart before that diary day can act
 again. A conflict shows the existing and planned text. Reread with Preview,
 discard the workflow from Start, or choose another day in Preview; carried
-text must be confirmed again. Notion publication remains planned for P1-M10.
+text must be confirmed again.
+
+After the local receipt and read-back are verified, return to Preview and
+generate the Notion-only plan. It shows the human-readable
+`Notion root → YYYY → YYYY-MM` path, whether the year and month already exist,
+the renderer/API versions, digest, and every ordered native block beginning
+with `heading_2: YYYY-MM-DD (DDD)`. Inspect that projection and approve it;
+Publish then creates only missing canonical pages and appends the section at
+the month page's bottom. A duplicate or wrong-weekday same-day heading stops
+Notion without changing the verified local file. A blocked retry needs a new
+preview and approval, while an uncertain append is inspected before any new
+write. The token, page IDs, and unrelated Notion prose are never shown.
 The `paths.entries_root` setting may be absolute, relative to the directory
 where `nd` starts, or begin with `~/` to resolve from the current user's home.

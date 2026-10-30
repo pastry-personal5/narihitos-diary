@@ -6,11 +6,12 @@ use diary_core::{
     Clock, Destination, DestinationKind, DestinationPlan, DestinationProgress, DestinationStatus,
     DiaryDay, Digest, DraftAssistantError, DraftAssistantRegistry, FreshnessCheckpoint,
     FreshnessOutcome, InspectionOutcome, LocalOutputError, LocalOutputPort, LocalOutputState,
-    OperationIntent, OperationLog, OutputPlan, Preferences, PublicationCoordinator,
-    PublicationResult, ReconciliationGate, ReflectionRange, RegistryInvokeError, SelectedSource,
-    SourceAccessError, SourceCatalog, SourceReadOutcome, SourceReader, SourceRef, SourceWriteError,
-    SourceWriter, StartOutcome, StoreError, Timestamp, Workflow, WorkflowError, WorkflowStore,
-    WorkflowSummary, WriteOutcome, WritingLanguage, WritingStyle, render_local_markdown,
+    NotionBlockPreview, NotionOutputPort, NotionPreflightStatus, NotionRequest, OperationIntent,
+    OperationLog, OutputPlan, Preferences, PublicationCoordinator, PublicationResult,
+    ReconciliationGate, ReflectionRange, RegistryInvokeError, SelectedSource, SourceAccessError,
+    SourceCatalog, SourceReadOutcome, SourceReader, SourceRef, SourceWriteError, SourceWriter,
+    StartOutcome, StoreError, Timestamp, Workflow, WorkflowError, WorkflowStore, WorkflowSummary,
+    WriteOutcome, WritingLanguage, WritingStyle, render_local_markdown,
     revalidate_workflow_sources,
 };
 
@@ -26,6 +27,23 @@ pub struct LocalPreview {
     pub intended_changes: Vec<String>,
 }
 
+#[derive(Clone, Debug)]
+pub struct NotionPreview {
+    pub workflow: Workflow,
+    pub root_label: String,
+    pub year_title: String,
+    pub month_title: String,
+    pub year_exists: bool,
+    pub month_exists: bool,
+    pub renderer_version: u32,
+    pub api_version: String,
+    pub payload_digest: Digest,
+    pub plan_digest: Option<Digest>,
+    pub blocks: Vec<NotionBlockPreview>,
+    pub status: DestinationStatus,
+    pub reason: Option<String>,
+}
+
 pub trait ControlStore: WorkflowStore + OperationLog {}
 impl<T: WorkflowStore + OperationLog> ControlStore for T {}
 
@@ -37,6 +55,7 @@ pub struct CommandService {
     writer: Arc<dyn SourceWriter + Send + Sync>,
     clock: Arc<dyn Clock + Send + Sync>,
     local_output: Option<Arc<dyn LocalOutputPort>>,
+    notion_output: Option<Arc<dyn NotionOutputPort>>,
 }
 
 impl CommandService {
@@ -53,6 +72,7 @@ impl CommandService {
             writer: Arc::new(UnavailableSourceWriter),
             clock,
             local_output: None,
+            notion_output: None,
         }
     }
 
@@ -70,11 +90,17 @@ impl CommandService {
             writer,
             clock,
             local_output: None,
+            notion_output: None,
         }
     }
 
     pub fn with_local_output(mut self, local_output: Arc<dyn LocalOutputPort>) -> Self {
         self.local_output = Some(local_output);
+        self
+    }
+
+    pub fn with_notion_output(mut self, notion_output: Arc<dyn NotionOutputPort>) -> Self {
+        self.notion_output = Some(notion_output);
         self
     }
 
@@ -1187,6 +1213,311 @@ impl CommandService {
         Ok(workflow)
     }
 
+    /// Re-preflights the blocked remote after the local receipt is verified.
+    pub fn preview_notion(
+        &self,
+        day: &DiaryDay,
+        expected_revision: u64,
+    ) -> Result<NotionPreview, CommandError> {
+        self.ensure_clear(day)?;
+        let notion = self
+            .notion_output
+            .as_ref()
+            .ok_or(CommandError::NotionUnavailable)?;
+        let mut workflow = self.load_workflow(day)?;
+        ensure_revision(&workflow, expected_revision)?;
+        self.verify_local_receipt(&workflow)?;
+        let preflight = match notion.preflight(day, &workflow.entry().text) {
+            Ok(preflight) => preflight,
+            Err(reason) => {
+                return Ok(NotionPreview {
+                    workflow,
+                    root_label: "Notion root".into(),
+                    year_title: day.as_str()[..4].to_owned(),
+                    month_title: day.as_str()[..7].to_owned(),
+                    year_exists: false,
+                    month_exists: false,
+                    renderer_version: 0,
+                    api_version: String::new(),
+                    payload_digest: Digest::of_bytes(b"notion-unavailable"),
+                    plan_digest: None,
+                    blocks: Vec::new(),
+                    status: DestinationStatus::Blocked,
+                    reason: Some(reason),
+                });
+            }
+        };
+        let status = match preflight.status {
+            NotionPreflightStatus::Ready => DestinationStatus::Pending,
+            NotionPreflightStatus::Blocked => DestinationStatus::Blocked,
+            NotionPreflightStatus::Conflict => DestinationStatus::Conflict,
+        };
+        if status != DestinationStatus::Pending {
+            return Ok(NotionPreview {
+                workflow,
+                root_label: preflight.root_label,
+                year_title: preflight.year_title,
+                month_title: preflight.month_title,
+                year_exists: preflight.year_exists,
+                month_exists: preflight.month_exists,
+                renderer_version: preflight.renderer_version,
+                api_version: preflight.api_version,
+                payload_digest: preflight.payload_digest,
+                plan_digest: None,
+                blocks: preflight.blocks,
+                status,
+                reason: preflight.reason,
+            });
+        }
+        let replacement = DestinationPlan::new(
+            DestinationKind::Remote,
+            "notion",
+            preflight.target_identity,
+            preflight.payload_digest.clone(),
+            preflight.payload_digest.clone(),
+            preflight.observed_state_digest,
+        )
+        .map_err(|_| CommandError::NotionUnavailable)?;
+        let plan = workflow
+            .preview_blocked_retry(
+                expected_revision,
+                "notion",
+                replacement,
+                random_id("plan_").map_err(|_| CommandError::NotionUnavailable)?,
+                self.clock.now(),
+            )
+            .map_err(CommandError::Workflow)?;
+        self.store
+            .compare_and_swap(expected_revision, None, &workflow)
+            .map_err(CommandError::Store)?;
+        Ok(NotionPreview {
+            workflow,
+            root_label: preflight.root_label,
+            year_title: preflight.year_title,
+            month_title: preflight.month_title,
+            year_exists: preflight.year_exists,
+            month_exists: preflight.month_exists,
+            renderer_version: preflight.renderer_version,
+            api_version: preflight.api_version,
+            payload_digest: preflight.payload_digest,
+            plan_digest: Some(plan.plan_digest),
+            blocks: preflight.blocks,
+            status,
+            reason: None,
+        })
+    }
+
+    pub fn approve_notion(
+        &self,
+        day: &DiaryDay,
+        expected_revision: u64,
+        digest: &Digest,
+    ) -> Result<Workflow, CommandError> {
+        self.ensure_clear(day)?;
+        let notion = self
+            .notion_output
+            .as_ref()
+            .ok_or(CommandError::NotionUnavailable)?;
+        let mut workflow = self.load_workflow(day)?;
+        ensure_revision(&workflow, expected_revision)?;
+        self.verify_local_receipt(&workflow)?;
+        let plan = workflow
+            .output_plan()
+            .ok_or(CommandError::Workflow(WorkflowError::MissingPlan))?;
+        if &plan.plan_digest != digest {
+            return Err(CommandError::PreconditionFailed);
+        }
+        let target = plan
+            .targets
+            .iter()
+            .find(|target| target.destination == "notion")
+            .ok_or(CommandError::Workflow(WorkflowError::MissingPlan))?;
+        let preflight = notion
+            .preflight(day, &workflow.entry().text)
+            .map_err(|_| CommandError::NotionUnavailable)?;
+        if preflight.status != NotionPreflightStatus::Ready
+            || preflight.target_identity != target.target_identity
+            || preflight.payload_digest != target.payload_digest
+            || preflight.observed_state_digest != target.inspected_state_digest
+        {
+            return Err(CommandError::PreconditionFailed);
+        }
+        workflow
+            .approve_blocked_retry(expected_revision, "notion", digest, self.clock.now())
+            .map_err(CommandError::Workflow)?;
+        self.store
+            .compare_and_swap(expected_revision, None, &workflow)
+            .map_err(CommandError::Store)?;
+        Ok(workflow)
+    }
+
+    pub fn publish_notion(
+        &self,
+        day: &DiaryDay,
+        expected_revision: u64,
+    ) -> Result<Workflow, CommandError> {
+        self.publish_notion_guarded(day, expected_revision, &AtomicBool::new(false))
+    }
+
+    pub fn publish_notion_guarded(
+        &self,
+        day: &DiaryDay,
+        expected_revision: u64,
+        cancelled: &AtomicBool,
+    ) -> Result<Workflow, CommandError> {
+        self.ensure_clear(day)?;
+        let notion = self
+            .notion_output
+            .as_ref()
+            .ok_or(CommandError::NotionUnavailable)?;
+        let mut workflow = self.load_workflow(day)?;
+        ensure_revision(&workflow, expected_revision)?;
+        self.verify_local_receipt(&workflow)?;
+        let plan = workflow
+            .output_plan()
+            .ok_or(CommandError::Workflow(WorkflowError::MissingPlan))?
+            .clone();
+        let target = plan
+            .targets
+            .iter()
+            .find(|target| target.destination == "notion")
+            .ok_or(CommandError::Workflow(WorkflowError::MissingPlan))?;
+        let request = NotionRequest {
+            day: day.clone(),
+            markdown: workflow.entry().text.clone(),
+            expected_target_identity: target.target_identity.clone(),
+            expected_payload_digest: target.payload_digest.clone(),
+            expected_state_digest: target.inspected_state_digest.clone(),
+        };
+        // Revalidate the approved binding immediately before the first effect.
+        let preflight = notion
+            .preflight(day, &workflow.entry().text)
+            .map_err(|_| CommandError::NotionUnavailable)?;
+        if preflight.status != NotionPreflightStatus::Ready
+            || preflight.target_identity != target.target_identity
+            || preflight.payload_digest != target.payload_digest
+            || preflight.observed_state_digest != target.inspected_state_digest
+        {
+            return Err(CommandError::PreconditionFailed);
+        }
+        if workflow.state() == diary_core::WorkflowState::Partial {
+            workflow
+                .begin_pending_retry(
+                    expected_revision,
+                    "notion",
+                    &plan.plan_digest,
+                    self.clock.now(),
+                )
+                .map_err(CommandError::Workflow)?;
+        } else {
+            workflow
+                .begin_publication(expected_revision, self.clock.now())
+                .map_err(CommandError::Workflow)?;
+        }
+        self.store
+            .compare_and_swap(expected_revision, None, &workflow)
+            .map_err(CommandError::Store)?;
+        let intent = OperationIntent::new(
+            random_id("attempt_").map_err(|_| CommandError::NotionUnavailable)?,
+            plan.plan_id,
+            day.clone(),
+            target,
+            plan.entry_digest,
+            plan.selection_digest,
+            self.clock.now(),
+        )
+        .map_err(|_| CommandError::NotionUnavailable)?;
+        let mut destination = NotionDestination {
+            output: notion.as_ref(),
+            request: &request,
+            cancelled,
+        };
+        let result = PublicationCoordinator::execute(
+            self.store.as_ref(),
+            &mut destination,
+            &intent,
+            2,
+            self.clock.now(),
+        )
+        .map_err(|_| CommandError::NotionUnavailable)?;
+        let status = match result {
+            PublicationResult::Verified(_) => DestinationStatus::Verified,
+            PublicationResult::Conflict => DestinationStatus::Conflict,
+            PublicationResult::DefiniteNoEffect | PublicationResult::SafeToRetry => {
+                DestinationStatus::Pending
+            }
+            _ => DestinationStatus::Reconciling,
+        };
+        if status == DestinationStatus::Reconciling {
+            return Ok(workflow);
+        }
+        let revision = workflow.revision();
+        workflow
+            .finish_publication(
+                revision,
+                vec![
+                    DestinationProgress {
+                        destination: "local".into(),
+                        status: DestinationStatus::Verified,
+                    },
+                    DestinationProgress {
+                        destination: "notion".into(),
+                        status,
+                    },
+                ],
+                self.clock.now(),
+            )
+            .map_err(CommandError::Workflow)?;
+        self.store
+            .compare_and_swap(revision, None, &workflow)
+            .map_err(CommandError::Store)?;
+        Ok(workflow)
+    }
+
+    fn verify_local_receipt(&self, workflow: &Workflow) -> Result<(), CommandError> {
+        let output = self
+            .local_output
+            .as_ref()
+            .ok_or(CommandError::LocalOutput(LocalOutputError::Unavailable))?;
+        let language = workflow
+            .language()
+            .ok_or(CommandError::Workflow(WorkflowError::LanguageRequired))?;
+        let payload = render_local_markdown(workflow.day(), language, &workflow.entry().text);
+        let payload_digest = Digest::of_bytes(payload.as_bytes());
+        if output
+            .inspect(workflow.day(), &payload)
+            .map_err(CommandError::LocalOutput)?
+            != LocalOutputState::Identical
+        {
+            return Err(CommandError::Workflow(WorkflowError::LocalMustBeVerified));
+        }
+        let confirmation = workflow
+            .entry()
+            .confirmed
+            .as_ref()
+            .ok_or(CommandError::Workflow(WorkflowError::EntryNotConfirmed))?;
+        let selection = workflow
+            .selection_digest()
+            .ok_or(CommandError::Workflow(WorkflowError::PlanBindingMismatch))?;
+        let target = output.target(workflow.day());
+        let receipted = self
+            .store
+            .receipts(workflow.day())
+            .map_err(CommandError::Store)?
+            .iter()
+            .any(|receipt| {
+                receipt.destination == "local"
+                    && receipt.target_identity == target
+                    && receipt.payload_digest == payload_digest
+                    && receipt.entry_digest == confirmation.entry_digest
+                    && &receipt.selection_digest == selection
+            });
+        if !receipted {
+            return Err(CommandError::Workflow(WorkflowError::LocalMustBeVerified));
+        }
+        Ok(())
+    }
+
     /// Recover uncertain local effects before accepting commands for their day.
     pub fn reconcile_local_intents(&self) -> Result<(), CommandError> {
         let Some(output) = &self.local_output else {
@@ -1331,6 +1662,90 @@ impl CommandService {
         Ok(())
     }
 
+    /// Reconciles every uncertain Notion effect before that diary day accepts
+    /// another command. Exact active intents may adopt a unique matching
+    /// section; unrelated same-day content remains a conflict.
+    pub fn reconcile_notion_intents(&self) -> Result<(), CommandError> {
+        let Some(output) = &self.notion_output else {
+            return Ok(());
+        };
+        for intent in self
+            .store
+            .unresolved_intents(None)
+            .map_err(CommandError::Store)?
+        {
+            if intent.destination != "notion" {
+                continue;
+            }
+            let mut workflow = self.load_workflow(&intent.day)?;
+            let Some(plan) = workflow.output_plan() else {
+                continue;
+            };
+            let Some(target) = plan
+                .targets
+                .iter()
+                .find(|target| target.destination == "notion")
+            else {
+                continue;
+            };
+            if target.target_identity != intent.target_identity
+                || target.payload_digest != intent.payload_digest
+            {
+                continue;
+            }
+            let request = NotionRequest {
+                day: intent.day.clone(),
+                markdown: workflow.entry().text.clone(),
+                expected_target_identity: target.target_identity.clone(),
+                expected_payload_digest: target.payload_digest.clone(),
+                expected_state_digest: target.inspected_state_digest.clone(),
+            };
+            let not_cancelled = AtomicBool::new(false);
+            let mut destination = NotionDestination {
+                output: output.as_ref(),
+                request: &request,
+                cancelled: &not_cancelled,
+            };
+            let result = PublicationCoordinator::reconcile(
+                self.store.as_ref(),
+                &mut destination,
+                &intent,
+                2,
+                self.clock.now(),
+            )
+            .map_err(|_| CommandError::NotionUnavailable)?;
+            let status = match result {
+                PublicationResult::Verified(_) => DestinationStatus::Verified,
+                PublicationResult::Conflict => DestinationStatus::Conflict,
+                PublicationResult::SafeToRetry => DestinationStatus::Pending,
+                _ => continue,
+            };
+            if workflow.state() == diary_core::WorkflowState::Publishing {
+                let revision = workflow.revision();
+                workflow
+                    .finish_publication(
+                        revision,
+                        vec![
+                            DestinationProgress {
+                                destination: "local".into(),
+                                status: DestinationStatus::Verified,
+                            },
+                            DestinationProgress {
+                                destination: "notion".into(),
+                                status,
+                            },
+                        ],
+                        self.clock.now(),
+                    )
+                    .map_err(CommandError::Workflow)?;
+                self.store
+                    .compare_and_swap(revision, None, &workflow)
+                    .map_err(CommandError::Store)?;
+            }
+        }
+        Ok(())
+    }
+
     pub fn save_local_conflict_under_day(
         &self,
         source_day: &DiaryDay,
@@ -1404,6 +1819,22 @@ struct LocalDestination<'a> {
     output: &'a dyn LocalOutputPort,
     day: &'a DiaryDay,
     payload: &'a str,
+}
+
+struct NotionDestination<'a> {
+    output: &'a dyn NotionOutputPort,
+    request: &'a NotionRequest,
+    cancelled: &'a AtomicBool,
+}
+
+impl Destination for NotionDestination<'_> {
+    fn write(&mut self, _: &OperationIntent) -> WriteOutcome {
+        self.output.write(self.request, self.cancelled)
+    }
+
+    fn inspect(&mut self, _: &OperationIntent) -> InspectionOutcome {
+        self.output.inspect(self.request)
+    }
 }
 
 impl Destination for LocalDestination<'_> {
@@ -1523,6 +1954,7 @@ pub enum CommandError {
     SourceWrite(SourceWriteError),
     DeleteNotConfirmed,
     LocalOutput(LocalOutputError),
+    NotionUnavailable,
 }
 
 impl CommandError {
@@ -1590,6 +2022,7 @@ impl CommandError {
             Self::DeleteNotConfirmed => "source-delete-not-confirmed",
             Self::LocalOutput(LocalOutputError::UnsafePath) => "local-output-unsafe-path",
             Self::LocalOutput(LocalOutputError::Unavailable) => "local-output-unavailable",
+            Self::NotionUnavailable => "notion-unavailable",
             Self::Store(_) => "state-unavailable",
         }
     }

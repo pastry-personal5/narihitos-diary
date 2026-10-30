@@ -28,6 +28,7 @@ diary-tui = { version = "0.1.0", path = "crates/diary-tui", default-features = f
 fs2 = { version = "=0.4.3", default-features = false }
 futures-core = { version = "=0.3.34", default-features = false }
 getrandom = { version = "=0.3.4", default-features = false, features = ["std"] }
+pulldown-cmark = { version = "=0.13.5", default-features = false }
 ratatui = { version = "=0.30.2", default-features = false, features = ["crossterm_0_29"] }
 ratatui-textarea = { version = "=0.9.3", default-features = false }
 rusqlite = { version = "0.40.2", default-features = false }

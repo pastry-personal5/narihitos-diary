@@ -27,10 +27,13 @@ use futures_core::Stream;
 use serde::Deserialize;
 use subtle::ConstantTimeEq;
 use tokio::net::TcpListener;
-use tokio::sync::{Semaphore, mpsc, oneshot};
+use tokio::sync::{Semaphore, mpsc, oneshot, watch};
 
 use crate::commands::{CommandError, CommandService};
-use crate::diagnostics::{AssistantSnapshot, DiagnosticEvent, DiagnosticLevel, DiagnosticLog};
+use crate::diagnostics::{
+    AssistantSnapshot, DiagnosticEvent, DiagnosticLevel, DiagnosticLog, NOTION_PREVIEW_REASONS,
+    NOTION_PREVIEW_STATUSES,
+};
 use crate::lifecycle::random_id;
 
 const JOB_EXPIRY_MS: i64 = 10 * 60 * 1000;
@@ -63,6 +66,9 @@ struct Inner {
     subscriber_count: Arc<AtomicUsize>,
     workers: Arc<Semaphore>,
     requests: Arc<Semaphore>,
+    /// Flips to `true` when graceful shutdown starts so long-lived event
+    /// streams end instead of holding the server open until the timeout.
+    shutdown: watch::Sender<bool>,
 }
 
 #[derive(Default)]
@@ -110,6 +116,7 @@ struct Subscriber {
 
 pub struct ServerHandle {
     pub router: Router,
+    shutdown: watch::Sender<bool>,
 }
 
 pub fn build_router(config: ServerConfig) -> ServerHandle {
@@ -123,7 +130,9 @@ pub fn build_router(config: ServerConfig) -> ServerHandle {
         subscriber_count: Arc::new(AtomicUsize::new(0)),
         workers: Arc::new(Semaphore::new(JOB_CONCURRENCY)),
         requests: Arc::new(Semaphore::new(64)),
+        shutdown: watch::channel(false).0,
     }));
+    let shutdown = state.0.shutdown.clone();
     let router = Router::new()
         .route("/v1/health", get(health))
         .route("/v1/capabilities", get(capabilities))
@@ -146,6 +155,18 @@ pub fn build_router(config: ServerConfig) -> ServerHandle {
         .route(
             "/v1/workflows/{id}/local-publications",
             post(publish_local_output),
+        )
+        .route(
+            "/v1/workflows/{id}/notion-previews",
+            post(preview_notion_output),
+        )
+        .route(
+            "/v1/workflows/{id}/notion-approvals",
+            post(approve_notion_output),
+        )
+        .route(
+            "/v1/workflows/{id}/notion-publications",
+            post(publish_notion_output),
         )
         .route("/v1/workflows/{id}/save-under-day", post(save_under_day))
         .route("/v1/workflows/{id}/discoveries", post(discover))
@@ -227,7 +248,7 @@ pub fn build_router(config: ServerConfig) -> ServerHandle {
         .layer(DefaultBodyLimit::max(MAX_REQUEST_BYTES))
         .layer(middleware::from_fn_with_state(state.clone(), security))
         .with_state(state);
-    ServerHandle { router }
+    ServerHandle { router, shutdown }
 }
 
 pub async fn serve(
@@ -235,8 +256,13 @@ pub async fn serve(
     config: ServerConfig,
     shutdown: impl Future<Output = ()> + Send + 'static,
 ) -> Result<(), std::io::Error> {
-    axum::serve(listener, build_router(config).router)
-        .with_graceful_shutdown(shutdown)
+    let handle = build_router(config);
+    let streams = handle.shutdown;
+    axum::serve(listener, handle.router)
+        .with_graceful_shutdown(async move {
+            shutdown.await;
+            let _ = streams.send(true);
+        })
         .await
 }
 
@@ -621,6 +647,8 @@ async fn setup_check(State(state): State<AppState>) -> Json<SetupCheckDto> {
         database_ready: true,
         apple_helper_available: state.0.config.apple_helper_available,
         notion_configured: state.0.config.notion_configured,
+        notion_reason_code: (!state.0.config.notion_configured)
+            .then(|| "notion-not-configured".to_owned()),
         manual_workflow_available: true,
     })
 }
@@ -1719,6 +1747,156 @@ async fn run_local_publication_job(
     }
 }
 
+async fn preview_notion_output(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    headers: HeaderMap,
+) -> Result<Json<NotionPreviewDto>, ApiError> {
+    let day = day_from_id(&id)?;
+    let revision = workflow_precondition(&headers)?;
+    let service = state.0.config.commands.clone();
+    let preview = blocking(move || service.preview_notion(&day, revision)).await?;
+    log_debug(
+        &state,
+        DiagnosticEvent::NotionPreview {
+            status: NOTION_PREVIEW_STATUSES
+                .iter()
+                .copied()
+                .find(|status| *status == preview.status.as_str())
+                .unwrap_or("blocked"),
+            reason: match preview.reason.as_deref() {
+                None => "none",
+                Some(reason) => NOTION_PREVIEW_REASONS
+                    .iter()
+                    .copied()
+                    .find(|known| *known == reason)
+                    .unwrap_or("other"),
+            },
+        },
+    );
+    let result = NotionPreviewDto {
+        workflow: workflow_dto(&preview.workflow),
+        path: vec![preview.root_label, preview.year_title, preview.month_title],
+        year_exists: preview.year_exists,
+        month_exists: preview.month_exists,
+        renderer_version: preview.renderer_version,
+        api_version: preview.api_version,
+        payload_digest: preview.payload_digest.as_str().to_owned(),
+        plan_digest: preview.plan_digest.map(|digest| digest.as_str().to_owned()),
+        blocks: preview
+            .blocks
+            .into_iter()
+            .map(|block| NotionBlockDto {
+                kind: block.kind,
+                text: block.text,
+                depth: block.depth,
+            })
+            .collect(),
+        status: preview.status.as_str().to_owned(),
+        reason: preview.reason,
+    };
+    publish_event(
+        &state,
+        "workflow.changed",
+        Some(id),
+        Some(result.workflow.revision),
+        None,
+        None,
+    );
+    Ok(Json(result))
+}
+
+async fn approve_notion_output(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    headers: HeaderMap,
+    Json(request): Json<LocalApprovalRequest>,
+) -> Result<Response, ApiError> {
+    let day = day_from_id(&id)?;
+    let revision = workflow_precondition(&headers)?;
+    let digest = Digest::parse(request.plan_digest)
+        .map_err(|_| ApiError::new(StatusCode::BAD_REQUEST, "invalid-plan-digest"))?;
+    let service = state.0.config.commands.clone();
+    let workflow = blocking(move || service.approve_notion(&day, revision, &digest)).await?;
+    publish_event(
+        &state,
+        "workflow.changed",
+        Some(id),
+        Some(workflow.revision()),
+        None,
+        None,
+    );
+    workflow_response(StatusCode::OK, &workflow)
+}
+
+async fn publish_notion_output(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    headers: HeaderMap,
+) -> Result<(StatusCode, Json<JobAcceptedDto>), ApiError> {
+    let day = day_from_id(&id)?;
+    let revision = workflow_precondition(&headers)?;
+    let job_id = new_job(&state, "notion-publication", &id)?;
+    tokio::spawn(run_notion_publication_job(
+        state,
+        job_id.clone(),
+        id,
+        day,
+        revision,
+    ));
+    Ok((StatusCode::ACCEPTED, Json(JobAcceptedDto { job_id })))
+}
+
+async fn run_notion_publication_job(
+    state: AppState,
+    job_id: String,
+    workflow_id: String,
+    day: DiaryDay,
+    revision: u64,
+) {
+    let Ok(_permit) = Arc::clone(&state.0.workers).acquire_owned().await else {
+        return;
+    };
+    if !mark_running(&state, &job_id) {
+        return;
+    }
+    let Some((commit_state, cancelled)) = assistant_job_state(&state, &job_id) else {
+        fail_job(&state, &job_id, "internal-failure");
+        return;
+    };
+    if commit_state
+        .compare_exchange(
+            COMMIT_ACTIVE,
+            COMMITTING,
+            Ordering::AcqRel,
+            Ordering::Acquire,
+        )
+        .is_err()
+    {
+        return;
+    }
+    let service = state.0.config.commands.clone();
+    let outcome = tokio::task::spawn_blocking(move || {
+        service.publish_notion_guarded(&day, revision, &cancelled)
+    })
+    .await;
+    match outcome {
+        Ok(Ok(workflow)) => {
+            publish_event(
+                &state,
+                "workflow.changed",
+                Some(workflow_id),
+                Some(workflow.revision()),
+                None,
+                None,
+            );
+            finish_job(&state, &job_id, None, None);
+        }
+        Ok(Err(error)) => fail_job(&state, &job_id, error.diagnostic_code()),
+        Err(_) => fail_job(&state, &job_id, "internal-failure"),
+    }
+}
+
 async fn save_under_day(
     State(state): State<AppState>,
     Path(id): Path<String>,
@@ -1782,15 +1960,16 @@ async fn cancel_job(
         record.status = job_status::CANCELLED;
         record.expires_at_ms = now_ms().saturating_add(JOB_EXPIRY_MS);
     } else if record.status == job_status::RUNNING
-        && record
-            .commit_state
-            .compare_exchange(
-                COMMIT_ACTIVE,
-                COMMIT_CANCELLED,
-                Ordering::AcqRel,
-                Ordering::Acquire,
-            )
-            .is_ok()
+        && (record.kind == "notion-publication"
+            || record
+                .commit_state
+                .compare_exchange(
+                    COMMIT_ACTIVE,
+                    COMMIT_CANCELLED,
+                    Ordering::AcqRel,
+                    Ordering::Acquire,
+                )
+                .is_ok())
     {
         record.cancelled.store(true, Ordering::Release);
         record.status = job_status::CANCELLATION_REQUESTED;
@@ -1887,6 +2066,7 @@ async fn events(
     let _ = tx.try_send(Ok(Bytes::from_static(b": connected\n\n")));
     let count = Arc::clone(&state.0.subscriber_count);
     let timer_state = state.clone();
+    let mut shutdown_rx = state.0.shutdown.subscribe();
     tokio::spawn(async move {
         let deadline = tokio::time::sleep(STREAM_LIFETIME);
         tokio::pin!(deadline);
@@ -1897,6 +2077,7 @@ async fn events(
                 }
                 _ = &mut overflow_rx => break,
                 _ = &mut deadline => break,
+                _ = shutdown_rx.wait_for(|stopping| *stopping) => break,
             }
         }
         remove_subscriber(&timer_state, subscriber_id);

@@ -112,8 +112,9 @@ runtime-only read-only root preflight on 2026-10-28.
 - No credential was available, so preserve the configured Notion page's
   top-level structure and permissions as unknown and require a fail-closed
   first-run read-only preflight without copying content into logs.
-- Decide the canonical Notion heading, insertion order, paragraph mapping, and
-  behavior when a same-day section already exists.
+- Decide the canonical Notion heading, insertion order, body-block mapping, and
+  behavior when a same-day section already exists. P1-M10 later fixed the body
+  mapping as a lossless native-block projection.
 - Exercise a synthetic Notion page or equivalent fixture for pagination,
   ambiguous writes, content limits, and read-before-retry behavior; do not write
   to the owner's diary page during research.

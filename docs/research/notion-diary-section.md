@@ -42,8 +42,8 @@ The configured page is a root, not the daily-entry destination. For diary day
 <configured root page>
 └── 2026
     └── 2026-02
-        └── heading_2: 2026-02-14
-            confirmed entry body follows as paragraph blocks
+        └── heading_2: 2026-02-14 (SAT)
+            confirmed entry body follows as native blocks
 ```
 
 Use the workflow's diary day to choose the `YYYY` year and `YYYY-MM` month.
@@ -93,9 +93,11 @@ Notion represents a page body as child blocks. The relevant operations are:
   blocks. In API version `2026-03-11`, `position: {"type":"end"}` explicitly
   appends at the end.
 
-A daily section can be represented by one `heading_2` block containing a
-canonical local date, followed by one or more paragraph blocks. This closely
-matches the requested "section" and changes only newly appended blocks.
+A daily section can be represented by one `heading_2` block containing the
+canonical local date and fixed English weekday, followed by native body blocks.
+This closely matches the requested "section" and changes only newly appended
+blocks. P1-M10 later selected lossless Markdown conversion rather than the
+paragraph-only research baseline.
 
 ### Markdown content API
 
@@ -122,7 +124,8 @@ The block API is the stronger current candidate:
 1. Read and paginate the root's child pages, then the target year's child
    pages. Reuse an unambiguous year/month path or create missing pages.
 2. Read and paginate the month page's blocks for the diary-date heading.
-3. If absent, append the heading and paragraph blocks at the month page's end.
+3. If absent, append the heading and losslessly rendered body blocks at the
+   month page's end.
 4. Read back the created blocks before reporting success.
 
 ### Amending an owned section
@@ -138,11 +141,11 @@ An amendment replaces a section the app published and receipted. The block API
   trash where it can be restored through the update-block or update-page
   endpoints. It does not destroy content.
 - `PATCH /v1/blocks/{block_id}` can edit a text block's content in place, but
-  it cannot change a block's children and does not help when the paragraph count
-  changes.
+  it cannot change a block's children and does not help when the body block
+  count changes.
 
-The chosen method inserts the new paragraphs after the receipted heading block,
-reads them back, and only then trashes the old paragraph blocks, so an
+The chosen method inserts the new body blocks after the receipted heading block,
+reads them back, and only then trashes the old body blocks, so an
 interruption duplicates content instead of losing it. See
 [Amendments](../architecture.md#amendments) and the references
 [append block children](https://developers.notion.com/reference/patch-block-children),
@@ -179,8 +182,9 @@ A duplicate-aware write should therefore:
   whether the write landed.
 - Persist returned block IDs locally after a confirmed success.
 
-For `429` and `529`, respect `Retry-After`, apply bounded backoff with jitter,
-and keep the TUI responsive. Do not retry authentication, permission, or
+For `429` and `529`, respect `Retry-After`, apply bounded exponential backoff
+(the shipped policy is deterministic, without jitter), and keep the TUI
+responsive. Do not retry authentication, permission, or
 validation errors without user action.
 
 ## Content and size limits
@@ -192,8 +196,8 @@ The current API limits relevant to diary text include:
 - 1,000 block elements and 500 KB for an entire request payload.
 - 100 child blocks per page of list results.
 
-Long diary paragraphs must be split on Unicode character boundaries into
-multiple rich-text objects or paragraph blocks. Do not truncate silently.
+Long diary blocks must be split on Unicode character boundaries into bounded
+rich-text objects or equivalent native blocks. Do not truncate silently.
 
 Each month page receives only its own daily sections. This bounds the number
 of daily headings per page while preserving the configured root as the stable
@@ -203,28 +207,38 @@ entry point.
 
 Notion receives the confirmed Markdown body after local YAML front matter is
 removed. The TUI shows the root/year/month path, any subpages to create, diary
-day, heading, and paragraphs before the first write. There is no separate
-sentence-selection mode in Phase 1.
+day, heading, and exact native-block projection before the first write. There
+is no separate sentence-selection mode in Phase 1.
+
+The P1-M10 owner interview on 2026-10-30 refined the earlier research baseline:
+unrelated hierarchy content is compatible; the heading includes a fixed
+uppercase English weekday; and Markdown is converted losslessly to native
+Notion blocks, preserving unsupported constructs literally. The
+[P1-M10 overview](../phase-1/milestone-10-notion-publication-overview.md) owns
+the implementation contract.
 
 The section representation is:
 
 ```text
-heading_2: YYYY-MM-DD
-paragraph: <sentence or paragraph>
-paragraph: <sentence or paragraph>
+heading_2: YYYY-MM-DD (DDD)
+native block: <losslessly converted Markdown block>
+native block: <losslessly converted Markdown block>
 ...
 ```
 
-The heading is the workflow's canonical local diary day in ISO form. New
-daily sections are appended at the bottom of the target month page. The body is
-mapped to paragraph blocks,
-splitting rich text and requests at documented limits without truncation.
+The date is the workflow's canonical local diary day and `DDD` is its fixed
+uppercase English weekday (`MON` through `SUN`) regardless of entry language.
+New daily sections are appended at the bottom of the target month page. The
+body is mapped losslessly to native blocks, splitting rich text and requests at
+documented limits without truncation; unsupported constructs remain literal.
 
-A matching local receipt plus matching month page ID, block IDs, heading, and content is
-already published. A same-day heading without that match is ambiguous: Phase 1
-stops and requires user resolution instead of updating or duplicating it. After
-an ambiguous write, paginate and read before retrying. `429` and `529` respect
-`Retry-After`; non-idempotent writes are never blindly replayed.
+A matching local receipt plus matching month page ID, block IDs, heading, and
+content is already published. A matching unresolved intent can become that
+receipt only by reconciling its exact plan. A same-day heading without either
+ownership record is ambiguous: Phase 1 stops and requires user resolution
+instead of updating or duplicating it. After an ambiguous write, paginate and
+read before retrying. `429` and `529` respect `Retry-After`; non-idempotent
+writes are never blindly replayed.
 
 The owner deferred inspection of the configured root to the runtime preflight.
 Publication remains disabled if permissions, page hierarchy, or same-day

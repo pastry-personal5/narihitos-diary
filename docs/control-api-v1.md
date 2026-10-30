@@ -3,8 +3,9 @@
 Status: Active
 
 This document describes how the terminal client attaches to the loopback
-server. The REST namespace remains `/v1`; P1-M8 advances the current native
-`contract_version` to `3` and rejects incompatible clients. The checked Rust
+server. The REST namespace remains `/v1`; P1-M10 advances the current native
+`contract_version` to `4` for the typed Notion preview resources and rejects
+incompatible clients. The checked Rust
 DTO and route table in
 `diary-control-contract` remain the executable contract.
 
@@ -33,6 +34,10 @@ source preparation and confirmation, explicit no-notes continuation, writing
 settings, assistant backend selection, memory extraction/review, draft
 requests/results, paragraph-review suggestions/resolution, opening the Draft
 editor for manual composition, entry save/confirmation, jobs, and events.
+P1-M9 exposes local output preview/approval/publication resources; P1-M10 adds
+separate Notion-only preview/approval/publication resources after a verified
+local receipt. Notion previews contain safe path labels and exact projected
+blocks, never credentials or remote IDs.
 Output, amendment, publication, and `/mcp` routes do not exist.
 `source:read`, including availability-aware discovery and preparation, is
 advertised and accepted only while the Swift helper is available; its absence

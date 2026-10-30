@@ -22,7 +22,8 @@ pub use digest::Digest;
 pub use local_markdown::render_local_markdown;
 pub use ports::{
     Clock, Destination, DraftAssistant, IntentTerminal, LocalOutputError, LocalOutputPort,
-    LocalOutputState, OperationLog, SourceCatalog, SourceCheckpointError, SourceReader,
+    LocalOutputState, NotionBlockPreview, NotionOutputPort, NotionPreflight, NotionPreflightStatus,
+    NotionRequest, OperationLog, SourceCatalog, SourceCheckpointError, SourceReader,
     SourceWriteError, SourceWriter, StartOutcome, StoreError, WorkflowStore,
     revalidate_workflow_sources, start_default_workflow,
 };

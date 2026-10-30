@@ -94,6 +94,13 @@ pub enum DiagnosticEvent {
     /// to diagnose a `preparation-expired`/`preparation-binding-changed`
     /// rejection. Never the handle value itself, workflow day, or source IDs.
     Preparation { event: &'static str },
+    /// The outcome of a Notion-only preview: `status` is the destination
+    /// status and `reason` a closed `notion-*` token (or `none`/`other`),
+    /// never a title, identifier, or response text.
+    NotionPreview {
+        status: &'static str,
+        reason: &'static str,
+    },
     /// A content-free picture of a workflow at an assistant job's start or
     /// failure, so a rejection such as `reviewed-memory-required` can be
     /// matched to the state that caused it. Only closed tokens, booleans,
@@ -502,6 +509,18 @@ fn encode(
             }
             ("preparation", event, Vec::new())
         }
+        DiagnosticEvent::NotionPreview { status, reason } => {
+            if !NOTION_PREVIEW_STATUSES.contains(&status)
+                || !NOTION_PREVIEW_REASONS.contains(&reason)
+            {
+                return Err(DiagnosticError::InvalidRecord);
+            }
+            (
+                "notion",
+                "preview",
+                vec![("reason", reason.to_owned()), ("status", status.to_owned())],
+            )
+        }
         DiagnosticEvent::AssistantState(snapshot) => {
             if !ASSISTANT_KINDS.contains(&snapshot.kind)
                 || !matches!(snapshot.phase, "start" | "failed")
@@ -822,6 +841,37 @@ const fn optional(name: &'static str, kind: ValueKind) -> KeySpec {
     }
 }
 
+/// Destination statuses a Notion preview can report.
+pub const NOTION_PREVIEW_STATUSES: &[&str] = &["pending", "blocked", "conflict"];
+
+/// Closed reason tokens for a Notion preview record; `other` absorbs any
+/// token this build does not list so free text can never reach the log.
+pub const NOTION_PREVIEW_REASONS: &[&str] = &[
+    "none",
+    "other",
+    "notion-config-invalid",
+    "notion-credential-invalid",
+    "notion-hierarchy-ambiguous",
+    "notion-not-configured",
+    "notion-permission-denied",
+    "notion-remote-unavailable",
+    "notion-render-invalid",
+    "notion-response-invalid",
+    "notion-retry-deferred",
+    "notion-root-unverifiable",
+    "notion-same-day-conflict",
+    "notion-unavailable",
+    "notion-write-ambiguous",
+];
+
+fn vocab_notion_status(value: &str) -> bool {
+    NOTION_PREVIEW_STATUSES.contains(&value)
+}
+
+fn vocab_notion_reason(value: &str) -> bool {
+    NOTION_PREVIEW_REASONS.contains(&value)
+}
+
 fn vocab_job_kind(value: &str) -> bool {
     matches!(value, "discovery" | "source-preparation") || ASSISTANT_KINDS.contains(&value)
 }
@@ -883,6 +933,10 @@ const SNAPSHOT_SPEC: &[KeySpec] = &[
     optional("draft_ranges", ValueKind::Number),
     optional("entry_markers", ValueKind::Number),
 ];
+const NOTION_PREVIEW_SPEC: &[KeySpec] = &[
+    required("reason", ValueKind::Vocab(vocab_notion_reason)),
+    required("status", ValueKind::Vocab(vocab_notion_status)),
+];
 const MIGRATION_SPEC: &[KeySpec] = &[
     required("duration_ms", ValueKind::Number),
     required("from", ValueKind::Number),
@@ -907,6 +961,7 @@ fn record_spec(component: &str, event: &str) -> Option<&'static [KeySpec]> {
         }
         ("job", "accepted" | "running" | "completed" | "failed" | "cancelled") => Some(JOB_SPEC),
         ("assistant", "snapshot") => Some(SNAPSHOT_SPEC),
+        ("notion", "preview") => Some(NOTION_PREVIEW_SPEC),
         (
             "store",
             "migration-current" | "migration-started" | "migration-step" | "migration-finished"
@@ -1327,6 +1382,41 @@ mod tests {
                 DiagnosticLevel::Debug,
                 DiagnosticEvent::Preparation {
                     event: "not-a-real-event",
+                },
+            ),
+            Err(DiagnosticError::InvalidRecord)
+        );
+    }
+
+    #[test]
+    fn notion_preview_records_a_closed_reason_and_rejects_free_text() {
+        let scratch = Scratch::new("notion-preview");
+        let clock = Arc::new(FixedClock::new(1));
+        let uid = fs::metadata(scratch.path()).unwrap().uid();
+        let log = DiagnosticLog::open_with_min_level(
+            scratch.path().join("logs"),
+            uid,
+            clock,
+            DiagnosticLevel::Debug,
+        )
+        .unwrap();
+        log.write(
+            DiagnosticLevel::Debug,
+            DiagnosticEvent::NotionPreview {
+                status: "blocked",
+                reason: "notion-root-unverifiable",
+            },
+        )
+        .unwrap();
+        let text = fs::read_to_string(log.root().join(ACTIVE_NAME)).unwrap();
+        assert!(text.contains("component=notion event=preview"));
+        assert!(text.contains("reason=notion-root-unverifiable status=blocked"));
+        assert_eq!(
+            log.write(
+                DiagnosticLevel::Debug,
+                DiagnosticEvent::NotionPreview {
+                    status: "blocked",
+                    reason: "page abc123 not found",
                 },
             ),
             Err(DiagnosticError::InvalidRecord)

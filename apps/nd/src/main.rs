@@ -11,7 +11,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use diary_connectors::{
     AppleBridgeClient, AppleFoundationAssistant, AyumiCatalog, AyumiSource, LocalOutput,
-    MigrationEvent, MigrationObserver, SqliteStore,
+    MigrationEvent, MigrationObserver, NotionClient, SqliteStore,
 };
 use diary_control::{
     CodexAssistant, CommandService, DiagnosticEvent, DiagnosticLevel, DiagnosticLog,
@@ -19,9 +19,9 @@ use diary_control::{
     bind_loopback, load_or_create_tag_key, load_runtime_attachment, random_id, serve,
 };
 use diary_control_contract::{
-    CONTRACT_VERSION, CapabilitiesDto, JOB_NOT_FOUND, LocalPreviewDto, PreferencesDto,
-    ResolveParagraphSuggestionRequest, SetupCheckDto, SourceDetailDto, StartParagraphReviewRequest,
-    WorkflowDto, buffer_etag, job_status,
+    CONTRACT_VERSION, CapabilitiesDto, JOB_NOT_FOUND, LocalPreviewDto, NotionPreviewDto,
+    PreferencesDto, ResolveParagraphSuggestionRequest, SetupCheckDto, SourceDetailDto,
+    StartParagraphReviewRequest, WorkflowDto, buffer_etag, job_status,
 };
 use diary_core::{
     AssistantBackendId, Clock, DiaryDay, Digest, DraftAssistant, DraftAssistantRegistry,
@@ -265,7 +265,7 @@ async fn run_server() -> Result<(), &'static str> {
     .map_err(|_| "helper-init-failed")?;
     let apple_assistant = AppleFoundationAssistant::new(bridge.clone(), helper_available);
     let source = Arc::new(AyumiSource::new(catalog, bridge));
-    let commands = CommandService::new_with_writer(
+    let mut commands = CommandService::new_with_writer(
         store.clone(),
         source.clone(),
         source.clone(),
@@ -275,11 +275,25 @@ async fn run_server() -> Result<(), &'static str> {
     .with_local_output(Arc::new(
         LocalOutput::new(lifecycle.entries_root.clone()).map_err(|_| "entry-root-invalid")?,
     ));
+    if let Some(notion) = lifecycle
+        .notion_runtime_config()
+        .map_err(configuration_error)?
+    {
+        commands = commands.with_notion_output(Arc::new(
+            NotionClient::new(notion.token(), notion.root_page_id())
+                .map_err(|_| "notion-config-invalid")?,
+        ));
+    }
     let recovery_commands = commands.clone();
     tokio::task::spawn_blocking(move || recovery_commands.reconcile_local_intents())
         .await
         .map_err(|_| "publication-recovery-task-failed")?
         .map_err(|_| "publication-recovery-failed")?;
+    let recovery_commands = commands.clone();
+    tokio::task::spawn_blocking(move || recovery_commands.reconcile_notion_intents())
+        .await
+        .map_err(|_| "notion-recovery-task-failed")?
+        .map_err(|_| "notion-recovery-failed")?;
 
     let (listener, port) = bind_loopback(lifecycle.port_fallback_count).await?;
     let instance_id = random_id("instance_").map_err(|_| "random-failed")?;
@@ -801,6 +815,7 @@ fn run_connected_session(
     let mut preferences: Option<PreferencesDto> = None;
     let mut current_workflow: Option<WorkflowDto> = None;
     let mut local_preview: Option<LocalPreviewDto> = None;
+    let mut notion_preview: Option<NotionPreviewDto> = None;
     let mut local_action_pending = false;
     let mut local_publication_job: Option<String> = None;
     let mut conflict_day_editing = false;
@@ -985,6 +1000,7 @@ fn run_connected_session(
                         ClientOutcome::Ok(workflow) => {
                             selected_day = Some(workflow.diary_day.clone());
                             local_preview = None;
+                            notion_preview = None;
                             let model = map_workflow(Some(&workflow), false);
                             current_stage = model.default_current;
                             sources_view.load_candidates_from(&workflow);
@@ -1534,6 +1550,53 @@ fn run_connected_session(
                         }
                     }
                 }
+                WorkerResult::NotionPreviewed(outcome) => {
+                    local_action_pending = false;
+                    match *outcome {
+                        ClientOutcome::Ok(preview) => {
+                            current_workflow = Some(preview.workflow.clone());
+                            let ready = preview.status == "pending";
+                            notion_preview = Some(preview);
+                            feedback = Some(if ready {
+                                "Notion plan ready; inspect every projected block before approval"
+                                    .to_owned()
+                            } else {
+                                "Notion preflight is blocked or conflicted".to_owned()
+                            });
+                        }
+                        ClientOutcome::Problem(problem) => feedback = Some(problem.safe_label()),
+                        ClientOutcome::Transport(error) => {
+                            feedback = Some(error.safe_label().to_owned())
+                        }
+                    }
+                }
+                WorkerResult::NotionApproved(outcome) => {
+                    local_action_pending = false;
+                    match *outcome {
+                        ClientOutcome::Ok(workflow) => {
+                            current_workflow = Some(workflow);
+                            current_stage = Stage::Publish;
+                            feedback = Some("Exact Notion block plan approved".to_owned());
+                        }
+                        ClientOutcome::Problem(problem) => feedback = Some(problem.safe_label()),
+                        ClientOutcome::Transport(error) => {
+                            feedback = Some(error.safe_label().to_owned())
+                        }
+                    }
+                }
+                WorkerResult::NotionPublished(outcome) => {
+                    local_action_pending = false;
+                    match outcome {
+                        ClientOutcome::Ok(job) => {
+                            local_publication_job = Some(job.job_id);
+                            feedback = Some("Notion publication started".to_owned());
+                        }
+                        ClientOutcome::Problem(problem) => feedback = Some(problem.safe_label()),
+                        ClientOutcome::Transport(error) => {
+                            feedback = Some(error.safe_label().to_owned())
+                        }
+                    }
+                }
                 WorkerResult::SavedUnderDay(outcome) => {
                     local_action_pending = false;
                     match *outcome {
@@ -1545,6 +1608,7 @@ fn run_connected_session(
                             draft_editor = DraftEditor::new(&compose_view.text);
                             current_workflow = Some(workflow);
                             local_preview = None;
+                            notion_preview = None;
                             feedback = Some(
                                 "Target day opened; review and confirm its entry before output"
                                     .to_owned(),
@@ -1934,7 +1998,9 @@ fn run_connected_session(
                 &compose_view,
                 entry_confirmation_pending,
             ),
-            Stage::Preview => preview_screen_body(&focus, local_preview.as_ref()),
+            Stage::Preview => {
+                preview_screen_body(&focus, local_preview.as_ref(), notion_preview.as_ref())
+            }
             Stage::Publish => publish_screen_body(&focus, current_workflow.as_ref()),
         };
         let drawn = guard.terminal_mut().draw(|frame| {
@@ -3018,15 +3084,39 @@ fn run_connected_session(
                     {
                         match focus.main_control_index {
                             0 => {
-                                local_action_pending = worker
-                                    .try_send(Intent::PreviewLocal {
-                                        workflow_id: workflow.id.clone(),
-                                        revision: workflow.revision,
-                                    })
-                                    .is_ok();
+                                local_action_pending =
+                                    if workflow.local_status.as_deref() == Some("verified") {
+                                        worker
+                                            .try_send(Intent::PreviewNotion {
+                                                workflow_id: workflow.id.clone(),
+                                                revision: workflow.revision,
+                                            })
+                                            .is_ok()
+                                    } else {
+                                        worker
+                                            .try_send(Intent::PreviewLocal {
+                                                workflow_id: workflow.id.clone(),
+                                                revision: workflow.revision,
+                                            })
+                                            .is_ok()
+                                    };
                             }
                             1 if workflow.state == "output-planned" => {
-                                if let Some(preview) = &local_preview {
+                                if workflow.local_status.as_deref() == Some("verified") {
+                                    if let Some(digest) = notion_preview
+                                        .as_ref()
+                                        .filter(|preview| preview.status == "pending")
+                                        .and_then(|preview| preview.plan_digest.clone())
+                                    {
+                                        local_action_pending = worker
+                                            .try_send(Intent::ApproveNotion {
+                                                workflow_id: workflow.id.clone(),
+                                                revision: workflow.revision,
+                                                plan_digest: digest,
+                                            })
+                                            .is_ok();
+                                    }
+                                } else if let Some(preview) = &local_preview {
                                     local_action_pending = worker
                                         .try_send(Intent::ApproveLocal {
                                             workflow_id: workflow.id.clone(),
@@ -3065,12 +3155,22 @@ fn run_connected_session(
                         && let Some(workflow) = &current_workflow
                     {
                         if workflow.state == "approved" || workflow.state == "partial" {
-                            local_action_pending = worker
-                                .try_send(Intent::PublishLocal {
-                                    workflow_id: workflow.id.clone(),
-                                    revision: workflow.revision,
-                                })
-                                .is_ok();
+                            local_action_pending =
+                                if workflow.local_status.as_deref() == Some("verified") {
+                                    worker
+                                        .try_send(Intent::PublishNotion {
+                                            workflow_id: workflow.id.clone(),
+                                            revision: workflow.revision,
+                                        })
+                                        .is_ok()
+                                } else {
+                                    worker
+                                        .try_send(Intent::PublishLocal {
+                                            workflow_id: workflow.id.clone(),
+                                            revision: workflow.revision,
+                                        })
+                                        .is_ok()
+                                };
                         } else {
                             feedback = Some("No approved local write is pending".to_owned());
                         }
@@ -3283,7 +3383,11 @@ fn review_screen_body(
     )
 }
 
-fn preview_screen_body(focus: &FocusModel, preview: Option<&LocalPreviewDto>) -> String {
+fn preview_screen_body(
+    focus: &FocusModel,
+    preview: Option<&LocalPreviewDto>,
+    notion: Option<&NotionPreviewDto>,
+) -> String {
     let marker = |index| {
         if focus.zone == FocusZone::Main && focus.main_control_index == index {
             ">"
@@ -3297,7 +3401,38 @@ fn preview_screen_body(focus: &FocusModel, preview: Option<&LocalPreviewDto>) ->
         marker(1),
         marker(2)
     );
-    if let Some(preview) = preview {
+    if let Some(notion) = notion {
+        text.push_str(&format!(
+            "Path: {}\nRenderer: {} · API: {}\nSHA-256: {}\nNotion: {}\nYear: {} · Month: {}\n",
+            notion.path.join(" → "),
+            notion.renderer_version,
+            notion.api_version,
+            notion.payload_digest,
+            notion.status,
+            if notion.year_exists {
+                "existing"
+            } else {
+                "create"
+            },
+            if notion.month_exists {
+                "existing"
+            } else {
+                "create"
+            },
+        ));
+        if let Some(reason) = &notion.reason {
+            text.push_str(&format!("Reason: {reason}\n"));
+        }
+        text.push('\n');
+        for block in &notion.blocks {
+            text.push_str(&format!(
+                "{}{}: {}\n",
+                "  ".repeat(usize::from(block.depth)),
+                block.kind,
+                block.text
+            ));
+        }
+    } else if let Some(preview) = preview {
         text.push_str(&format!(
             "Target: {}\nSHA-256: {}\nLocal: {}\nNotion: {}\n\n{}\n",
             preview.target,
@@ -3313,7 +3448,7 @@ fn preview_screen_body(focus: &FocusModel, preview: Option<&LocalPreviewDto>) ->
             text.push_str(&format!("\nExisting target (conflict):\n{existing}\n"));
         }
     } else {
-        text.push_str("Generate a read-only output preview to inspect the exact file.\n");
+        text.push_str("Generate a read-only output preview to inspect the exact destination.\n");
     }
     text
 }
@@ -3327,7 +3462,7 @@ fn publish_screen_body(focus: &FocusModel, workflow: Option<&WorkflowDto>) -> St
         }
     };
     format!(
-        "Local publication: {}\nNotion: {} (P1-M10)\n\n{} Publish approved local file\n{} Cancel pending publication",
+        "Local publication: {}\nNotion: {}\n\n{} Publish approved destination\n{} Cancel pending publication",
         workflow
             .and_then(|w| w.local_status.as_deref())
             .unwrap_or("pending"),
@@ -3724,6 +3859,7 @@ mod start_screen_tests {
             database_ready: true,
             apple_helper_available: false,
             notion_configured: false,
+            notion_reason_code: Some("notion-not-configured".to_owned()),
             manual_workflow_available: true,
         };
         let body = start_screen_body(
@@ -4058,7 +4194,7 @@ mod start_screen_tests {
             main_control_index: 2,
             ..FocusModel::default()
         };
-        let body = preview_screen_body(&focus, Some(&preview));
+        let body = preview_screen_body(&focus, Some(&preview), None);
         assert!(body.contains("planned"));
         assert!(body.contains("existing content"));
         assert!(body.contains("> Save conflict under another day"));

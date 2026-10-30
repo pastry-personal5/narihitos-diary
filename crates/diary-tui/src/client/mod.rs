@@ -20,13 +20,13 @@ use diary_control_contract::{
     AssistantBackendListDto, CapabilitiesDto, ConfirmEntryRequest, ConfirmSelectionRequest,
     DeleteSourceRequest, DiscoveryRequest, DraftResultDto, EditSourceBodyRequest, HealthDto,
     JobAcceptedDto, JobDto, LocalApprovalRequest, LocalPreviewDto, MAX_RESPONSE_BYTES,
-    MAX_SOURCE_BYTES, MemoryReviewDto, ParagraphSuggestionDto, ParagraphSuggestionListDto,
-    PreferencesDto, PrepareSourcesRequest, PutAssistantSelectionRequest, PutMemoryReviewRequest,
-    RefineSourceRequest, ResolveParagraphSuggestionRequest, ResolveSourceRefineRequest,
-    SaveEntryRequest, SaveUnderDayRequest, SetupCheckDto, SourceDetailDto, SourceListDto,
-    SourceRefineSuggestionDto, StartDraftRequest, StartMemoryExtractionRequest,
-    StartParagraphReviewRequest, WorkflowDto, WorkflowListDto, WritingSettingsRequest, buffer_etag,
-    workflow_etag,
+    MAX_SOURCE_BYTES, MemoryReviewDto, NotionPreviewDto, ParagraphSuggestionDto,
+    ParagraphSuggestionListDto, PreferencesDto, PrepareSourcesRequest,
+    PutAssistantSelectionRequest, PutMemoryReviewRequest, RefineSourceRequest,
+    ResolveParagraphSuggestionRequest, ResolveSourceRefineRequest, SaveEntryRequest,
+    SaveUnderDayRequest, SetupCheckDto, SourceDetailDto, SourceListDto, SourceRefineSuggestionDto,
+    StartDraftRequest, StartMemoryExtractionRequest, StartParagraphReviewRequest, WorkflowDto,
+    WorkflowListDto, WritingSettingsRequest, buffer_etag, workflow_etag,
 };
 
 const SOURCE_DETAIL_RESPONSE_BYTES: usize = MAX_SOURCE_BYTES + 64 * 1024;
@@ -615,6 +615,59 @@ impl<T: Transport> ApiClient<T> {
         self.send_json(
             "POST",
             &format!("/v1/workflows/{workflow_id}/local-publications"),
+            Some(b"{}".to_vec()),
+            Some(workflow_etag(revision)),
+            MAX_RESPONSE_BYTES,
+            attachment,
+        )
+    }
+
+    pub fn preview_notion(
+        &self,
+        attachment: &Attachment,
+        workflow_id: &str,
+        revision: u64,
+    ) -> ClientOutcome<NotionPreviewDto> {
+        self.send_json(
+            "POST",
+            &format!("/v1/workflows/{workflow_id}/notion-previews"),
+            Some(b"{}".to_vec()),
+            Some(workflow_etag(revision)),
+            MAX_RESPONSE_BYTES,
+            attachment,
+        )
+    }
+
+    pub fn approve_notion(
+        &self,
+        attachment: &Attachment,
+        workflow_id: &str,
+        revision: u64,
+        plan_digest: &str,
+    ) -> ClientOutcome<WorkflowDto> {
+        let body = serde_json::to_vec(&LocalApprovalRequest {
+            plan_digest: plan_digest.to_owned(),
+        })
+        .unwrap_or_default();
+        self.send_json(
+            "POST",
+            &format!("/v1/workflows/{workflow_id}/notion-approvals"),
+            Some(body),
+            Some(workflow_etag(revision)),
+            MAX_RESPONSE_BYTES,
+            attachment,
+        )
+    }
+
+    pub fn publish_notion(
+        &self,
+        attachment: &Attachment,
+        workflow_id: &str,
+        revision: u64,
+    ) -> ClientOutcome<JobAcceptedDto> {
+        self.send_json(
+            "POST",
+            &format!("/v1/workflows/{workflow_id}/notion-publications"),
             Some(b"{}".to_vec()),
             Some(workflow_etag(revision)),
             MAX_RESPONSE_BYTES,

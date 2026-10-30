@@ -27,6 +27,11 @@ Each decision is recorded in full in the doc that owns its topic; this is the in
 - **Apple on-device adapter:** targets the latest stable macOS/Foundation Models SDK only (no older-OS deployment floor). Supports all four assistant actions (extraction, drafting, paragraph review, and Ayumi source refinement) for both en-US and ko-KR where the action produces entry prose; source refinement operates on en-US Ayumi text. This matches the Codex hosted default. Request and response payloads, including a drafted entry approaching the 512 KiB entry bound, travel over the Swift bridge's in-band frame with its cap raised to cover that bound, not the P1-M5 private handoff-file transport. See [docs/phase-1/milestone-08-draft-assistants-overview.md](docs/phase-1/milestone-08-draft-assistants-overview.md).
 - **Product behavior:** source discovery and selection, composition and hosted data egress, draft/source retention, local and Notion publication, conflicts, and amendments. See [docs/product-behavior.md](docs/product-behavior.md).
 - **Local output front matter:** P1-M9 uses YAML keys `date` and `language`. See [docs/phase-1/milestone-09-local-publication-recovery-overview.md](docs/phase-1/milestone-09-local-publication-recovery-overview.md).
+- **Notion publication format:** P1-M10 appends a native `heading_2` formatted
+  `YYYY-MM-DD (DDD)` with fixed uppercase English weekdays, followed by a
+  lossless native-block projection of the confirmed Markdown body. Unrelated
+  hierarchy content is allowed; canonical year/month matches must be unique.
+  See [docs/phase-1/milestone-10-notion-publication-overview.md](docs/phase-1/milestone-10-notion-publication-overview.md).
 - **Ayumi source maintenance:** Sources-stage approval/edit writes the real
   note; explicitly confirmed deletion hard-deletes that note and only its
   safely resolved linked audio. Audio bytes are never read or sent. See

@@ -13,9 +13,10 @@ use std::thread::{self, JoinHandle};
 
 use diary_control_contract::{
     AssistantBackendListDto, CapabilitiesDto, DraftResultDto, JobAcceptedDto, JobDto,
-    LocalPreviewDto, MemoryReviewDto, ParagraphSuggestionDto, ParagraphSuggestionListDto,
-    PreferencesDto, ResolveParagraphSuggestionRequest, SetupCheckDto, SourceListDto,
-    SourceRefineSuggestionDto, StartParagraphReviewRequest, WorkflowDto, WorkflowListDto,
+    LocalPreviewDto, MemoryReviewDto, NotionPreviewDto, ParagraphSuggestionDto,
+    ParagraphSuggestionListDto, PreferencesDto, ResolveParagraphSuggestionRequest, SetupCheckDto,
+    SourceListDto, SourceRefineSuggestionDto, StartParagraphReviewRequest, WorkflowDto,
+    WorkflowListDto,
 };
 
 use crate::client::{ApiClient, Attachment, ClientOutcome, SourceDetailResponse, Transport};
@@ -147,6 +148,19 @@ pub enum Intent {
         workflow_id: String,
         revision: u64,
     },
+    PreviewNotion {
+        workflow_id: String,
+        revision: u64,
+    },
+    ApproveNotion {
+        workflow_id: String,
+        revision: u64,
+        plan_digest: String,
+    },
+    PublishNotion {
+        workflow_id: String,
+        revision: u64,
+    },
     SaveUnderDay {
         workflow_id: String,
         revision: u64,
@@ -233,6 +247,9 @@ pub enum WorkerResult {
     LocalPreviewed(Box<ClientOutcome<LocalPreviewDto>>),
     LocalApproved(Box<ClientOutcome<WorkflowDto>>),
     LocalPublished(ClientOutcome<JobAcceptedDto>),
+    NotionPreviewed(Box<ClientOutcome<NotionPreviewDto>>),
+    NotionApproved(Box<ClientOutcome<WorkflowDto>>),
+    NotionPublished(ClientOutcome<JobAcceptedDto>),
     SavedUnderDay(Box<ClientOutcome<WorkflowDto>>),
     AssistantBackends(ClientOutcome<AssistantBackendListDto>),
     AssistantSelected(Box<ClientOutcome<WorkflowDto>>),
@@ -529,6 +546,32 @@ impl Worker {
                 &workflow_id,
                 revision,
             )),
+            Intent::PreviewNotion {
+                workflow_id,
+                revision,
+            } => WorkerResult::NotionPreviewed(Box::new(client.preview_notion(
+                attachment,
+                &workflow_id,
+                revision,
+            ))),
+            Intent::ApproveNotion {
+                workflow_id,
+                revision,
+                plan_digest,
+            } => WorkerResult::NotionApproved(Box::new(client.approve_notion(
+                attachment,
+                &workflow_id,
+                revision,
+                &plan_digest,
+            ))),
+            Intent::PublishNotion {
+                workflow_id,
+                revision,
+            } => WorkerResult::NotionPublished(client.publish_notion(
+                attachment,
+                &workflow_id,
+                revision,
+            )),
             Intent::SaveUnderDay {
                 workflow_id,
                 revision,
@@ -778,6 +821,7 @@ mod tests {
                         "database_ready": true,
                         "apple_helper_available": false,
                         "notion_configured": false,
+                        "notion_reason_code": "notion-not-configured",
                         "manual_workflow_available": true
                     })
                     .to_string()
