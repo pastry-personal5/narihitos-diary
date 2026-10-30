@@ -7,11 +7,11 @@ use diary_core::{
     DiaryDay, Digest, DraftAssistantError, DraftAssistantRegistry, FreshnessCheckpoint,
     FreshnessOutcome, InspectionOutcome, LocalOutputError, LocalOutputPort, LocalOutputState,
     NotionBlockPreview, NotionOutputPort, NotionPreflightStatus, NotionRequest, OperationIntent,
-    OperationLog, OutputPlan, Preferences, PublicationCoordinator, PublicationResult,
-    ReconciliationGate, ReflectionRange, RegistryInvokeError, SelectedSource, SourceAccessError,
-    SourceCatalog, SourceReadOutcome, SourceReader, SourceRef, SourceWriteError, SourceWriter,
-    StartOutcome, StoreError, Timestamp, Workflow, WorkflowError, WorkflowStore, WorkflowSummary,
-    WriteOutcome, WritingLanguage, WritingStyle, render_local_markdown,
+    OperationLog, OutputPlan, Preferences, PublicationCoordinator, PublicationError,
+    PublicationResult, ReconciliationGate, ReflectionRange, RegistryInvokeError, SelectedSource,
+    SourceAccessError, SourceCatalog, SourceReadOutcome, SourceReader, SourceRef, SourceWriteError,
+    SourceWriter, StartOutcome, StoreError, Timestamp, Workflow, WorkflowError, WorkflowStore,
+    WorkflowSummary, WriteOutcome, WritingLanguage, WritingStyle, render_local_markdown,
     revalidate_workflow_sources,
 };
 
@@ -141,6 +141,18 @@ impl CommandService {
         self.store
             .start_or_resume(day, self.clock.now(), &preferences)
             .map_err(CommandError::Store)
+    }
+
+    /// Receipt and unresolved-intent counts for a day, for the content-free
+    /// publication diagnostics.
+    pub fn publication_counts(&self, day: &DiaryDay) -> Result<(u64, u64), CommandError> {
+        let receipts = self.store.receipts(day).map_err(CommandError::Store)?.len();
+        let unresolved = self
+            .store
+            .unresolved_intents(Some(day))
+            .map_err(CommandError::Store)?
+            .len();
+        Ok((receipts as u64, unresolved as u64))
     }
 
     pub fn load_workflow(&self, day: &DiaryDay) -> Result<Workflow, CommandError> {
@@ -1729,7 +1741,12 @@ impl CommandService {
                 1,
                 self.clock.now(),
             )
-            .map_err(|_| CommandError::LocalOutput(LocalOutputError::Unavailable))?;
+            .map_err(|error| match error {
+                PublicationError::Store(error) => CommandError::Store(error),
+                PublicationError::InvalidOutcome => {
+                    CommandError::LocalOutput(LocalOutputError::Unavailable)
+                }
+            })?;
             let status = match result {
                 PublicationResult::Verified(_) => DestinationStatus::Verified,
                 PublicationResult::Conflict => DestinationStatus::Conflict,
@@ -1847,7 +1864,12 @@ impl CommandService {
                 1,
                 self.clock.now(),
             )
-            .map_err(|_| CommandError::LocalOutput(LocalOutputError::Unavailable))?;
+            .map_err(|error| match error {
+                PublicationError::Store(error) => CommandError::Store(error),
+                PublicationError::InvalidOutcome => {
+                    CommandError::LocalOutput(LocalOutputError::Unavailable)
+                }
+            })?;
             let status = match result {
                 PublicationResult::Verified(_) => DestinationStatus::Verified,
                 PublicationResult::Conflict => DestinationStatus::Conflict,
@@ -2268,15 +2290,47 @@ pub enum CommandError {
     NotionUnavailable,
 }
 
+/// Buckets a SQLite failure message into a closed token so the diagnostic log
+/// can tell a lock from a missing column without carrying the message itself.
+fn unavailable_diagnostic_code(detail: &str) -> &'static str {
+    let detail = detail.to_ascii_lowercase();
+    [
+        ("locked", "state-locked"),
+        ("busy", "state-locked"),
+        ("readonly", "state-readonly"),
+        ("read-only", "state-readonly"),
+        ("disk is full", "state-disk-full"),
+        ("disk i/o", "state-io"),
+        ("unable to open", "state-open-failed"),
+        ("no such table", "state-schema-mismatch"),
+        ("no such column", "state-schema-mismatch"),
+        ("constraint", "state-constraint"),
+        ("trigger", "state-constraint"),
+        ("query returned no rows", "state-row-missing"),
+        ("out of range", "state-row-invalid"),
+        ("invalid column", "state-row-invalid"),
+        ("invalid type", "state-row-invalid"),
+    ]
+    .into_iter()
+    .find(|(needle, _)| detail.contains(needle))
+    .map_or("state-unavailable", |(_, token)| token)
+}
+
 impl CommandError {
     /// The log-only counterpart of [`Self::code`]. The wire code folds many
     /// workflow errors into `workflow-conflict`; the diagnostic log needs the
     /// exact failed check, and the matches below stay wildcard-free so a new
     /// `WorkflowError` cannot ship without a token.
     #[must_use]
-    pub const fn diagnostic_code(&self) -> &'static str {
+    pub fn diagnostic_code(&self) -> &'static str {
         match self {
             Self::Workflow(error) => workflow_diagnostic_code(error),
+            Self::Assistant(DraftAssistantError::InvalidOutputAt(reason)) => reason,
+            Self::Store(StoreError::DuplicateDay) => "state-duplicate-day",
+            Self::Store(StoreError::UnsupportedSchema(_)) => "state-unsupported-schema",
+            Self::Store(StoreError::Corrupt(_)) => "state-corrupt",
+            Self::Store(StoreError::InvalidRecord(_)) => "state-invalid-record",
+            Self::Store(StoreError::Unavailable(detail)) => unavailable_diagnostic_code(detail),
             other => other.code(),
         }
     }
@@ -2305,7 +2359,9 @@ impl CommandError {
             }
             Self::Assistant(DraftAssistantError::Refused) => "assistant-refused",
             Self::Assistant(DraftAssistantError::ContextOverflow) => "assistant-context-overflow",
-            Self::Assistant(DraftAssistantError::InvalidOutput) => "assistant-invalid-output",
+            Self::Assistant(
+                DraftAssistantError::InvalidOutput | DraftAssistantError::InvalidOutputAt(_),
+            ) => "assistant-invalid-output",
             Self::Assistant(DraftAssistantError::TimedOut) => "assistant-timeout",
             Self::Assistant(DraftAssistantError::Cancelled) => "operation-cancelled",
             Self::Workflow(WorkflowError::WrongState) => "wrong-state",
@@ -2410,5 +2466,24 @@ mod tests {
             CommandError::NotFound.diagnostic_code(),
             CommandError::NotFound.code()
         );
+    }
+
+    #[test]
+    fn store_failures_get_distinct_diagnostic_tokens_but_one_wire_code() {
+        let errors = [
+            (StoreError::DuplicateDay, "state-duplicate-day"),
+            (StoreError::UnsupportedSchema(9), "state-unsupported-schema"),
+            (StoreError::Corrupt(String::new()), "state-corrupt"),
+            (
+                StoreError::InvalidRecord(String::new()),
+                "state-invalid-record",
+            ),
+            (StoreError::Unavailable(String::new()), "state-unavailable"),
+        ];
+        for (error, token) in errors {
+            let error = CommandError::Store(error);
+            assert_eq!(error.code(), "state-unavailable");
+            assert_eq!(error.diagnostic_code(), token);
+        }
     }
 }

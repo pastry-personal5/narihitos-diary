@@ -38,7 +38,7 @@ This index lists the design and process docs, one line each. Read only the doc y
 | [phase-1/milestone-15-utility-sidebar-overview.md](phase-1/milestone-15-utility-sidebar-overview.md) | P1-M15 right Utility Sidebar, Diary Day and Assistant Widgets scope and completion checklist. |
 | [phase-1/milestone-15-utility-sidebar-architecture.md](phase-1/milestone-15-utility-sidebar-architecture.md) | P1-M15 layout bands, focus, and Widget plan. |
 | [phase-1/milestone-16-simple-sources-overview.md](phase-1/milestone-16-simple-sources-overview.md) | P1-M16 simple Sources stage scope and completion checklist. |
-| [phase-1/milestone-16-simple-sources-architecture.md](phase-1/milestone-16-simple-sources-architecture.md) | P1-M16 flat menu, Confirm Source List, shortcuts, hide, help overlay, and discovery plan. |
+| [phase-1/milestone-16-simple-sources-architecture.md](phase-1/milestone-16-simple-sources-architecture.md) | P1-M16 flat menu, Confirm Source List, shortcuts, hide, help overlay, discovery, and Work Status tip plan. |
 | [superpowers/specs/2026-10-30-icloud-output-design.md](superpowers/specs/2026-10-30-icloud-output-design.md) | iCloud Markdown mirror output design. |
 | [superpowers/plans/2026-10-30-icloud-output.md](superpowers/plans/2026-10-30-icloud-output.md) | iCloud mirror implementation plan. |
 | [phase-1/milestone-13-release-qualification-overview.md](phase-1/milestone-13-release-qualification-overview.md) | P1-M13 automated exit-criteria evidence matrix and qualification checklist. |

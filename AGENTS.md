@@ -42,7 +42,7 @@ Each decision is recorded in full in the doc that owns its topic; this is the in
   note; explicitly confirmed deletion hard-deletes that note and only its
   safely resolved linked audio. Audio bytes are never read or sent. See
   [docs/product-behavior.md](docs/product-behavior.md).
-- **Terminal UX:** canonical workflow stages and layout, keybindings, the Korean-IME input constraint, date display, and the target terminal. P1-M15 adds a right Utility Sidebar (Diary Day and Assistant Widgets); P1-M16 plans source-list letter shortcuts only while `IME: EN`, the one exception to no bare-letter hotkeys. See [docs/ux-tui.md](docs/ux-tui.md).
+- **Terminal UX:** canonical workflow stages and layout, keybindings, the Korean-IME input constraint, date display, and the target terminal. P1-M15 adds a right Utility Sidebar (Diary Day and Assistant Widgets); P1-M16 adds source-list letter shortcuts only while `IME: EN`, the one exception to no bare-letter hotkeys. See [docs/ux-tui.md](docs/ux-tui.md).
 - **License:** Apache-2.0 for all project code.
 - **Process:** numbered phases contain numbered milestones; milestone numbering restarts per phase. IDs use `P1-M2`. See [docs/development-process.md](docs/development-process.md).
 
@@ -70,6 +70,13 @@ Keep inspection bounded, for example:
 tail -n 200 .local/logs/control-api/control-api.log
 rg 'level=(WARN|ERROR)' .local/logs/control-api/
 ```
+
+Agents may run `nd serve` themselves to reproduce or verify a startup or server
+problem (owner-approved 2026-10-30). Start it in the background from the
+repository root, read only the bounded log output above, and stop the process
+when done. This approval does not cover reading the Application Support
+directory, the control token, or `diagnostic-tag-key`, and deleting persistent
+state still needs explicit confirmation.
 
 Failed-job `reason` tokens name the exact failed check, and Debug-level
 `component=assistant event=snapshot` records describe workflow state with flags,

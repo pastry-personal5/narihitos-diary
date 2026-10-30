@@ -274,7 +274,7 @@ qualification covers the final layout.
 
 ### P1-M16: Simple Sources stage
 
-Status: Planned
+Status: Done
 
 Goal: Reduce the TUI Sources stage to include/exclude, optional assistant
 refinement (accept or reject), and one Confirm Source List action.

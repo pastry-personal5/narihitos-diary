@@ -1,6 +1,6 @@
 # P1-M16: Simple Sources stage overview
 
-Status: Planned
+Status: In progress
 
 This milestone simplifies the TUI Sources stage to a short flat menu: include
 or exclude notes, optionally refine a note with the assistant and accept or
@@ -51,6 +51,9 @@ assistant refinement. No server, Control API, or decided-behavior change.
 - Help Overlay: `?` (or a "Shortcuts help" menu item) opens a large modal
   overlay listing every Sources-stage shortcut and the non-letter keys, built
   from the same table that routes the keys; Esc, Enter, or `?` closes it.
+- Work Status tip: the second Work Status row shows a one-line `Tip:` telling an
+  end user what to do to reach the next stage, for every stage, generated from
+  workflow state by a pure function.
 - Canonical terms `Confirm Source List` (`confirm_source_list`) and `Help
   Overlay` (`help_overlay`) in [UX terms](../ux-terms.md); docs for the Sources
   stage updated.
@@ -70,30 +73,30 @@ assistant refinement. No server, Control API, or decided-behavior change.
 
 ## Completion checklist
 
-- [ ] Step 1 finding re-verified against the code at implementation time
+- [x] Step 1 finding re-verified against the code at implementation time
   (confirmation needs only a fresh, single-use handle bound to the ordered
   `source_ids`; no per-note preview or review).
-- [ ] Confirm Source List confirms a source list in which no note's text was
+- [x] Confirm Source List confirms a source list in which no note's text was
   opened (client/headless test and the existing server harness).
 - [ ] An included note that is unreadable, unavailable, or still downloading
   blocks confirmation with a visible reason; nothing is confirmed.
 - [ ] Cloud-only included notes are downloaded by Confirm Source List, and only
   included ones.
-- [ ] With nothing included the control reads "Continue without notes", keeps
+- [x] With nothing included the control reads "Continue without notes", keeps
   its explicit confirmation, and the existing explicit-empty rule is unchanged.
 - [ ] More than 64 included notes disables Confirm Source List with a visible
   reason; an expired or mismatched handle fails visibly and the next attempt
   prepares again; View and Confirm cannot run at the same time.
-- [ ] Changing the included set after confirmation still requires a new
+- [x] Changing the included set after confirmation still requires a new
   confirmation before any later output.
 - [ ] Entering Sources starts discovery once for a workflow that allows it;
   re-entering with current results, a read-only or completed workflow, or after
   a failed discovery does not rediscover automatically; Refresh notes forces it.
-- [ ] Refine, Accept, and Reject still work; Accept/Reject appear only while a
+- [x] Refine, Accept, and Reject still work; Accept/Reject appear only while a
   suggestion is shown; a changed note still fails Accept safely.
-- [ ] Edit and Delete remain reachable in the flat menu; Delete keeps its
+- [x] Edit and Delete remain reachable in the flat menu; Delete keeps its
   Enter/Esc confirmation naming the linked-audio consequence.
-- [ ] The flat menu hides inapplicable items and keeps focus on a valid item
+- [x] The flat menu hides inapplicable items and keeps focus on a valid item
   after items appear or disappear; Refine, Accept, Reject, Edit, and Delete act
   only on the note shown for the focused row, and moving focus closes the shown
   text and suggestion.
@@ -102,26 +105,30 @@ assistant refinement. No server, Control API, or decided-behavior change.
   another zone or stage, or while the delete confirmation, extra-date field, or
   Help Overlay is open, or with a Ctrl/Alt modifier, they do nothing and are
   never typed into a buffer.
-- [ ] Each shortcut maps to the same action as its menu item (include, exclude,
+- [x] Each shortcut maps to the same action as its menu item (include, exclude,
   refine, reject, edit, delete-with-confirmation, refresh, add a date, load
   more), respects the same disabled conditions, and is case-insensitive.
 - [ ] Hide closes the hidden note's shown text and suggestion and is refused
   while that note has an unsaved edit.
-- [ ] Hide removes a note from the list and from the included set (so the
+- [x] Hide removes a note from the list and from the included set (so the
   preparation is invalidated if it was included), `u` restores it, the header
   counts hidden notes, hidden notes are never sent to Confirm Source List, and
   hiding survives Refresh notes but not a restart or a different workflow.
 - [ ] `?` opens the Help Overlay under the same gate; it is modal (other keys
   ignored, nothing typed through it), closes on Esc/Enter/`?`, and is reachable
   without a letter from the menu.
-- [ ] The Help Overlay text is generated from the shortcut table; a test fails
+- [x] The Help Overlay text is generated from the shortcut table; a test fails
   if a shortcut is missing from it, and the overlay fits and is readable at
   80x30 and at larger sizes (scrolls if content exceeds the pane).
-- [ ] No letter exists for Accept refinement or Confirm Source List.
-- [ ] Docs updated (`docs/README.md`, `product-behavior.md`, `ux-terms.md`,
+- [x] No letter exists for Accept refinement or Confirm Source List.
+- [x] The second Work Status row shows a `Tip:` for the next step in every
+  stage (Start through Publish, with and without a workflow), never displaces a
+  prompt, confirmation, or error on the notice row, and names only controls that
+  exist.
+- [x] Docs updated (`docs/README.md`, `product-behavior.md`, `ux-terms.md`,
   `ux-tui.md` including the Input constraint section, `user-guide-tui.md`
   including its "no bare-letter hotkeys" line and the Sources stage steps,
   `AGENTS.md` index line, phase doc, changelog).
-- [ ] Gate passes: `cargo fmt --all -- --check`,
+- [x] Gate passes: `cargo fmt --all -- --check`,
   `cargo clippy --all-targets --all-features -- -D warnings`,
   `cargo test --all-features`.

@@ -32,7 +32,7 @@ use tokio::sync::{Semaphore, mpsc, oneshot, watch};
 use crate::commands::{CommandError, CommandService};
 use crate::diagnostics::{
     AssistantSnapshot, DiagnosticEvent, DiagnosticLevel, DiagnosticLog, NOTION_PREVIEW_REASONS,
-    NOTION_PREVIEW_STATUSES,
+    NOTION_PREVIEW_STATUSES, PublicationSnapshot,
 };
 use crate::lifecycle::random_id;
 
@@ -1746,6 +1746,7 @@ async fn run_local_publication_job(
         fail_job(&state, &job_id, "internal-failure");
         return;
     };
+    let snapshot_day = day.clone();
     let service = state.0.config.commands.clone();
     let outcome = tokio::task::spawn_blocking(move || {
         service.publish_local_guarded(&day, revision, || {
@@ -1762,6 +1763,7 @@ async fn run_local_publication_job(
     .await;
     match outcome {
         Ok(Ok(workflow)) => {
+            log_publication_snapshot(&state, "local-publication", "finished", &snapshot_day).await;
             publish_event(
                 &state,
                 "workflow.changed",
@@ -1772,7 +1774,10 @@ async fn run_local_publication_job(
             );
             finish_job(&state, &job_id, None, None);
         }
-        Ok(Err(error)) => fail_job(&state, &job_id, error.diagnostic_code()),
+        Ok(Err(error)) => {
+            log_publication_snapshot(&state, "local-publication", "failed", &snapshot_day).await;
+            fail_job(&state, &job_id, error.diagnostic_code());
+        }
         Err(_) => fail_job(&state, &job_id, "internal-failure"),
     }
 }
@@ -1905,6 +1910,7 @@ async fn run_notion_publication_job(
     {
         return;
     }
+    let snapshot_day = day.clone();
     let service = state.0.config.commands.clone();
     let outcome = tokio::task::spawn_blocking(move || {
         service.publish_notion_guarded(&day, revision, &cancelled)
@@ -1912,6 +1918,7 @@ async fn run_notion_publication_job(
     .await;
     match outcome {
         Ok(Ok(workflow)) => {
+            log_publication_snapshot(&state, "notion-publication", "finished", &snapshot_day).await;
             publish_event(
                 &state,
                 "workflow.changed",
@@ -1922,7 +1929,10 @@ async fn run_notion_publication_job(
             );
             finish_job(&state, &job_id, None, None);
         }
-        Ok(Err(error)) => fail_job(&state, &job_id, error.diagnostic_code()),
+        Ok(Err(error)) => {
+            log_publication_snapshot(&state, "notion-publication", "failed", &snapshot_day).await;
+            fail_job(&state, &job_id, error.diagnostic_code());
+        }
         Err(_) => fail_job(&state, &job_id, "internal-failure"),
     }
 }
@@ -2126,6 +2136,12 @@ async fn run_amendment_job(
     {
         return;
     }
+    let amendment_kind = if notion_only {
+        "amendment-notion-retry"
+    } else {
+        "amendment-publication"
+    };
+    let snapshot_day = day.clone();
     let service = state.0.config.commands.clone();
     let outcome = tokio::task::spawn_blocking(move || {
         if notion_only {
@@ -2137,6 +2153,7 @@ async fn run_amendment_job(
     .await;
     match outcome {
         Ok(Ok(workflow)) => {
+            log_publication_snapshot(&state, amendment_kind, "finished", &snapshot_day).await;
             publish_event(
                 &state,
                 "workflow.changed",
@@ -2147,7 +2164,10 @@ async fn run_amendment_job(
             );
             finish_job(&state, &job_id, None, None);
         }
-        Ok(Err(error)) => fail_job(&state, &job_id, error.diagnostic_code()),
+        Ok(Err(error)) => {
+            log_publication_snapshot(&state, amendment_kind, "failed", &snapshot_day).await;
+            fail_job(&state, &job_id, error.diagnostic_code());
+        }
         Err(_) => fail_job(&state, &job_id, "internal-failure"),
     }
 }
@@ -2775,6 +2795,40 @@ async fn log_assistant_snapshot(
             let _ = log.write(
                 DiagnosticLevel::Debug,
                 DiagnosticEvent::AssistantState(snapshot),
+            );
+        }
+    })
+    .await;
+}
+
+/// Best-effort Debug-level snapshot of a day's publication state when a
+/// publication job ends. Reads on a blocking thread because the store is
+/// synchronous SQLite.
+async fn log_publication_snapshot(
+    state: &AppState,
+    kind: &'static str,
+    phase: &'static str,
+    day: &DiaryDay,
+) {
+    let Some(log) = state.0.config.diagnostics.clone() else {
+        return;
+    };
+    if !log.enabled(DiagnosticLevel::Debug) {
+        return;
+    }
+    let service = state.0.config.commands.clone();
+    let day = day.clone();
+    let _ = tokio::task::spawn_blocking(move || {
+        let Ok(workflow) = service.load_workflow(&day) else {
+            return;
+        };
+        let (receipts, unresolved) = service.publication_counts(&day).unwrap_or((0, 0));
+        if let Some(snapshot) =
+            PublicationSnapshot::capture(&log, &workflow, kind, phase, receipts, unresolved)
+        {
+            let _ = log.write(
+                DiagnosticLevel::Debug,
+                DiagnosticEvent::PublicationState(snapshot),
             );
         }
     })

@@ -368,6 +368,10 @@ nothing; only a mutation voids states.
 
 ### Publication and recovery
 
+`nd serve` does not run local, mirror, or Notion intent reconciliation at
+startup (owner decision 2026-10-30), so a recovery error cannot block the
+server; unresolved intents stay unreconciled until a recovery path is invoked.
+
 The local adapter targets configurable
 `~/Documents/narihitos-diary/entries/YYYY/MM/YYYY-MM-DD.md` and writes YAML
 front matter with diary day and language plus the confirmed Markdown body. It
@@ -382,7 +386,7 @@ enabled by `paths.icloud_entries_root`) reuses the local adapter on an
 iCloud-validated root and writes the same bytes after the local write is
 verified, in the same job and under the same plan approval. A blocked, evicted
 (`.<name>.icloud` placeholder), conflicting, or uncertain mirror leaves the day
-`Partial` and never changes local or Notion; startup reconciliation inspects an
+`Partial` and never changes local or Notion; reconciliation (`reconcile_mirror_intents`; not run at `nd serve` startup) inspects an
 uncertain mirror write before any retry, and `publish_mirror_guarded` retries
 the mirror alone. See the [iCloud output design](superpowers/specs/2026-10-30-icloud-output-design.md).
 

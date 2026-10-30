@@ -11,6 +11,36 @@ pub const MAX_MEMORY_CANDIDATES: usize = 128;
 pub const MAX_MEMORY_CANDIDATE_BYTES: usize = 4 * 1024;
 pub const MAX_REVIEWED_MEMORY_BYTES: usize = 512 * 1024;
 pub const MAX_SOURCE_ORDINALS: usize = 64;
+// Fixed, content-free reasons for structured-text validation failures. The
+// diagnostic log carries them verbatim, so they double as log tokens.
+const TEXT_EMPTY: &str = "assistant-output-text-empty";
+const TEXT_TOO_LARGE: &str = "assistant-output-text-too-large";
+const RANGES_TOO_MANY: &str = "assistant-output-ranges-too-many";
+const RESERVED_MARKER: &str = "assistant-output-reserved-marker";
+const RANGE_EMPTY: &str = "assistant-output-range-empty";
+const RANGE_OUT_OF_BOUNDS: &str = "assistant-output-range-out-of-bounds";
+const RANGE_NOT_CHAR_BOUNDARY: &str = "assistant-output-range-not-char-boundary";
+const RANGE_OVERLAP: &str = "assistant-output-range-overlap";
+
+/// The diagnostic token for a structured-text validation failure, or the
+/// generic `assistant-invalid-output` for any other value error.
+#[must_use]
+pub fn invalid_output_reason(error: &ValueError) -> &'static str {
+    [
+        TEXT_EMPTY,
+        TEXT_TOO_LARGE,
+        RANGES_TOO_MANY,
+        RESERVED_MARKER,
+        RANGE_EMPTY,
+        RANGE_OUT_OF_BOUNDS,
+        RANGE_NOT_CHAR_BOUNDARY,
+        RANGE_OVERLAP,
+    ]
+    .into_iter()
+    .find(|reason| *reason == error.message())
+    .unwrap_or("assistant-invalid-output")
+}
+
 pub const MAX_DRAFT_RESULT_BYTES: usize = 512 * 1024;
 pub const MAX_PARAGRAPH_BYTES: usize = 32 * 1024;
 pub const MAX_SUGGESTION_EXPLANATION_BYTES: usize = 4 * 1024;
@@ -520,9 +550,7 @@ pub struct SourceRefineSuggestion {
 
 fn reject_reserved_markers(text: &str) -> Result<(), ValueError> {
     if text.contains(REFLECTION_OPEN) || text.contains(REFLECTION_CLOSE) {
-        return Err(ValueError::new(
-            "text contains an unresolved reflection marker",
-        ));
+        return Err(ValueError::new(RESERVED_MARKER));
     }
     Ok(())
 }
@@ -532,19 +560,29 @@ fn validate_structured_text(
     ranges: &[ReflectionRange],
     max_bytes: usize,
 ) -> Result<(), ValueError> {
-    if text.is_empty() || text.len() > max_bytes || ranges.len() > MAX_REFLECTION_RANGES {
-        return Err(ValueError::new("invalid assistant structured text"));
+    if text.is_empty() {
+        return Err(ValueError::new(TEXT_EMPTY));
+    }
+    if text.len() > max_bytes {
+        return Err(ValueError::new(TEXT_TOO_LARGE));
+    }
+    if ranges.len() > MAX_REFLECTION_RANGES {
+        return Err(ValueError::new(RANGES_TOO_MANY));
     }
     reject_reserved_markers(text)?;
     let mut previous_end = 0;
     for (index, range) in ranges.iter().enumerate() {
-        if range.start >= range.end
-            || range.end > text.len()
-            || !text.is_char_boundary(range.start)
-            || !text.is_char_boundary(range.end)
-            || (index > 0 && range.start < previous_end)
-        {
-            return Err(ValueError::new("invalid reflection range"));
+        if range.start >= range.end {
+            return Err(ValueError::new(RANGE_EMPTY));
+        }
+        if range.end > text.len() {
+            return Err(ValueError::new(RANGE_OUT_OF_BOUNDS));
+        }
+        if !text.is_char_boundary(range.start) || !text.is_char_boundary(range.end) {
+            return Err(ValueError::new(RANGE_NOT_CHAR_BOUNDARY));
+        }
+        if index > 0 && range.start < previous_end {
+            return Err(ValueError::new(RANGE_OVERLAP));
         }
         previous_end = range.end;
     }

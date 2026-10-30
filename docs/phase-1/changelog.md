@@ -6,6 +6,16 @@ This changelog records owner decisions and material plan changes for Phase 1.
 
 ## Entries
 
+- 2026-10-30 — P1-M16 implemented — Work Status's second row now carries a
+  `Tip:` naming the next step to the following stage (owner request, added to
+  P1-M16). The Sources stage is the flat menu with Confirm Source List,
+  automatic first discovery, IME-gated list shortcuts, session-only hide, and a
+  modal Help Overlay. The plan check found the server already needs only a
+  single-use, ordered-ids preparation handle and no per-note review. Alt/Super
+  letter chords are now ignored by the input layer so a Meta-prefixed letter
+  never acts as a bare-letter shortcut. Refresh notes re-runs discovery with
+  the added extra date, if any.
+
 - 2026-10-30 — P1-M16 planned — Owner asked to simplify the TUI Sources stage:
   include or exclude, optional assistant refinement with accept or reject, no
   mandatory review of each note, and a Confirm Source List action. Accept keeps

@@ -39,9 +39,10 @@ does not mutate the server's authoritative domain state.
 | Active resource | `active_resource` | The item whose content is shown in the Main Pane. Activating a source note for inspection does not include or exclude it. |
 | Date disagreement | `date_disagreement` | Directory and valid header dates differ. Neither date overrides the person's selection. |
 | Source selection | `source_selection` | The included notes and their confirmed snapshots. |
-| Help Overlay | `help_overlay` | Planned (P1-M16): modal pane over the whole frame listing the Sources-stage shortcuts and common keys, opened with `?` (while `IME: EN`) or a menu item; Esc, Enter, or `?` closes it. |
-| Hidden source | `hidden_source` | Planned (P1-M16): a source note the person hid from the list for this session only; it is excluded and not shown, and no file or server state changes. |
-| Confirm Source List | `confirm_source_list` | Planned (P1-M16): the one Sources-stage action that prepares the included notes and confirms the source selection; reads "Continue without notes" when none are included. Replaces "Confirm reviewed source set"; no per-note review is required. |
+| Help Overlay | `help_overlay` | Modal pane over the whole frame listing the Sources-stage shortcuts and common keys, opened with `?` (while `IME: EN`) or a menu item; Esc, Enter, or `?` closes it. |
+| Next-step tip | `next_step_tip` | A one-line `Tip:` on the second Work Status row telling an end user what to do to reach the next stage; derived from canonical workflow state and never a decision. |
+| Hidden source | `hidden_source` | A source note the person hid from the list for this session only; it is excluded and not shown, and no file or server state changes. |
+| Confirm Source List | `confirm_source_list` | The one Sources-stage action that prepares the included notes and confirms the source selection; reads "Continue without notes" when none are included. Replaces "Confirm reviewed source set"; no per-note review is required. |
 | Download needed | `download_needed` | A selected iCloud note needs a local copy before it can be read. |
 | Memory review | `memory_review` | Optional review of assistant-extracted, source-linked memories. |
 | Draft editor | `draft_editor` | Always-available multiline editor used for both manual and assistant-created drafts. Manual editing is not an assistant backend or a composition path. |

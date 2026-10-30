@@ -107,6 +107,11 @@ pub enum DiagnosticEvent {
     /// counts, and keyed [`DiagnosticTag`]s — never the day, a source, a
     /// backend alias, or any text.
     AssistantState(AssistantSnapshot),
+    /// A content-free picture of a day's publication state when a publication
+    /// job ends, so a workflow stuck in `publishing` can be matched to its
+    /// per-destination statuses, receipts, and unresolved intents. Closed
+    /// tokens, counts, and a keyed [`DiagnosticTag`] only.
+    PublicationState(PublicationSnapshot),
     /// Private-state schema migration progress at startup: `current`,
     /// `started`, `step`, `finished`, or `failed`. `from`/`to` are schema
     /// versions; `reason` is set only on `failed`, and only to a compiled-in
@@ -199,6 +204,60 @@ impl AssistantSnapshot {
                 .count() as u64,
             sources: workflow.candidates().len() as u64,
             snapshots: workflow.snapshots().len() as u64,
+        })
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct PublicationSnapshot {
+    /// One of the publication job kinds.
+    pub kind: &'static str,
+    /// `finished` or `failed`.
+    pub phase: &'static str,
+    pub workflow: DiagnosticTag,
+    /// `WorkflowState::as_str`.
+    pub state: &'static str,
+    pub revision: u64,
+    /// `DestinationStatus::as_str`, or `absent` when the plan has no such
+    /// destination.
+    pub local: &'static str,
+    pub notion: &'static str,
+    pub icloud: &'static str,
+    pub receipts: u64,
+    /// Operation intents without a terminal outcome: nonzero gates the day.
+    pub unresolved: u64,
+}
+
+impl PublicationSnapshot {
+    /// `None` when `log` has no tag key, because an untagged snapshot could
+    /// not be correlated.
+    #[must_use]
+    pub fn capture(
+        log: &DiagnosticLog,
+        workflow: &Workflow,
+        kind: &'static str,
+        phase: &'static str,
+        receipts: u64,
+        unresolved: u64,
+    ) -> Option<Self> {
+        let status = |destination: &str| {
+            workflow
+                .destination_progress()
+                .iter()
+                .find(|item| item.destination == destination)
+                .map_or("absent", |item| item.status.as_str())
+        };
+        Some(Self {
+            kind,
+            phase,
+            workflow: log.tag("workflow", workflow.day().as_str().as_bytes())?,
+            state: workflow.state().as_str(),
+            revision: workflow.revision(),
+            local: status("local"),
+            notion: status("notion"),
+            icloud: status("icloud"),
+            receipts,
+            unresolved,
         })
     }
 }
@@ -442,6 +501,13 @@ fn encode(
                     | "assistant-draft"
                     | "assistant-paragraph-review"
                     | "assistant-source-refine"
+                    | "local-publication"
+                    | "notion-publication"
+                    | "amendment-publication"
+                    | "amendment-notion-retry"
+                    | "startup-recovery-local"
+                    | "startup-recovery-mirror"
+                    | "startup-recovery-notion"
             ) || !matches!(
                 event,
                 "accepted" | "running" | "completed" | "failed" | "cancelled"
@@ -519,6 +585,33 @@ fn encode(
                 "notion",
                 "preview",
                 vec![("reason", reason.to_owned()), ("status", status.to_owned())],
+            )
+        }
+        DiagnosticEvent::PublicationState(snapshot) => {
+            if !vocab_publication_kind(snapshot.kind)
+                || !matches!(snapshot.phase, "finished" | "failed")
+                || !WORKFLOW_STATES.contains(&snapshot.state)
+                || ![snapshot.local, snapshot.notion, snapshot.icloud]
+                    .into_iter()
+                    .all(vocab_destination_status)
+            {
+                return Err(DiagnosticError::InvalidRecord);
+            }
+            (
+                "publication",
+                "snapshot",
+                vec![
+                    ("icloud", snapshot.icloud.to_owned()),
+                    ("kind", snapshot.kind.to_owned()),
+                    ("local", snapshot.local.to_owned()),
+                    ("notion", snapshot.notion.to_owned()),
+                    ("phase", snapshot.phase.to_owned()),
+                    ("receipts", snapshot.receipts.to_string()),
+                    ("revision", snapshot.revision.to_string()),
+                    ("state", snapshot.state.to_owned()),
+                    ("unresolved", snapshot.unresolved.to_string()),
+                    ("workflow", snapshot.workflow.as_str().to_owned()),
+                ],
             )
         }
         DiagnosticEvent::AssistantState(snapshot) => {
@@ -873,7 +966,39 @@ fn vocab_notion_reason(value: &str) -> bool {
 }
 
 fn vocab_job_kind(value: &str) -> bool {
-    matches!(value, "discovery" | "source-preparation") || ASSISTANT_KINDS.contains(&value)
+    matches!(
+        value,
+        "discovery"
+            | "source-preparation"
+            | "local-publication"
+            | "notion-publication"
+            | "amendment-publication"
+            | "amendment-notion-retry"
+            | "startup-recovery-local"
+            | "startup-recovery-mirror"
+            | "startup-recovery-notion"
+    ) || ASSISTANT_KINDS.contains(&value)
+}
+
+fn vocab_publication_kind(value: &str) -> bool {
+    matches!(
+        value,
+        "local-publication"
+            | "notion-publication"
+            | "amendment-publication"
+            | "amendment-notion-retry"
+    )
+}
+
+fn vocab_destination_status(value: &str) -> bool {
+    matches!(
+        value,
+        "absent" | "pending" | "blocked" | "conflict" | "verified" | "reconciling"
+    )
+}
+
+fn vocab_publication_phase(value: &str) -> bool {
+    matches!(value, "finished" | "failed")
 }
 
 fn vocab_assistant_kind(value: &str) -> bool {
@@ -933,6 +1058,18 @@ const SNAPSHOT_SPEC: &[KeySpec] = &[
     optional("draft_ranges", ValueKind::Number),
     optional("entry_markers", ValueKind::Number),
 ];
+const PUBLICATION_SPEC: &[KeySpec] = &[
+    required("icloud", ValueKind::Vocab(vocab_destination_status)),
+    required("kind", ValueKind::Vocab(vocab_publication_kind)),
+    required("local", ValueKind::Vocab(vocab_destination_status)),
+    required("notion", ValueKind::Vocab(vocab_destination_status)),
+    required("phase", ValueKind::Vocab(vocab_publication_phase)),
+    required("receipts", ValueKind::Number),
+    required("revision", ValueKind::Number),
+    required("state", ValueKind::Vocab(vocab_state)),
+    required("unresolved", ValueKind::Number),
+    required("workflow", ValueKind::Tag),
+];
 const NOTION_PREVIEW_SPEC: &[KeySpec] = &[
     required("reason", ValueKind::Vocab(vocab_notion_reason)),
     required("status", ValueKind::Vocab(vocab_notion_status)),
@@ -961,6 +1098,7 @@ fn record_spec(component: &str, event: &str) -> Option<&'static [KeySpec]> {
         }
         ("job", "accepted" | "running" | "completed" | "failed" | "cancelled") => Some(JOB_SPEC),
         ("assistant", "snapshot") => Some(SNAPSHOT_SPEC),
+        ("publication", "snapshot") => Some(PUBLICATION_SPEC),
         ("notion", "preview") => Some(NOTION_PREVIEW_SPEC),
         (
             "store",
@@ -1968,6 +2106,58 @@ mod tests {
         assert!(text.contains("reviewed_memory=absent"));
         assert!(text.contains("selected=1"));
         // Reopening re-validates every record, including the new shape.
+        DiagnosticLog::open(&root, uid, Arc::new(FixedClock::new(2))).unwrap();
+    }
+
+    #[test]
+    fn publication_snapshots_are_content_free_and_survive_a_reopen() {
+        use diary_core::{DiaryDay, Preferences, Timestamp};
+
+        let scratch = Scratch::new("publication-snapshot");
+        let uid = fs::metadata(scratch.path()).unwrap().uid();
+        let root = scratch.path().join("logs");
+        let log = DiagnosticLog::open_with_min_level(
+            &root,
+            uid,
+            Arc::new(FixedClock::new(1)),
+            DiagnosticLevel::Debug,
+        )
+        .unwrap()
+        .with_tag_key([9; 32]);
+        let workflow = Workflow::new(
+            DiaryDay::parse("2026-10-30").unwrap(),
+            Timestamp(0),
+            &Preferences::default(),
+        );
+        let snapshot =
+            PublicationSnapshot::capture(&log, &workflow, "local-publication", "failed", 1, 2)
+                .unwrap();
+        assert_eq!(snapshot.local, "absent");
+        log.write(
+            DiagnosticLevel::Debug,
+            DiagnosticEvent::PublicationState(snapshot),
+        )
+        .unwrap();
+        let unknown = PublicationSnapshot {
+            kind: "discovery",
+            ..snapshot
+        };
+        assert!(
+            log.write(
+                DiagnosticLevel::Debug,
+                DiagnosticEvent::PublicationState(unknown),
+            )
+            .is_err()
+        );
+        drop(log);
+
+        let text = fs::read_to_string(root.join(ACTIVE_NAME)).unwrap();
+        assert!(!text.contains("2026-10-30"));
+        assert!(text.contains("component=publication event=snapshot"));
+        assert!(text.contains("kind=local-publication"));
+        assert!(text.contains("phase=failed"));
+        assert!(text.contains("receipts=1"));
+        assert!(text.contains("unresolved=2"));
         DiagnosticLog::open(&root, uid, Arc::new(FixedClock::new(2))).unwrap();
     }
 

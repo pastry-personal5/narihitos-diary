@@ -20,7 +20,8 @@ pub use commands::{
 };
 pub use diagnostic_tags::{DiagnosticTag, DiagnosticTagger};
 pub use diagnostics::{
-    AssistantSnapshot, DiagnosticEvent, DiagnosticLevel, DiagnosticLog, LogClock, ValidationReport,
+    AssistantSnapshot, DiagnosticEvent, DiagnosticLevel, DiagnosticLog, LogClock,
+    PublicationSnapshot, ValidationReport,
 };
 pub use lifecycle::{
     CodexProfileConfig, LifecycleConfig, LifecycleError, NotionRuntimeConfig, RuntimeAdvertisement,

@@ -1,6 +1,6 @@
 # P1-M16: Simple Sources stage architecture plan
 
-Status: Planned
+Status: Done
 
 This plan collapses the Sources stage's 15 controls into a flat contextual
 menu and moves preparation into one Confirm Source List action, using only
@@ -23,6 +23,7 @@ List finding).
   gains the hidden-ID set and
   `main.rs`, which feeds it the focus zone, stage, input modes, and the IME
   tracker's current state.
+- `diary-tui` new `stage_tip.rs` (next-step tip for Work Status).
 - `diary-control`, `diary-control-contract`, `diary-core`, SQLite: unchanged.
 
 ## Flat menu
@@ -127,7 +128,8 @@ they write the real note and confirm the selection; they stay focus plus Enter
 Gate, evaluated before any letter is interpreted: focus zone is Resources,
 stage is Sources, no editor, Command Line, extra-date field, delete
 confirmation, or Help Overlay is active, and the current IME indicator is `EN`.
-Only a plain key event counts: an ASCII letter (or `?`) with at most Shift, and
+Only a plain key event counts (the input layer ignores Alt and Super letter
+chords, so they never reach the map): an ASCII letter (or `?`) with at most Shift, and
 no Ctrl, Alt, or Super modifier; composed or non-ASCII characters never match.
 Otherwise the key is ignored in this zone (never inserted anywhere, and it does
 not move focus or the list). Letters act on the same state and disabled
@@ -172,7 +174,21 @@ once when there is no current accepted discovery, the workflow state allows
 discovery, and the client can mutate it (so a completed or read-only workflow
 is not rediscovered). Re-entering with current results does nothing; a failed
 discovery is reported and not retried automatically; Refresh notes starts it
-unconditionally. A discovery already running is not duplicated.
+unconditionally and re-runs with the extra date when one was added, so a
+refresh does not silently drop it. A discovery already running is not
+duplicated. "Add a date" runs the discovery for that date as soon as the date is
+entered.
+
+## Work Status next-step tip
+
+A pure `stage_tip::next_step_tip(stage, workflow, included/candidate counts,
+source work running, entry has text)` returns one `Tip: ...` sentence. It
+fills the second Work Status row (previously blank in the connected session),
+so feedback, confirmation prompts, and date-entry prompts on the notice row
+are never displaced by it. It
+reads canonical workflow state only and names existing controls (for example
+Confirm Source List, Confirm complete entry, Approve exact plan) and Ctrl-N.
+Tests cover every stage with and without a workflow.
 
 ## Approach and sequence
 

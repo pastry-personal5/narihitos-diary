@@ -36,14 +36,15 @@ least 50 wide); from 120 through 150 the Utility Sidebar opens as a focused
 overlay, and below 120 it overlays alongside Resources. Tab order follows screen
 order. See [the P1-M15 plan](phase-1/milestone-15-utility-sidebar-architecture.md).
 
-**Planned (P1-M16):** a narrow exception to the no-bare-letter rule below: the
-Sources-stage source list accepts single-letter shortcuts only while the IME
-indicator reads `IME: EN` (never Accept refinement or Confirm Source List). `?` opens a large modal Help
-Overlay of those shortcuts, and `h`/`u` hide and show notes for the session.
-The Sources stage becomes a flat menu: include or exclude
-a note, optionally refine it with the assistant (accept or reject), edit or
-delete it, and Confirm Source List. Reading each note is optional, and discovery
-starts when the stage is entered. See
+**P1-M16:** a narrow exception to the no-bare-letter rule below: the
+Sources-stage source list accepts single-letter shortcuts only while the Resources
+Sidebar is focused and the IME indicator reads `IME: EN` (never Accept
+refinement or Confirm Source List). `?` opens a large modal Help Overlay of those
+shortcuts, and `h`/`u` hide and show notes for the session. The Sources stage is
+a flat menu: include or exclude a note, optionally refine it with the assistant
+(accept or reject), edit or delete it, and Confirm Source List. Reading each note
+is optional, and discovery starts when the stage is entered. Work Status's
+second row carries a `Tip:` naming the next step to the following stage. See
 [the P1-M16 plan](phase-1/milestone-16-simple-sources-architecture.md).
 
 ## Approved behavior to represent
@@ -142,7 +143,9 @@ starts when the stage is entered. See
 The person types Korean as well as English. While a Korean IME is active, bare
 letters and `:` reach the application as composed text, and `Enter` or `Space`
 may commit a composition instead of acting. The decided model therefore uses
-focus navigation plus Ctrl chords and no bare-letter or `:` hotkeys. Terminals
+focus navigation plus Ctrl chords and no bare-letter or `:` hotkeys, except the
+Sources source-list shortcuts above (owner decision, 2026-10-30: only while
+`IME: EN`). Terminals
 also encode `Ctrl-I` as Tab, `Ctrl-M`
 as Enter, and `Ctrl-[` as Esc; macOS reserves `Ctrl-Space` for input-source
 switching by default; and Terminal.app sends Option as a character modifier

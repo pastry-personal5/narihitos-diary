@@ -663,7 +663,9 @@ fn parse_output(
                 serde_json::from_value(output).map_err(|_| DraftAssistantError::InvalidOutput)?;
             DraftEntryResult::new(wire.text, ranges(wire.reflection_ranges))
                 .map(AssistantResponse::EntryDraft)
-                .map_err(|_| DraftAssistantError::InvalidOutput)
+                .map_err(|error| {
+                    DraftAssistantError::InvalidOutputAt(diary_core::invalid_output_reason(&error))
+                })
         }
         AssistantRequest::ReviewParagraph(_) => {
             let wire: ParagraphWire =
@@ -674,7 +676,9 @@ fn parse_output(
                 wire.explanation,
             )
             .map(AssistantResponse::ParagraphReview)
-            .map_err(|_| DraftAssistantError::InvalidOutput)
+            .map_err(|error| {
+                DraftAssistantError::InvalidOutputAt(diary_core::invalid_output_reason(&error))
+            })
         }
         AssistantRequest::RefineSource(_) => {
             let wire: RefineWire =

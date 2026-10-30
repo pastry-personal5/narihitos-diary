@@ -35,8 +35,9 @@ stage, and activating one displays its content in the right Main Pane.
    the person can request a digest-bound assistant refinement, approve or reject
    it, edit the body directly, or explicitly confirm hard deletion of the note
    and its safely resolved linked audio. Approve/edit writes the real Ayumi note.
-   Acquire included
-   cloud-only notes when needed, then confirm a fresh source selection. A source
+   Reading a note is optional: one Confirm Source List action acquires included
+   cloud-only notes when needed, reads them, and confirms a fresh source
+   selection. A source
    change requires rereading and reconfirmation before any output. A day with no
    notes can continue through an explicit "continue without notes"
    confirmation, which leaves only manual editing in the Draft editor.

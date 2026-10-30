@@ -583,7 +583,9 @@ fn parse_assistant_output(
             let ranges = assistant_ranges(output)?;
             DraftEntryResult::new(text, ranges)
                 .map(AssistantResponse::EntryDraft)
-                .map_err(|_| DraftAssistantError::InvalidOutput)
+                .map_err(|error| {
+                    DraftAssistantError::InvalidOutputAt(diary_core::invalid_output_reason(&error))
+                })
         }
         AssistantRequest::ReviewParagraph(_) => {
             let replacement = object_string(output, "replacement")
@@ -598,7 +600,9 @@ fn parse_assistant_output(
             };
             ParagraphReviewResult::new(replacement, assistant_ranges(output)?, explanation)
                 .map(AssistantResponse::ParagraphReview)
-                .map_err(|_| DraftAssistantError::InvalidOutput)
+                .map_err(|error| {
+                    DraftAssistantError::InvalidOutputAt(diary_core::invalid_output_reason(&error))
+                })
         }
         AssistantRequest::RefineSource(_) => {
             let body =

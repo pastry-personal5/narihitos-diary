@@ -402,6 +402,8 @@ pub enum DraftAssistantError {
     Refused,
     ContextOverflow,
     InvalidOutput,
+    /// Invalid output with the exact failed check, as a fixed log-only token.
+    InvalidOutputAt(&'static str),
     TimedOut,
     Cancelled,
 }
@@ -922,6 +924,11 @@ impl ValueError {
     #[must_use]
     pub const fn new(message: &'static str) -> Self {
         Self { message }
+    }
+
+    #[must_use]
+    pub const fn message(&self) -> &'static str {
+        self.message
     }
 }
 

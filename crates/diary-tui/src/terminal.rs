@@ -173,6 +173,15 @@ pub fn poll_input_event(timeout: Duration) -> InputPoll {
                 match key.code {
                     KeyCode::Char('c') if ctrl => InputPoll::Quit,
                     KeyCode::Char(c) if ctrl => InputPoll::Ctrl(c),
+                    // Alt/Super chords are never text: ignoring them keeps a
+                    // Meta-prefixed letter from acting as a bare-letter shortcut.
+                    KeyCode::Char(_)
+                        if key
+                            .modifiers
+                            .intersects(KeyModifiers::ALT | KeyModifiers::SUPER) =>
+                    {
+                        InputPoll::Ignored
+                    }
                     KeyCode::Char(c) => InputPoll::Event(InputEvent::Char(c)),
                     KeyCode::Enter => InputPoll::Event(InputEvent::Enter),
                     KeyCode::Backspace => InputPoll::Event(InputEvent::Backspace),

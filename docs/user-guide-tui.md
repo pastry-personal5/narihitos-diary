@@ -26,7 +26,8 @@ and [ux-tui.md](ux-tui.md); this doc does not duplicate their detail.
   and between controls inside the Main Pane. On terminals narrower than 151
   columns the Utility Sidebar is hidden until focused, then opens over the
   right edge. Enter activates the focused control. There are no bare-letter
-  hotkeys (Korean IME composes bare letters), so every action is reached by
+  hotkeys (Korean IME composes bare letters) except the Sources note-list
+  shortcuts below, which work only under `IME: EN`; every action is reached by
   focus + Enter or by a Ctrl chord.
 - Ctrl-G opens the Command Line (`help`, `retry`, `day YYYY-MM-DD`,
   `stage <stage>`, `save`, `quit`). Ctrl-S saves/flushes the editor. Ctrl-C
@@ -35,7 +36,8 @@ and [ux-tui.md](ux-tui.md); this doc does not duplicate their detail.
   the previous/next workflow stage.
 - The Status Line (bottom) always shows diary day, workflow stage,
   connection, IME (`IME: EN` / `IME: KO` / `IME: ?`), progress, and errors.
-  Work Status (top) explains current/pending work in more detail.
+  Work Status (top) explains current/pending work in more detail; its second
+  row is a `Tip:` saying what to do to reach the next stage.
 
 ## Sources stage
 
@@ -43,33 +45,45 @@ The Resources Sidebar lists discovered Ayumi notes for the diary day and
 adjacent dates, each marked `included`/`excluded`, its availability, and any
 date-disagreement or warning marker.
 
-- **View a source's content:** focus the candidate and press Enter (or
-  activate "Inspect active prepared source"). Its sanitized text appears in
-  the Main Pane under "Source text". This works for any readable candidate,
-  included or not — opening a source never changes whether it's included.
-- **Include/exclude a source as draft input:** focus the candidate and
-  activate "Include/exclude active candidate". This toggles prospective
-  membership in the set sent to the assistant for extraction/drafting. Any
-  change to the included set invalidates prior bulk preparation and review,
-  so re-run "Prepare included sources" and re-inspect each included source
-  before confirming.
-- **Confirm the selection:** once every included source has been reviewed,
-  activate "Confirm reviewed source set". A day with no notes can instead use
-  "Continue without notes", which leaves only manual editing later.
-- **Refine a source with the assistant:** with a source inspected, activate
-  "Refine inspected source with assistant". This sends only that source's
-  text to the currently selected backend (hosted Codex or Apple on-device)
-  for a bounded rewrite suggestion. The suggestion appears under "Suggested
+The Sources stage is a short menu. Discovery of the last three days starts when
+you first enter it. The Main Pane lists only the actions that apply (for
+example Accept and Reject appear only while a refinement is shown).
+
+- **Include or exclude a note:** focus the note in the Resources Sidebar and
+  choose "Include this note" / "Exclude this note" in the Main Pane menu.
+- **View a note's content:** press Enter on the note (or "View content"). Its
+  sanitized text appears in the Main Pane under "Source text". Viewing never
+  changes inclusion and is not required before confirming.
+- **Confirm the list:** choose "Confirm Source List". It downloads any
+  cloud-only included note, reads the included notes, and confirms them, with
+  progress in Work Status. If an included note cannot be read, nothing is
+  confirmed and the reason is shown. With nothing included the same item reads
+  "Continue without notes" and asks for Enter to confirm. Changing the
+  included set later needs a new confirmation.
+- **Refine a note with the assistant:** with the note's text shown and an
+  assistant selected, choose "Refine with assistant". Only that note's text
+  goes to the selected backend. The suggestion appears under "Suggested
   refinement" with two controls:
-  - **Approve refinement** — writes the suggested text back as the real
-    Ayumi note. Fails safely if the note changed since the suggestion was
-    made.
+  - **Accept refinement** — writes the suggested text back as the real Ayumi
+    note. Fails safely if the note changed since the suggestion was made.
   - **Reject refinement** — discards the suggestion; the note is unchanged.
-- **Edit a source directly:** activate "Edit inspected source" to open it in
-  the shared multiline editor (Ctrl-S saves).
-- **Delete a source:** activate "Delete inspected source and linked audio",
-  then confirm with Enter (Esc cancels). This hard-deletes the note and its
-  safely resolved linked audio; audio bytes are never read or sent.
+- **Edit a note directly:** choose "Edit note" to open it in the shared
+  multiline editor (Ctrl-S saves).
+- **Delete a note:** choose "Delete note and linked audio", then confirm with
+  Enter (Esc cancels). This hard-deletes the note and its safely resolved
+  linked audio; audio bytes are never read or sent.
+- **Hide a note:** "Hide note" removes it from the list for this session and
+  excludes it; "Show hidden notes" brings them back (excluded). Nothing is
+  written, and hiding resets when you restart or open another day.
+- **Find more notes:** "Refresh notes" searches again, "Add a date" opens a
+  field for one extra date (Enter searches it), and "Load more" pages further.
+- **Letter shortcuts:** with the note list focused and `IME: EN`, `i`
+  include, `x` exclude, `v` view, `h` hide, `u` show hidden, `r` refine, `n`
+  reject, `e` edit, `d` delete (asks to confirm), `f` refresh, `a` add a date,
+  `m` load more, `?` help; either case. Accept refinement and Confirm Source
+  List have no letter. Under `IME: KO` or `IME: ?` letters do nothing. `?` (or
+  "Shortcuts help") opens a Help Overlay listing them; Esc, Enter, or `?`
+  closes it.
 
 A source change always requires re-reading and re-confirming before any
 later output.
