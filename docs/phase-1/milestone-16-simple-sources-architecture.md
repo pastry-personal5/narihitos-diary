@@ -4,7 +4,8 @@ Status: Planned
 
 This plan collapses the Sources stage's 15 controls into a flat contextual
 menu and moves preparation into one Confirm Source List action, using only
-existing Control API calls.
+existing Control API calls. The server needs no change (see the Confirm Source
+List finding).
 
 ## Affected modules and interfaces
 
@@ -28,19 +29,24 @@ existing Control API calls.
 
 Items are listed in this order and omitted when they do not apply. The focused
 index is by visible position and is clamped when items appear or disappear.
+"Shown" means the Main Pane displays the note's text (`active_detail`) and that
+note is the focused row; moving focus to another row closes the shown text and
+any suggestion, so Refine, Accept, Reject, Edit, and Delete can never act on a
+note other than the one on screen. Enter or `v` shows a note.
 
 | Item | Shown when |
 |---|---|
 | Include / exclude this note | A candidate is focused and readable or downloadable |
-| View content | A readable candidate is focused |
-| Hide note / Show hidden | A candidate is focused / at least one note is hidden |
+| View content | A readable candidate is focused and not already shown |
+| Hide note | A candidate is focused |
+| Show hidden notes | At least one note is hidden |
 | Refine with assistant | A readable note is shown and a usable backend is selected |
 | Accept refinement, Reject refinement | A refinement suggestion is shown |
 | Edit note | A readable note is shown |
 | Delete note and linked audio | A note is shown |
-| Confirm Source List | At least one included note, or none (then "Continue without notes") |
+| Confirm Source List | Always; reads "Continue without notes" when nothing is included |
 | Refresh notes | Always |
-| Add a date | Always (the extra-date field opens in place) |
+| Add a date | Always (the extra-date field opens in place; Enter runs discovery for that date, Esc cancels) |
 | Load more | More candidates exist |
 | Shortcuts help | Always (opens the Help Overlay) |
 | Back to Start | Always |
@@ -51,17 +57,44 @@ changes inclusion.
 
 ## Confirm Source List
 
-1. Step 1 of the sequence below establishes exactly what the server needs before
-   it accepts a confirmation (preparation handle, per-note previews, digests).
-2. Confirm Source List runs: prepare included notes, wait for the job, run any
-   per-note previews the server requires without showing them, then confirm.
-   Each phase reports progress through Work Status; a failure names the note
-   and reason and leaves the source list unconfirmed.
-3. With no included note, the item reads "Continue without notes" and sends
-   the existing explicit-empty confirmation.
-4. Any later change to the included set, or an Accept/Edit/Delete, invalidates
-   the preparation exactly as today, so the next Confirm Source List repeats
-   the sequence.
+Step 1 finding (read from `diary-control` on 2026-10-30; re-verify when
+implementing):
+
+- `POST /v1/workflows/{id}/source-preparations` (`prepare_sources`) reads each
+  source, requests the iCloud download itself for a `NeedsDownload` source and
+  rereads, and fails the job if the note is still not readable. The client never
+  downloads. The job has a 120 s server timeout and a 64-source cap
+  (`MAX_SELECTED_SOURCES`).
+- `confirm_selection` needs only a `preparation_handle` plus the same
+  `source_ids`. It does not require any per-note preview or review. The
+  `reviewed` set is a client-only gate, so removing it needs no server change.
+- The handle is single-use (removed when confirmation starts, even if the
+  binding then mismatches) and bound to the workflow, its revision, and the
+  `source_ids` vector compared in order. It also expires. Any failed
+  confirmation therefore needs a fresh prepare.
+
+Sequence:
+
+1. Build one sorted `source_ids` list from the included set (hidden notes are
+   never in it) and use that identical list for both prepare and confirm.
+   More than 64 included notes disables the control with a visible reason.
+2. Prepare, watch the job through Work Status, then confirm with the returned
+   handle. No per-note preview is run. A preparation failure names the note
+   when the server gives a reason (unreadable, permission, still downloading)
+   and leaves the workflow unconfirmed.
+3. A `preparation-expired` or `preparation-binding-changed` response, or a
+   revision conflict, discards the handle and reports it; the next Confirm
+   Source List starts again at prepare. The client never reuses a handle.
+4. While Confirm Source List is running, View content and the inclusion
+   controls are disabled; while a View job runs, Confirm is disabled. A View
+   job uses its own single-note preparation and must not replace the handle the
+   confirmation depends on (today's `preview_source_id` handling).
+5. With no included note, the item reads "Continue without notes" and sends the
+   existing explicit-empty confirmation after the existing explicit
+   confirmation step.
+6. Any later change to the included set, or an Accept/Edit/Delete, drops the
+   preparation exactly as today, and a confirmed list still requires a new
+   confirmation before any later output.
 
 ## Source-list shortcuts
 
@@ -92,9 +125,12 @@ they write the real note and confirm the selection; they stay focus plus Enter
 `d` only opens the existing Enter/Esc confirmation.
 
 Gate, evaluated before any letter is interpreted: focus zone is Resources,
-stage is Sources, no editor, Command Line, or extra-date field is active, and
-the current IME indicator is `EN`. Otherwise the key is ignored in this zone
-(never inserted anywhere). Letters act on the same state and disabled
+stage is Sources, no editor, Command Line, extra-date field, delete
+confirmation, or Help Overlay is active, and the current IME indicator is `EN`.
+Only a plain key event counts: an ASCII letter (or `?`) with at most Shift, and
+no Ctrl, Alt, or Super modifier; composed or non-ASCII characters never match.
+Otherwise the key is ignored in this zone (never inserted anywhere, and it does
+not move focus or the list). Letters act on the same state and disabled
 conditions as the menu item; a shortcut for a hidden item does nothing. The
 gate is a pure function of (zone, stage, input modes, IME state, key) so it is
 unit-tested without a terminal. Risk: the indicator can lag a just-made IME
@@ -106,7 +142,9 @@ Confirm have no letter).
 The Sources view model keeps a set of hidden source IDs. `h` adds the focused
 note: if it was included it is excluded first through the normal toggle (so the
 preparation and any confirmation are invalidated exactly as for `x`), then the
-row is filtered out of the list, focus moves to the nearest visible row, and the
+row is filtered out of the list, focus moves to the nearest visible row (the
+shown text and any suggestion of the hidden note close; an unsaved source edit
+blocks hiding), and the
 header shows `N hidden (u: show)`. `u` clears the set. Hidden IDs are never part
 of Confirm Source List. The set survives Refresh notes and Load more (IDs are
 stable) and is cleared when the TUI restarts or the open workflow changes. It is
@@ -130,15 +168,17 @@ the "Shortcuts help" menu item opens it under any IME.
 ## Automatic discovery
 
 On entering Sources for a workflow, start the existing three-day discovery job
-once when there is no current accepted discovery. Re-entering with current
-results does nothing; Refresh notes starts it unconditionally. A discovery
-already running is not duplicated.
+once when there is no current accepted discovery, the workflow state allows
+discovery, and the client can mutate it (so a completed or read-only workflow
+is not rediscovered). Re-entering with current results does nothing; a failed
+discovery is reported and not retried automatically; Refresh notes starts it
+unconditionally. A discovery already running is not duplicated.
 
 ## Approach and sequence
 
-1. Read the server's confirmation requirements in `diary-control` and the
-   existing client sequence; record the finding in the overview checklist. If a
-   server change is needed, stop for an owner decision.
+1. Re-verify the Confirm Source List finding above against the code at
+   implementation time and tick the overview item. If the server turns out to
+   require a change, stop for an owner decision.
 2. Failing tests for the menu model (visible items per state, focus clamping),
    then the model.
 3. Failing tests for Confirm Source List's sequencing and failure reasons
@@ -157,8 +197,9 @@ already running is not duplicated.
 
 ## Risks
 
-- The server may bind confirmation to per-note previews. Mitigation: step 1,
-  and the client runs them silently.
+- The single-use, ordered-ids preparation handle can fail a confirmation that
+  looks valid. Mitigation: one sorted id list, never reuse a handle, tests for
+  expiry and binding mismatch.
 - A hidden-item menu can strand focus. Mitigation: clamp by visible position
   and test appear/disappear transitions.
 - Automatic discovery could race a user toggle. Mitigation: it only starts when
