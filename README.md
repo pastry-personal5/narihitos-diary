@@ -19,8 +19,9 @@ memory extraction, drafting, paragraph review, and source refinement. Codex prof
 configured explicitly and each call
 uses a fresh confined `codex app-server` process; Apple assistance is available
 only when Foundation Models reports ready. Manual editing remains available.
-P1-M9 (local publication and recovery) is active. Preview and Publish remain
-visibly locked until their implementation milestones land.
+P1-M9 (local publication and recovery) is done. Preview displays the
+exact local Markdown file for approval; Publish writes the local file without
+replacing different content. Notion publication remains blocked until P1-M10.
 
 ## Quick start
 

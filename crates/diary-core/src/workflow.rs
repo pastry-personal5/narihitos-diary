@@ -34,6 +34,7 @@ pub const LEGAL_TRANSITIONS: &[(WorkflowState, WorkflowState)] = &[
     (WorkflowState::Publishing, WorkflowState::Completed),
     (WorkflowState::Publishing, WorkflowState::Partial),
     (WorkflowState::Partial, WorkflowState::Publishing),
+    (WorkflowState::Partial, WorkflowState::OutputPlanned),
     (WorkflowState::Completed, WorkflowState::Composing),
 ];
 
@@ -104,6 +105,36 @@ pub struct PersistedWorkflow {
 }
 
 impl Workflow {
+    /// Seeds a new diary day from a conflicted local plan. The carried text
+    /// and selection require fresh confirmation before any output.
+    pub fn carry_conflict_to_day(
+        &self,
+        new_day: DiaryDay,
+        now: Timestamp,
+        preferences: &crate::Preferences,
+    ) -> Result<Self, WorkflowError> {
+        if !matches!(
+            self.state,
+            WorkflowState::Partial | WorkflowState::OutputPlanned
+        ) || !self
+            .destination_progress
+            .iter()
+            .any(|item| item.destination == "local" && item.status == DestinationStatus::Conflict)
+        {
+            return Err(WorkflowError::WrongState);
+        }
+        let mut next = Self::new(new_day, now, preferences);
+        next.candidates = self.candidates.clone();
+        next.snapshots = self.snapshots.clone();
+        next.language = self.language;
+        next.style = self.style;
+        next.entry.text = self.entry.text.clone();
+        next.entry.version = 1;
+        next.entry.confirmed = None;
+        next.state = WorkflowState::Discovered;
+        next.revision = 1;
+        Ok(next)
+    }
     #[must_use]
     pub fn new(day: DiaryDay, now: Timestamp, preferences: &Preferences) -> Self {
         Self {
@@ -449,6 +480,7 @@ impl Workflow {
                 | WorkflowState::EntryConfirmed
                 | WorkflowState::OutputPlanned
                 | WorkflowState::Approved
+                | WorkflowState::Partial
         ) {
             return Err(WorkflowError::WrongState);
         }
@@ -1165,10 +1197,21 @@ impl Workflow {
         now: Timestamp,
     ) -> Result<(), WorkflowError> {
         self.expect_revision(expected_revision)?;
+        let rereading_local_conflict = self.state == WorkflowState::Partial
+            && self.destination_progress.iter().any(|item| {
+                item.status == DestinationStatus::Conflict
+                    && self.output_plan.as_ref().is_some_and(|plan| {
+                        plan.targets.iter().any(|target| {
+                            target.kind == DestinationKind::Local
+                                && target.destination == item.destination
+                        })
+                    })
+            });
         if !matches!(
             self.state,
             WorkflowState::EntryConfirmed | WorkflowState::OutputPlanned | WorkflowState::Approved
-        ) {
+        ) && !rereading_local_conflict
+        {
             return Err(WorkflowError::WrongState);
         }
         let confirmation = self
@@ -1399,6 +1442,27 @@ impl Workflow {
         self.expect_revision(expected_revision)?;
         if self.state != WorkflowState::Approved || self.approval.is_none() {
             return Err(WorkflowError::WrongState);
+        }
+        self.job_status = Some(JobStatus::Running);
+        self.advance(WorkflowState::Publishing, now);
+        Ok(())
+    }
+
+    /// Re-enters a previously approved local write after reconciliation proved
+    /// that an uncertain attempt had no effect.
+    pub fn begin_local_retry(
+        &mut self,
+        expected_revision: u64,
+        now: Timestamp,
+    ) -> Result<(), WorkflowError> {
+        self.expect_revision(expected_revision)?;
+        if self.state != WorkflowState::Partial
+            || self.approval.is_none()
+            || !self.destination_progress.iter().any(|item| {
+                item.destination == "local" && item.status == DestinationStatus::Pending
+            })
+        {
+            return Err(WorkflowError::RetryNeedsPreview);
         }
         self.job_status = Some(JobStatus::Running);
         self.advance(WorkflowState::Publishing, now);
@@ -1682,7 +1746,9 @@ impl Workflow {
                 }
             }
             None => {
-                if !self.snapshots.is_empty() || self.explicit_empty_selection {
+                if (self.state != WorkflowState::Discovered && !self.snapshots.is_empty())
+                    || self.explicit_empty_selection
+                {
                     return Err(WorkflowError::InvalidPersistedState);
                 }
             }

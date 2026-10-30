@@ -12,7 +12,7 @@ pub struct PublicationCoordinator;
 
 impl PublicationCoordinator {
     pub fn execute(
-        log: &impl OperationLog,
+        log: &(impl OperationLog + ?Sized),
         destination: &mut impl Destination,
         intent: &OperationIntent,
         receipt_version: u32,
@@ -48,7 +48,7 @@ impl PublicationCoordinator {
     }
 
     pub fn reconcile(
-        log: &impl OperationLog,
+        log: &(impl OperationLog + ?Sized),
         destination: &mut impl Destination,
         intent: &OperationIntent,
         receipt_version: u32,

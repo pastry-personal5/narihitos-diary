@@ -10,8 +10,8 @@ component vocabulary is in [ux-terms.md](ux-terms.md).
 
 The `nd` terminal client implements Start → Sources → Compose → Review,
 including M8 backend selection, two-pass memory review and drafting, paragraph
-suggestions, assistant job progress/cancellation, and manual fallback. Preview
-and Publish remain locked for later milestones.
+suggestions, assistant job progress/cancellation, and manual fallback. P1-M9
+adds the local Preview and Publish controls; Notion output stays blocked.
 The adaptive shell keeps both sidebars inline at 120 columns or wider, overlays
 Resources from 100 through 119, and opens either focused sidebar over the Main
 Pane from 80 through 99. Work Status keeps its four content rows, while Command
@@ -59,7 +59,7 @@ bypass review.
   reject the suggestion. The target is the Markdown paragraph containing the
   editor cursor, bounded by blank lines and shown before the request. Accept
   must fail safely if the paragraph changed; reject does not alter the entry.
-- Offer US English and South Korean Korean per entry, remember the last choice,
+- Offer US English and Korean per entry, remember the last choice,
   and offer concise, standard, and reflective styles with concise as default.
   The choice names the language of the finished entry; source notes are
   expected to be en-US. Mark assistant-inferred reflections for human review.

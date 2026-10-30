@@ -9,6 +9,7 @@
 pub mod assistant;
 pub mod assistant_registry;
 pub mod digest;
+pub mod local_markdown;
 pub mod ports;
 pub mod prompt_asset;
 pub mod publication;
@@ -18,10 +19,12 @@ pub mod workflow;
 pub use assistant::*;
 pub use assistant_registry::{DraftAssistantRegistry, RegistryError, RegistryInvokeError};
 pub use digest::Digest;
+pub use local_markdown::render_local_markdown;
 pub use ports::{
-    Clock, Destination, DraftAssistant, IntentTerminal, OperationLog, SourceCatalog,
-    SourceCheckpointError, SourceReader, SourceWriteError, SourceWriter, StartOutcome, StoreError,
-    WorkflowStore, revalidate_workflow_sources, start_default_workflow,
+    Clock, Destination, DraftAssistant, IntentTerminal, LocalOutputError, LocalOutputPort,
+    LocalOutputState, OperationLog, SourceCatalog, SourceCheckpointError, SourceReader,
+    SourceWriteError, SourceWriter, StartOutcome, StoreError, WorkflowStore,
+    revalidate_workflow_sources, start_default_workflow,
 };
 pub use publication::{PublicationCoordinator, PublicationError, PublicationResult};
 pub use types::*;

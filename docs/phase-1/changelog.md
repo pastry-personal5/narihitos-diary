@@ -6,6 +6,21 @@ This changelog records owner decisions and material plan changes for Phase 1.
 
 ## Entries
 
+- 2026-10-30 — P1-M9 completed — Added canonical local
+  Markdown rendering, configured entry-root plumbing, read-only preview,
+  digest-bound approval, atomic no-clobber local creation, receipt/read-back,
+  restart reconciliation, publication jobs with precommit cancellation, and
+  Preview/Publish TUI controls with conflict day carry-over. Synthetic
+  adapter, SQLite, and loopback API/worker tests cover exact output, conflict
+  refusal, changed destination bindings, cancellation and crash boundaries,
+  restart recovery, and a lost response after the local write. The full Rust
+  and Swift gate passed.
+
+- 2026-10-30 — Owner decision and P1-M9 plan review — Local output front
+  matter uses `date` and `language`. The P1-M9 plan now specifies canonical
+  preview bytes, approval invalidation, race-free no-clobber finalization,
+  uncertain-write reconciliation, per-day gating, and API/TUI acceptance.
+
 - 2026-10-29 — M8 post-implementation correction — The Codex app-server
   transport now follows the complete documented connection lifecycle:
   `initialize`, the required `initialized` notification, `thread/start`, and
@@ -667,7 +682,7 @@ This changelog records owner decisions and material plan changes for Phase 1.
 - 2026-10-28 — Owner interview — Chose reviewed two-pass Apple on-device
   drafting and an always-available multiline manual path, including after
   model failure. Composition remains on device. Each entry offers US English
-  or South Korean Korean and concise, standard, or reflective style; the last
+  or Korean and concise, standard, or reflective style; the last
   language is remembered and concise is the style default. Model-inferred
   reflection is allowed by default but visibly marked for review. The complete
   edited entry requires confirmation, and unfinished drafts persist locally

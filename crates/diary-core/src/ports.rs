@@ -115,6 +115,25 @@ pub trait Destination {
     fn inspect(&mut self, intent: &OperationIntent) -> InspectionOutcome;
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum LocalOutputState {
+    Absent,
+    Identical,
+    Different(String),
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum LocalOutputError {
+    UnsafePath,
+    Unavailable,
+}
+
+pub trait LocalOutputPort: Send + Sync {
+    fn target(&self, day: &DiaryDay) -> String;
+    fn inspect(&self, day: &DiaryDay, payload: &str) -> Result<LocalOutputState, LocalOutputError>;
+    fn write(&self, day: &DiaryDay, payload: &str) -> Result<LocalOutputState, LocalOutputError>;
+}
+
 pub trait SourceCatalog {
     fn discover(&self, request: CatalogRequest) -> Result<SourceDiscovery, SourceAccessError>;
 }

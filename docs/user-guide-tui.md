@@ -80,7 +80,7 @@ later output.
   memories" and "Draft with selected assistant" to send those confirmed
   memories (not the raw sources) for drafting. A late result never overwrites
   newer unsent text.
-- Choose US English or South Korean Korean, and concise/standard/reflective
+- Choose US English or Korean, and concise/standard/reflective
   style (concise by default). A Korean entry from English notes is a
   translation and is labeled as such.
 - Focus a paragraph and activate "Review focused paragraph" to get a
@@ -100,10 +100,14 @@ remains.
 
 ## Preview and Publish
 
-Preview shows the exact local file path/Markdown and the Notion
-destination/path/body before any write; approving is a deliberate action
-tied to that exact plan. Publish writes local first, then Notion, and shows
-success/pending/blocked per destination. Conflicts show both versions and
-offer only reread, discard, or save under a different diary day — the app
-never overwrites silently. (These two stages are still being built out; see
-[ux-tui.md](ux-tui.md) for current status.)
+After confirming the entry, open Preview and generate the local output plan.
+It shows the target path, exact Markdown with `date` and `language` front
+matter, SHA-256 digest, and blocked Notion status. Review the file before
+approving the plan. Publish then starts a local publication job; an existing
+different file is never replaced. The job can be cancelled before it commits,
+and an uncertain write is inspected on restart before that diary day can act
+again. A conflict shows the existing and planned text. Reread with Preview,
+discard the workflow from Start, or choose another day in Preview; carried
+text must be confirmed again. Notion publication remains planned for P1-M10.
+The `paths.entries_root` setting may be absolute, relative to the directory
+where `nd` starts, or begin with `~/` to resolve from the current user's home.

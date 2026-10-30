@@ -64,6 +64,29 @@ pub mod job_status {
 /// knows, e.g. after its terminal result expired.
 pub const JOB_NOT_FOUND: &str = "job-not-found";
 
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct LocalPreviewDto {
+    pub workflow: WorkflowDto,
+    pub target: String,
+    pub payload: String,
+    pub payload_digest: String,
+    pub plan_digest: String,
+    pub existing_text: Option<String>,
+    pub intended_changes: Vec<String>,
+    pub local_status: String,
+    pub notion_status: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct LocalApprovalRequest {
+    pub plan_digest: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct SaveUnderDayRequest {
+    pub diary_day: String,
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct RouteSpec {
     pub method: &'static str,
@@ -125,6 +148,30 @@ pub const ROUTES: &[RouteSpec] = &[
         method: "GET",
         path: "/v1/workflows/{id}",
         capability: Some("read"),
+        authenticated: true,
+    },
+    RouteSpec {
+        method: "POST",
+        path: "/v1/workflows/{id}/output-previews",
+        capability: Some("workflow:write"),
+        authenticated: true,
+    },
+    RouteSpec {
+        method: "POST",
+        path: "/v1/workflows/{id}/output-approvals",
+        capability: Some("workflow:write"),
+        authenticated: true,
+    },
+    RouteSpec {
+        method: "POST",
+        path: "/v1/workflows/{id}/local-publications",
+        capability: Some("workflow:write"),
+        authenticated: true,
+    },
+    RouteSpec {
+        method: "POST",
+        path: "/v1/workflows/{id}/save-under-day",
+        capability: Some("workflow:write"),
         authenticated: true,
     },
     RouteSpec {
@@ -420,6 +467,10 @@ dto!(
         pub invalidation_code: Option<String>,
         pub entry_text: String,
         pub entry_confirmed: bool,
+        #[serde(default)]
+        pub local_status: Option<String>,
+        #[serde(default)]
+        pub notion_status: Option<String>,
         pub candidates: Vec<SourceCandidateDto>,
     }
 );
@@ -440,6 +491,8 @@ pub struct WorkflowDto {
     pub invalidation_code: Option<String>,
     pub entry_text: String,
     pub entry_confirmed: bool,
+    pub local_status: Option<String>,
+    pub notion_status: Option<String>,
     pub candidates: Vec<SourceCandidateDto>,
 }
 
@@ -469,6 +522,8 @@ impl TryFrom<WorkflowDtoWire> for WorkflowDto {
             invalidation_code: value.invalidation_code,
             entry_text: value.entry_text,
             entry_confirmed: value.entry_confirmed,
+            local_status: value.local_status,
+            notion_status: value.notion_status,
             candidates: value.candidates,
         })
     }
@@ -904,12 +959,17 @@ mod tests {
     }
 
     #[test]
-    fn route_table_contains_m8_resources_and_excludes_later_milestones() {
-        assert!(ROUTES.iter().all(|route| {
-            !route.path.contains("mcp")
-                && !route.path.contains("publication")
-                && !route.path.contains("amend")
-        }));
+    fn route_table_contains_m9_local_publication_and_excludes_future_surfaces() {
+        assert!(
+            ROUTES
+                .iter()
+                .all(|route| { !route.path.contains("mcp") && !route.path.contains("amend") })
+        );
+        assert!(
+            ROUTES
+                .iter()
+                .any(|route| route.path.ends_with("/local-publications"))
+        );
         for path in [
             "/v1/assistant-backends",
             "/v1/workflows/{id}/memory-extractions",

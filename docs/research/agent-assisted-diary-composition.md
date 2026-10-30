@@ -298,7 +298,7 @@ unavailable, a language is unsupported, the context limit is reached, a source
 does not fit a bounded extraction batch, generation is cancelled, or any output
 fails validation, the confirmed selection and manual editor remain intact.
 
-Before drafting, offer US English and South Korean Korean and remember the
+Before drafting, offer US English and Korean and remember the
 last language selected. Offer concise, standard, and reflective styles, with
 concise as the default. Runtime model availability and language support are
 checked; a failure leaves the manual editor usable. Inferred reflections are

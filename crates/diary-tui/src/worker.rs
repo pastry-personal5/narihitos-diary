@@ -13,9 +13,9 @@ use std::thread::{self, JoinHandle};
 
 use diary_control_contract::{
     AssistantBackendListDto, CapabilitiesDto, DraftResultDto, JobAcceptedDto, JobDto,
-    MemoryReviewDto, ParagraphSuggestionDto, ParagraphSuggestionListDto, PreferencesDto,
-    ResolveParagraphSuggestionRequest, SetupCheckDto, SourceListDto, SourceRefineSuggestionDto,
-    StartParagraphReviewRequest, WorkflowDto, WorkflowListDto,
+    LocalPreviewDto, MemoryReviewDto, ParagraphSuggestionDto, ParagraphSuggestionListDto,
+    PreferencesDto, ResolveParagraphSuggestionRequest, SetupCheckDto, SourceListDto,
+    SourceRefineSuggestionDto, StartParagraphReviewRequest, WorkflowDto, WorkflowListDto,
 };
 
 use crate::client::{ApiClient, Attachment, ClientOutcome, SourceDetailResponse, Transport};
@@ -134,6 +134,24 @@ pub enum Intent {
         revision: u64,
         buffer_version: u64,
     },
+    PreviewLocal {
+        workflow_id: String,
+        revision: u64,
+    },
+    ApproveLocal {
+        workflow_id: String,
+        revision: u64,
+        plan_digest: String,
+    },
+    PublishLocal {
+        workflow_id: String,
+        revision: u64,
+    },
+    SaveUnderDay {
+        workflow_id: String,
+        revision: u64,
+        new_day: String,
+    },
     GetAssistantBackends,
     SelectAssistant {
         workflow_id: String,
@@ -212,6 +230,10 @@ pub enum WorkerResult {
     ManualCompositionBegun(Box<ClientOutcome<WorkflowDto>>),
     EntrySaved(Box<ClientOutcome<WorkflowDto>>),
     EntryConfirmed(Box<ClientOutcome<WorkflowDto>>),
+    LocalPreviewed(Box<ClientOutcome<LocalPreviewDto>>),
+    LocalApproved(Box<ClientOutcome<WorkflowDto>>),
+    LocalPublished(ClientOutcome<JobAcceptedDto>),
+    SavedUnderDay(Box<ClientOutcome<WorkflowDto>>),
     AssistantBackends(ClientOutcome<AssistantBackendListDto>),
     AssistantSelected(Box<ClientOutcome<WorkflowDto>>),
     MemoryReview(ClientOutcome<MemoryReviewDto>),
@@ -480,6 +502,42 @@ impl Worker {
                 &workflow_id,
                 revision,
                 buffer_version,
+            ))),
+            Intent::PreviewLocal {
+                workflow_id,
+                revision,
+            } => WorkerResult::LocalPreviewed(Box::new(client.preview_local(
+                attachment,
+                &workflow_id,
+                revision,
+            ))),
+            Intent::ApproveLocal {
+                workflow_id,
+                revision,
+                plan_digest,
+            } => WorkerResult::LocalApproved(Box::new(client.approve_local(
+                attachment,
+                &workflow_id,
+                revision,
+                &plan_digest,
+            ))),
+            Intent::PublishLocal {
+                workflow_id,
+                revision,
+            } => WorkerResult::LocalPublished(client.publish_local(
+                attachment,
+                &workflow_id,
+                revision,
+            )),
+            Intent::SaveUnderDay {
+                workflow_id,
+                revision,
+                new_day,
+            } => WorkerResult::SavedUnderDay(Box::new(client.save_under_day(
+                attachment,
+                &workflow_id,
+                revision,
+                &new_day,
             ))),
             Intent::SelectAssistant {
                 workflow_id,

@@ -18,6 +18,7 @@ pub struct LifecycleConfig {
     pub database_path: PathBuf,
     pub port_fallback_count: u16,
     pub ayumi_directory_name: String,
+    pub entries_root: PathBuf,
     pub notion_configured: bool,
     pub codex_profiles: Vec<CodexProfileConfig>,
     pub expected_uid: u32,
@@ -48,6 +49,7 @@ impl LifecycleConfig {
             .map(PathBuf::from)
             .unwrap_or_else(|| home.join("Library/Application Support/narihitos-diary"));
         let runtime_dir = application_support.join("runtime");
+        let entries_root = resolve_entries_root(&launch_root, &home, parsed.entries_root);
         Ok(Self {
             launch_root: launch_root.clone(),
             config_path,
@@ -57,6 +59,7 @@ impl LifecycleConfig {
             runtime_dir,
             port_fallback_count: parsed.port_fallback_count,
             ayumi_directory_name: parsed.ayumi_directory_name,
+            entries_root,
             notion_configured: parsed.notion_configured,
             codex_profiles: parsed.codex_profiles,
             expected_uid,
@@ -108,6 +111,22 @@ impl LifecycleConfig {
         }
         Ok(())
     }
+}
+
+fn resolve_entries_root(launch_root: &Path, home: &Path, configured: PathBuf) -> PathBuf {
+    if configured.as_os_str().is_empty() {
+        return home.join("Documents/narihitos-diary/entries");
+    }
+    if configured.is_absolute() {
+        return configured;
+    }
+    if configured == Path::new("~") {
+        return home.to_path_buf();
+    }
+    if let Ok(relative) = configured.strip_prefix("~") {
+        return home.join(relative);
+    }
+    launch_root.join(configured)
 }
 
 #[derive(Debug)]
@@ -456,6 +475,7 @@ struct ParsedConfig {
     port_fallback_count: u16,
     notion_configured: bool,
     ayumi_directory_name: String,
+    entries_root: PathBuf,
     codex_profiles: Vec<CodexProfileConfig>,
 }
 
@@ -464,6 +484,7 @@ fn parse_config(raw: &str) -> Result<ParsedConfig, LifecycleError> {
         port_fallback_count: 8,
         notion_configured: false,
         ayumi_directory_name: String::new(),
+        entries_root: PathBuf::new(),
         codex_profiles: Vec::new(),
     };
     let mut section = "";
@@ -553,6 +574,7 @@ fn parse_config(raw: &str) -> Result<ParsedConfig, LifecycleError> {
                 if saw_entries_root {
                     return Err(LifecycleError::InvalidConfig);
                 }
+                parsed.entries_root = PathBuf::from(value);
                 saw_entries_root = true;
             }
             ("notion", "token") => {
@@ -809,6 +831,24 @@ mod tests {
     use super::*;
 
     static SCRATCH_SEQUENCE: AtomicU64 = AtomicU64::new(0);
+
+    #[test]
+    fn entries_root_expands_the_documented_home_prefix() {
+        let launch_root = Path::new("/workspace/narihitos-diary");
+        let home = Path::new("/Users/diary-owner");
+        assert_eq!(
+            resolve_entries_root(
+                launch_root,
+                home,
+                PathBuf::from("~/Documents/narihitos-diary/entries"),
+            ),
+            home.join("Documents/narihitos-diary/entries")
+        );
+        assert_eq!(
+            resolve_entries_root(launch_root, home, PathBuf::from("entries")),
+            launch_root.join("entries")
+        );
+    }
 
     #[test]
     fn tag_key_is_created_private_and_stable_across_loads() {
@@ -1162,6 +1202,7 @@ mod tests {
             database_path: scratch.path().join("state/state.sqlite3"),
             port_fallback_count: 0,
             ayumi_directory_name: "Synthetic".to_owned(),
+            entries_root: scratch.path().join("entries"),
             notion_configured: false,
             codex_profiles: Vec::new(),
             expected_uid: uid,

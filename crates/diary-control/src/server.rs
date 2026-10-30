@@ -135,6 +135,19 @@ pub fn build_router(config: ServerConfig) -> ServerHandle {
             "/v1/workflows/{id}",
             get(get_workflow).delete(discard_workflow),
         )
+        .route(
+            "/v1/workflows/{id}/output-previews",
+            post(preview_local_output),
+        )
+        .route(
+            "/v1/workflows/{id}/output-approvals",
+            post(approve_local_output),
+        )
+        .route(
+            "/v1/workflows/{id}/local-publications",
+            post(publish_local_output),
+        )
+        .route("/v1/workflows/{id}/save-under-day", post(save_under_day))
         .route("/v1/workflows/{id}/discoveries", post(discover))
         .route("/v1/workflows/{id}/sources", get(list_sources))
         .route(
@@ -1575,6 +1588,162 @@ async fn confirm_entry(
     workflow_response(StatusCode::OK, &workflow)
 }
 
+async fn preview_local_output(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    headers: HeaderMap,
+) -> Result<Json<LocalPreviewDto>, ApiError> {
+    let day = day_from_id(&id)?;
+    let revision = workflow_precondition(&headers)?;
+    let service = state.0.config.commands.clone();
+    let preview = blocking(move || service.preview_local(&day, revision)).await?;
+    let plan = preview
+        .workflow
+        .output_plan()
+        .ok_or_else(ApiError::internal)?;
+    let local_status = preview
+        .workflow
+        .destination_progress()
+        .iter()
+        .find(|item| item.destination == "local")
+        .map(|item| item.status.as_str())
+        .unwrap_or("blocked");
+    let result = LocalPreviewDto {
+        workflow: workflow_dto(&preview.workflow),
+        target: preview.target,
+        payload: preview.payload,
+        payload_digest: preview.payload_digest.as_str().to_owned(),
+        plan_digest: plan.plan_digest.as_str().to_owned(),
+        existing_text: preview.existing_text,
+        intended_changes: preview.intended_changes,
+        local_status: local_status.to_owned(),
+        notion_status: "blocked".to_owned(),
+    };
+    publish_event(
+        &state,
+        "workflow.changed",
+        Some(id),
+        Some(result.workflow.revision),
+        None,
+        None,
+    );
+    Ok(Json(result))
+}
+
+async fn approve_local_output(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    headers: HeaderMap,
+    Json(request): Json<LocalApprovalRequest>,
+) -> Result<Response, ApiError> {
+    let day = day_from_id(&id)?;
+    let revision = workflow_precondition(&headers)?;
+    let digest = Digest::parse(request.plan_digest)
+        .map_err(|_| ApiError::new(StatusCode::BAD_REQUEST, "invalid-plan-digest"))?;
+    let service = state.0.config.commands.clone();
+    let workflow = blocking(move || service.approve_local(&day, revision, &digest)).await?;
+    publish_event(
+        &state,
+        "workflow.changed",
+        Some(id),
+        Some(workflow.revision()),
+        None,
+        None,
+    );
+    workflow_response(StatusCode::OK, &workflow)
+}
+
+async fn publish_local_output(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    headers: HeaderMap,
+) -> Result<(StatusCode, Json<JobAcceptedDto>), ApiError> {
+    let day = day_from_id(&id)?;
+    let revision = workflow_precondition(&headers)?;
+    let job_id = new_job(&state, "local-publication", &id)?;
+    tokio::spawn(run_local_publication_job(
+        state,
+        job_id.clone(),
+        id,
+        day,
+        revision,
+    ));
+    Ok((StatusCode::ACCEPTED, Json(JobAcceptedDto { job_id })))
+}
+
+async fn run_local_publication_job(
+    state: AppState,
+    job_id: String,
+    workflow_id: String,
+    day: DiaryDay,
+    revision: u64,
+) {
+    let Ok(_permit) = Arc::clone(&state.0.workers).acquire_owned().await else {
+        return;
+    };
+    if !mark_running(&state, &job_id) {
+        return;
+    }
+    let Some(commit_state) = job_commit_state(&state, &job_id) else {
+        fail_job(&state, &job_id, "internal-failure");
+        return;
+    };
+    let service = state.0.config.commands.clone();
+    let outcome = tokio::task::spawn_blocking(move || {
+        service.publish_local_guarded(&day, revision, || {
+            commit_state
+                .compare_exchange(
+                    COMMIT_ACTIVE,
+                    COMMITTING,
+                    Ordering::AcqRel,
+                    Ordering::Acquire,
+                )
+                .is_ok()
+        })
+    })
+    .await;
+    match outcome {
+        Ok(Ok(workflow)) => {
+            publish_event(
+                &state,
+                "workflow.changed",
+                Some(workflow_id),
+                Some(workflow.revision()),
+                None,
+                None,
+            );
+            finish_job(&state, &job_id, None, None);
+        }
+        Ok(Err(error)) => fail_job(&state, &job_id, error.diagnostic_code()),
+        Err(_) => fail_job(&state, &job_id, "internal-failure"),
+    }
+}
+
+async fn save_under_day(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    headers: HeaderMap,
+    Json(request): Json<SaveUnderDayRequest>,
+) -> Result<Response, ApiError> {
+    let day = day_from_id(&id)?;
+    let revision = workflow_precondition(&headers)?;
+    let new_day = DiaryDay::parse(request.diary_day)
+        .map_err(|_| ApiError::new(StatusCode::BAD_REQUEST, "invalid-diary-day"))?;
+    let service = state.0.config.commands.clone();
+    let workflow =
+        blocking(move || service.save_local_conflict_under_day(&day, revision, new_day)).await?;
+    let target_id = workflow_id(workflow.day().as_str()).ok_or_else(ApiError::internal)?;
+    publish_event(
+        &state,
+        "workflow.changed",
+        Some(target_id),
+        Some(workflow.revision()),
+        None,
+        None,
+    );
+    workflow_response(StatusCode::OK, &workflow)
+}
+
 async fn get_job(
     State(state): State<AppState>,
     Path(id): Path<String>,
@@ -1597,6 +1766,14 @@ async fn cancel_job(
         .jobs
         .get_mut(&id)
         .ok_or_else(|| ApiError::new(StatusCode::NOT_FOUND, JOB_NOT_FOUND))?;
+    if record.kind == "local-publication"
+        && record.commit_state.load(Ordering::Acquire) == COMMITTING
+    {
+        return Err(ApiError::new(
+            StatusCode::CONFLICT,
+            "publication-commit-started",
+        ));
+    }
     if record.status == job_status::QUEUED {
         record.cancelled.store(true, Ordering::Release);
         record
@@ -2560,6 +2737,20 @@ fn workflow_dto(workflow: &Workflow) -> WorkflowDto {
         invalidation_code: workflow.invalidation_reason().map(invalidation_code),
         entry_text: workflow.entry().text.clone(),
         entry_confirmed: workflow.entry().confirmed.is_some(),
+        local_status: if workflow.state() == diary_core::WorkflowState::Publishing {
+            Some("reconciling".to_owned())
+        } else {
+            workflow
+                .destination_progress()
+                .iter()
+                .find(|item| item.destination == "local")
+                .map(|item| item.status.as_str().to_owned())
+        },
+        notion_status: workflow
+            .destination_progress()
+            .iter()
+            .find(|item| item.destination == "notion")
+            .map(|item| item.status.as_str().to_owned()),
         candidates: candidate_dtos(workflow),
     }
 }

@@ -3,13 +3,28 @@ use std::sync::atomic::AtomicBool;
 
 use diary_core::{
     ArtifactProvenance, AssistantRequest, AssistantResponse, AssistantSelection, CatalogRequest,
-    Clock, DiaryDay, DraftAssistantError, DraftAssistantRegistry, FreshnessCheckpoint,
-    FreshnessOutcome, OperationLog, Preferences, ReconciliationGate, ReflectionRange,
-    RegistryInvokeError, SelectedSource, SourceAccessError, SourceCatalog, SourceReadOutcome,
-    SourceReader, SourceRef, SourceWriteError, SourceWriter, StartOutcome, StoreError, Timestamp,
-    Workflow, WorkflowError, WorkflowStore, WorkflowSummary, WritingLanguage, WritingStyle,
+    Clock, Destination, DestinationKind, DestinationPlan, DestinationProgress, DestinationStatus,
+    DiaryDay, Digest, DraftAssistantError, DraftAssistantRegistry, FreshnessCheckpoint,
+    FreshnessOutcome, InspectionOutcome, LocalOutputError, LocalOutputPort, LocalOutputState,
+    OperationIntent, OperationLog, OutputPlan, Preferences, PublicationCoordinator,
+    PublicationResult, ReconciliationGate, ReflectionRange, RegistryInvokeError, SelectedSource,
+    SourceAccessError, SourceCatalog, SourceReadOutcome, SourceReader, SourceRef, SourceWriteError,
+    SourceWriter, StartOutcome, StoreError, Timestamp, Workflow, WorkflowError, WorkflowStore,
+    WorkflowSummary, WriteOutcome, WritingLanguage, WritingStyle, render_local_markdown,
     revalidate_workflow_sources,
 };
+
+use crate::lifecycle::random_id;
+
+#[derive(Clone, Debug)]
+pub struct LocalPreview {
+    pub workflow: Workflow,
+    pub target: String,
+    pub payload: String,
+    pub payload_digest: Digest,
+    pub existing_text: Option<String>,
+    pub intended_changes: Vec<String>,
+}
 
 pub trait ControlStore: WorkflowStore + OperationLog {}
 impl<T: WorkflowStore + OperationLog> ControlStore for T {}
@@ -21,6 +36,7 @@ pub struct CommandService {
     reader: Arc<dyn SourceReader + Send + Sync>,
     writer: Arc<dyn SourceWriter + Send + Sync>,
     clock: Arc<dyn Clock + Send + Sync>,
+    local_output: Option<Arc<dyn LocalOutputPort>>,
 }
 
 impl CommandService {
@@ -36,6 +52,7 @@ impl CommandService {
             reader,
             writer: Arc::new(UnavailableSourceWriter),
             clock,
+            local_output: None,
         }
     }
 
@@ -52,7 +69,13 @@ impl CommandService {
             reader,
             writer,
             clock,
+            local_output: None,
         }
+    }
+
+    pub fn with_local_output(mut self, local_output: Arc<dyn LocalOutputPort>) -> Self {
+        self.local_output = Some(local_output);
+        self
     }
 
     pub fn list_workflows(&self, limit: usize) -> Result<Vec<WorkflowSummary>, CommandError> {
@@ -841,6 +864,521 @@ impl CommandService {
         self.clock.now()
     }
 
+    pub fn preview_local(
+        &self,
+        day: &DiaryDay,
+        expected_revision: u64,
+    ) -> Result<LocalPreview, CommandError> {
+        self.ensure_clear(day)?;
+        let output = self
+            .local_output
+            .as_ref()
+            .ok_or(CommandError::LocalOutput(LocalOutputError::Unavailable))?;
+        let mut workflow = self.load_workflow(day)?;
+        ensure_revision(&workflow, expected_revision)?;
+        let prior_revision = workflow.revision();
+        let freshness = revalidate_workflow_sources(
+            &mut workflow,
+            self.reader.as_ref(),
+            FreshnessCheckpoint::BeforePreview,
+            self.clock.now(),
+        );
+        if freshness.is_err() || workflow.revision() != prior_revision {
+            if workflow.revision() != prior_revision {
+                self.store
+                    .compare_and_swap(prior_revision, None, &workflow)
+                    .map_err(CommandError::Store)?;
+            }
+            return Err(CommandError::SourcesInvalidated);
+        }
+        let language = workflow
+            .language()
+            .ok_or(CommandError::Workflow(WorkflowError::LanguageRequired))?;
+        let payload = render_local_markdown(day, language, &workflow.entry().text);
+        let payload_digest = Digest::of_bytes(payload.as_bytes());
+        let state = output.inspect(day, &payload);
+        let (observed, status, existing_text) = match state {
+            Ok(LocalOutputState::Absent) => (
+                Digest::of_bytes(b"absent"),
+                DestinationStatus::Pending,
+                None,
+            ),
+            Ok(LocalOutputState::Identical) => {
+                (payload_digest.clone(), DestinationStatus::Pending, None)
+            }
+            Ok(LocalOutputState::Different(text)) => (
+                Digest::of_bytes(text.as_bytes()),
+                DestinationStatus::Conflict,
+                Some(text),
+            ),
+            Err(_) => (
+                Digest::of_bytes(b"unverifiable"),
+                DestinationStatus::Blocked,
+                None,
+            ),
+        };
+        let target = output.target(day);
+        let intended_changes = if status == DestinationStatus::Pending {
+            if existing_text.is_none() && observed == Digest::of_bytes(b"absent") {
+                vec![
+                    format!("Create parent directories as needed for {target}"),
+                    format!("Create {target} without replacing an existing file"),
+                ]
+            } else {
+                vec![format!("Verify identical existing file at {target}")]
+            }
+        } else {
+            Vec::new()
+        };
+        let local = DestinationPlan::new(
+            DestinationKind::Local,
+            "local",
+            target.clone(),
+            payload_digest.clone(),
+            payload_digest.clone(),
+            observed,
+        )
+        .map_err(|_| CommandError::LocalOutput(LocalOutputError::Unavailable))?;
+        let blocked = DestinationPlan::new(
+            DestinationKind::Remote,
+            "notion",
+            "unavailable",
+            Digest::of_bytes(b"blocked"),
+            Digest::of_bytes(b"blocked"),
+            Digest::of_bytes(b"uninspected"),
+        )
+        .map_err(|_| CommandError::LocalOutput(LocalOutputError::Unavailable))?;
+        let plan = OutputPlan::new(
+            random_id("plan_")
+                .map_err(|_| CommandError::LocalOutput(LocalOutputError::Unavailable))?,
+            workflow
+                .entry()
+                .confirmed
+                .as_ref()
+                .ok_or(CommandError::Workflow(WorkflowError::EntryNotConfirmed))?
+                .entry_digest
+                .clone(),
+            workflow
+                .selection_digest()
+                .ok_or(CommandError::Workflow(WorkflowError::PlanBindingMismatch))?
+                .clone(),
+            vec![local, blocked],
+            self.clock.now(),
+        )
+        .map_err(|_| CommandError::LocalOutput(LocalOutputError::Unavailable))?;
+        let progress = vec![
+            DestinationProgress {
+                destination: "local".into(),
+                status,
+            },
+            DestinationProgress {
+                destination: "notion".into(),
+                status: DestinationStatus::Blocked,
+            },
+        ];
+        workflow
+            .preview_output_with_progress(expected_revision, plan, progress, self.clock.now())
+            .map_err(CommandError::Workflow)?;
+        self.store
+            .compare_and_swap(expected_revision, None, &workflow)
+            .map_err(CommandError::Store)?;
+        Ok(LocalPreview {
+            workflow,
+            target,
+            payload,
+            payload_digest,
+            existing_text,
+            intended_changes,
+        })
+    }
+
+    pub fn approve_local(
+        &self,
+        day: &DiaryDay,
+        expected_revision: u64,
+        digest: &Digest,
+    ) -> Result<Workflow, CommandError> {
+        self.ensure_clear(day)?;
+        let mut workflow = self.load_workflow(day)?;
+        ensure_revision(&workflow, expected_revision)?;
+        let prior_revision = workflow.revision();
+        let freshness = revalidate_workflow_sources(
+            &mut workflow,
+            self.reader.as_ref(),
+            FreshnessCheckpoint::BeforePreview,
+            self.clock.now(),
+        );
+        if freshness.is_err() || workflow.revision() != prior_revision {
+            if workflow.revision() != prior_revision {
+                self.store
+                    .compare_and_swap(prior_revision, None, &workflow)
+                    .map_err(CommandError::Store)?;
+            }
+            return Err(CommandError::SourcesInvalidated);
+        }
+        let plan = workflow
+            .output_plan()
+            .ok_or(CommandError::Workflow(WorkflowError::MissingPlan))?;
+        let target = plan
+            .targets
+            .iter()
+            .find(|target| target.kind == DestinationKind::Local)
+            .ok_or(CommandError::Workflow(WorkflowError::MissingPlan))?;
+        let output = self
+            .local_output
+            .as_ref()
+            .ok_or(CommandError::LocalOutput(LocalOutputError::Unavailable))?;
+        let payload = render_local_markdown(
+            day,
+            workflow
+                .language()
+                .ok_or(CommandError::Workflow(WorkflowError::LanguageRequired))?,
+            &workflow.entry().text,
+        );
+        if Digest::of_bytes(payload.as_bytes()) != target.payload_digest
+            || output.target(day) != target.target_identity
+            || observed_digest(
+                output
+                    .inspect(day, &payload)
+                    .map_err(CommandError::LocalOutput)?,
+                &payload,
+            ) != target.inspected_state_digest
+        {
+            return Err(CommandError::PreconditionFailed);
+        }
+        workflow
+            .approve(expected_revision, digest, self.clock.now())
+            .map_err(CommandError::Workflow)?;
+        self.store
+            .compare_and_swap(expected_revision, None, &workflow)
+            .map_err(CommandError::Store)?;
+        Ok(workflow)
+    }
+
+    pub fn publish_local(
+        &self,
+        day: &DiaryDay,
+        expected_revision: u64,
+    ) -> Result<Workflow, CommandError> {
+        self.publish_local_guarded(day, expected_revision, || true)
+    }
+
+    pub fn publish_local_guarded(
+        &self,
+        day: &DiaryDay,
+        expected_revision: u64,
+        commit: impl FnOnce() -> bool,
+    ) -> Result<Workflow, CommandError> {
+        self.ensure_clear(day)?;
+        let output = self
+            .local_output
+            .as_ref()
+            .ok_or(CommandError::LocalOutput(LocalOutputError::Unavailable))?;
+        let mut workflow = self.load_workflow(day)?;
+        ensure_revision(&workflow, expected_revision)?;
+        let plan = workflow
+            .output_plan()
+            .ok_or(CommandError::Workflow(WorkflowError::MissingPlan))?
+            .clone();
+        let target = plan
+            .targets
+            .iter()
+            .find(|target| target.kind == DestinationKind::Local)
+            .ok_or(CommandError::Workflow(WorkflowError::MissingPlan))?;
+        let payload = render_local_markdown(
+            day,
+            workflow
+                .language()
+                .ok_or(CommandError::Workflow(WorkflowError::LanguageRequired))?,
+            &workflow.entry().text,
+        );
+        if Digest::of_bytes(payload.as_bytes()) != target.payload_digest
+            || output.target(day) != target.target_identity
+            || observed_digest(
+                output
+                    .inspect(day, &payload)
+                    .map_err(CommandError::LocalOutput)?,
+                &payload,
+            ) != target.inspected_state_digest
+        {
+            return Err(CommandError::PreconditionFailed);
+        }
+        let prior = workflow.revision();
+        let fresh = revalidate_workflow_sources(
+            &mut workflow,
+            self.reader.as_ref(),
+            FreshnessCheckpoint::BeforeFirstWrite,
+            self.clock.now(),
+        );
+        if fresh.is_err() || workflow.revision() != prior {
+            if workflow.revision() != prior {
+                self.store
+                    .compare_and_swap(prior, None, &workflow)
+                    .map_err(CommandError::Store)?;
+            }
+            return Err(CommandError::SourcesInvalidated);
+        }
+        if !commit() {
+            return Err(CommandError::Cancelled);
+        }
+        if workflow.state() == diary_core::WorkflowState::Partial {
+            workflow
+                .begin_local_retry(expected_revision, self.clock.now())
+                .map_err(CommandError::Workflow)?;
+        } else {
+            workflow
+                .begin_publication(expected_revision, self.clock.now())
+                .map_err(CommandError::Workflow)?;
+        }
+        self.store
+            .compare_and_swap(expected_revision, None, &workflow)
+            .map_err(CommandError::Store)?;
+        let intent = OperationIntent::new(
+            random_id("attempt_")
+                .map_err(|_| CommandError::LocalOutput(LocalOutputError::Unavailable))?,
+            plan.plan_id.clone(),
+            day.clone(),
+            target,
+            plan.entry_digest.clone(),
+            plan.selection_digest.clone(),
+            self.clock.now(),
+        )
+        .map_err(|_| CommandError::LocalOutput(LocalOutputError::Unavailable))?;
+        let mut destination = LocalDestination {
+            output: output.as_ref(),
+            day,
+            payload: &payload,
+        };
+        let result = PublicationCoordinator::execute(
+            self.store.as_ref(),
+            &mut destination,
+            &intent,
+            1,
+            self.clock.now(),
+        )
+        .map_err(|_| CommandError::LocalOutput(LocalOutputError::Unavailable))?;
+        let status = match result {
+            PublicationResult::Verified(_) => DestinationStatus::Verified,
+            PublicationResult::Conflict => DestinationStatus::Conflict,
+            _ => DestinationStatus::Reconciling,
+        };
+        if status == DestinationStatus::Reconciling {
+            return Ok(workflow);
+        }
+        workflow
+            .finish_publication(
+                workflow.revision(),
+                vec![
+                    DestinationProgress {
+                        destination: "local".into(),
+                        status,
+                    },
+                    DestinationProgress {
+                        destination: "notion".into(),
+                        status: DestinationStatus::Blocked,
+                    },
+                ],
+                self.clock.now(),
+            )
+            .map_err(CommandError::Workflow)?;
+        self.store
+            .compare_and_swap(workflow.revision() - 1, None, &workflow)
+            .map_err(CommandError::Store)?;
+        Ok(workflow)
+    }
+
+    /// Recover uncertain local effects before accepting commands for their day.
+    pub fn reconcile_local_intents(&self) -> Result<(), CommandError> {
+        let Some(output) = &self.local_output else {
+            return Ok(());
+        };
+        for intent in self
+            .store
+            .unresolved_intents(None)
+            .map_err(CommandError::Store)?
+        {
+            if intent.destination != "local" {
+                continue;
+            }
+            let mut workflow = self.load_workflow(&intent.day)?;
+            let Some(language) = workflow.language() else {
+                continue;
+            };
+            let payload = render_local_markdown(&intent.day, language, &workflow.entry().text);
+            if Digest::of_bytes(payload.as_bytes()) != intent.payload_digest
+                || output.target(&intent.day) != intent.target_identity
+            {
+                continue;
+            }
+            let mut destination = LocalDestination {
+                output: output.as_ref(),
+                day: &intent.day,
+                payload: &payload,
+            };
+            let result = PublicationCoordinator::reconcile(
+                self.store.as_ref(),
+                &mut destination,
+                &intent,
+                1,
+                self.clock.now(),
+            )
+            .map_err(|_| CommandError::LocalOutput(LocalOutputError::Unavailable))?;
+            let status = match result {
+                PublicationResult::Verified(_) => DestinationStatus::Verified,
+                PublicationResult::Conflict => DestinationStatus::Conflict,
+                PublicationResult::SafeToRetry => DestinationStatus::Pending,
+                _ => continue,
+            };
+            if workflow.state() == diary_core::WorkflowState::Publishing {
+                let revision = workflow.revision();
+                workflow
+                    .finish_publication(
+                        revision,
+                        vec![
+                            DestinationProgress {
+                                destination: "local".into(),
+                                status,
+                            },
+                            DestinationProgress {
+                                destination: "notion".into(),
+                                status: DestinationStatus::Blocked,
+                            },
+                        ],
+                        self.clock.now(),
+                    )
+                    .map_err(CommandError::Workflow)?;
+                self.store
+                    .compare_and_swap(revision, None, &workflow)
+                    .map_err(CommandError::Store)?;
+            }
+        }
+        // A crash may land between persisting `Publishing` and recording its
+        // intent, or between committing a receipt and advancing the workflow.
+        for summary in self
+            .store
+            .list_summaries(diary_control_contract::MAX_WORKFLOWS)
+            .map_err(CommandError::Store)?
+        {
+            if summary.state != diary_core::WorkflowState::Publishing {
+                continue;
+            }
+            let day = summary.day;
+            if !self
+                .store
+                .unresolved_intents(Some(&day))
+                .map_err(CommandError::Store)?
+                .is_empty()
+            {
+                continue;
+            }
+            let mut workflow = self.load_workflow(&day)?;
+            let Some(plan) = workflow.output_plan() else {
+                continue;
+            };
+            let Some(target) = plan
+                .targets
+                .iter()
+                .find(|target| target.destination == "local")
+            else {
+                continue;
+            };
+            let Some(language) = workflow.language() else {
+                continue;
+            };
+            let payload = render_local_markdown(&day, language, &workflow.entry().text);
+            if Digest::of_bytes(payload.as_bytes()) != target.payload_digest {
+                continue;
+            }
+            let receipted = self
+                .store
+                .receipts(&day)
+                .map_err(CommandError::Store)?
+                .iter()
+                .any(|receipt| {
+                    receipt.destination == "local"
+                        && receipt.target_identity == target.target_identity
+                        && receipt.payload_digest == target.payload_digest
+                        && receipt.entry_digest == plan.entry_digest
+                        && receipt.selection_digest == plan.selection_digest
+                });
+            let status = match output.inspect(&day, &payload) {
+                Ok(LocalOutputState::Identical) if receipted => DestinationStatus::Verified,
+                Ok(LocalOutputState::Absent) if !receipted => DestinationStatus::Pending,
+                Ok(_) => DestinationStatus::Conflict,
+                Err(_) => continue,
+            };
+            let revision = workflow.revision();
+            workflow
+                .finish_publication(
+                    revision,
+                    vec![
+                        DestinationProgress {
+                            destination: "local".into(),
+                            status,
+                        },
+                        DestinationProgress {
+                            destination: "notion".into(),
+                            status: DestinationStatus::Blocked,
+                        },
+                    ],
+                    self.clock.now(),
+                )
+                .map_err(CommandError::Workflow)?;
+            self.store
+                .compare_and_swap(revision, None, &workflow)
+                .map_err(CommandError::Store)?;
+        }
+        Ok(())
+    }
+
+    pub fn save_local_conflict_under_day(
+        &self,
+        source_day: &DiaryDay,
+        expected_revision: u64,
+        new_day: DiaryDay,
+    ) -> Result<Workflow, CommandError> {
+        self.ensure_clear(source_day)?;
+        self.ensure_clear(&new_day)?;
+        let source = self.load_workflow(source_day)?;
+        ensure_revision(&source, expected_revision)?;
+        if source_day == &new_day {
+            return Err(CommandError::PreconditionFailed);
+        }
+        let preferences = self.store.load_preferences().map_err(CommandError::Store)?;
+        let carried = source
+            .carry_conflict_to_day(new_day.clone(), self.clock.now(), &preferences)
+            .map_err(CommandError::Workflow)?;
+        match self
+            .store
+            .start_or_resume(new_day.clone(), self.clock.now(), &preferences)
+            .map_err(CommandError::Store)?
+        {
+            StartOutcome::Created(created) => {
+                let output = self
+                    .local_output
+                    .as_ref()
+                    .ok_or(CommandError::LocalOutput(LocalOutputError::Unavailable))?;
+                let candidate_payload = render_local_markdown(
+                    &new_day,
+                    source.language().unwrap_or(WritingLanguage::EnUs),
+                    &source.entry().text,
+                );
+                if output
+                    .inspect(&new_day, &candidate_payload)
+                    .map_err(CommandError::LocalOutput)?
+                    != LocalOutputState::Absent
+                {
+                    return Ok(created);
+                }
+                self.store
+                    .compare_and_swap(0, None, &carried)
+                    .map_err(CommandError::Store)?;
+                Ok(carried)
+            }
+            StartOutcome::Resumed(existing) | StartOutcome::Completed(existing) => Ok(existing),
+        }
+    }
+
     fn ensure_clear(&self, day: &DiaryDay) -> Result<(), CommandError> {
         match self
             .store
@@ -854,6 +1392,46 @@ impl CommandService {
 }
 
 struct UnavailableSourceWriter;
+fn observed_digest(state: LocalOutputState, payload: &str) -> Digest {
+    match state {
+        LocalOutputState::Absent => Digest::of_bytes(b"absent"),
+        LocalOutputState::Identical => Digest::of_bytes(payload.as_bytes()),
+        LocalOutputState::Different(text) => Digest::of_bytes(text.as_bytes()),
+    }
+}
+
+struct LocalDestination<'a> {
+    output: &'a dyn LocalOutputPort,
+    day: &'a DiaryDay,
+    payload: &'a str,
+}
+
+impl Destination for LocalDestination<'_> {
+    fn write(&mut self, _: &OperationIntent) -> WriteOutcome {
+        match self.output.write(self.day, self.payload) {
+            Ok(LocalOutputState::Identical) => WriteOutcome::Verified {
+                receipt_id: "local".into(),
+                returned_ids: Vec::new(),
+            },
+            Ok(LocalOutputState::Different(_)) => WriteOutcome::Conflict,
+            Ok(LocalOutputState::Absent) => WriteOutcome::AmbiguousWrite,
+            Err(_) => WriteOutcome::Unavailable,
+        }
+    }
+
+    fn inspect(&mut self, _: &OperationIntent) -> InspectionOutcome {
+        match self.output.inspect(self.day, self.payload) {
+            Ok(LocalOutputState::Identical) => InspectionOutcome::Matching {
+                receipt_id: "local".into(),
+                returned_ids: Vec::new(),
+            },
+            Ok(LocalOutputState::Absent) => InspectionOutcome::Absent,
+            Ok(LocalOutputState::Different(_)) => InspectionOutcome::Conflict,
+            Err(_) => InspectionOutcome::Unavailable,
+        }
+    }
+}
+
 impl SourceWriter for UnavailableSourceWriter {
     fn overwrite_body(
         &self,
@@ -944,6 +1522,7 @@ pub enum CommandError {
     Source(SourceAccessError),
     SourceWrite(SourceWriteError),
     DeleteNotConfirmed,
+    LocalOutput(LocalOutputError),
 }
 
 impl CommandError {
@@ -1009,6 +1588,8 @@ impl CommandError {
             }
             Self::SourceWrite(SourceWriteError::Unavailable) => "source-write-unavailable",
             Self::DeleteNotConfirmed => "source-delete-not-confirmed",
+            Self::LocalOutput(LocalOutputError::UnsafePath) => "local-output-unsafe-path",
+            Self::LocalOutput(LocalOutputError::Unavailable) => "local-output-unavailable",
             Self::Store(_) => "state-unavailable",
         }
     }

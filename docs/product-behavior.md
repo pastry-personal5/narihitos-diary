@@ -8,9 +8,8 @@ the [terminal UX](ux-tui.md) describes how it appears to a person.
 
 P1-M7 implements the manual journey through complete-entry Review. P1-M8 adds
 the optional Codex hosted and Apple Foundation Models assistant paths inside
-Compose; Preview, Publish, and amendments remain planned for later milestones.
-The implemented client keeps unavailable later behavior visible but locked, so
-the stage model below remains stable as it arrives.
+Compose. P1-M9 adds local Preview and Publish while keeping Notion blocked;
+amendments remain planned for a later milestone.
 
 ## Core journey
 
@@ -52,9 +51,9 @@ stage, and activating one displays its content in the right Main Pane.
    resource. A late result never overwrites newer text. The Draft editor
    stays available for manual editing after any assistant failure. The confirmed
    source notes remain in the Resources Sidebar for read-only inspection. Choose US
-   English or South Korean Korean as the entry language and a concise, standard,
+   English or Korean as the entry language and a concise, standard,
    or reflective style; remember the last language choice and start with concise
-   style. Source notes are expected to be en-US, so a South Korean Korean entry
+   style. Source notes are expected to be en-US, so a Korean entry
    is a translation.
 4. Still in **Compose**, focus a paragraph and ask an available backend to
    review it. The Main Pane shows the current paragraph and suggestion. Accept

@@ -10,8 +10,8 @@ use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use diary_connectors::{
-    AppleBridgeClient, AppleFoundationAssistant, AyumiCatalog, AyumiSource, MigrationEvent,
-    MigrationObserver, SqliteStore,
+    AppleBridgeClient, AppleFoundationAssistant, AyumiCatalog, AyumiSource, LocalOutput,
+    MigrationEvent, MigrationObserver, SqliteStore,
 };
 use diary_control::{
     CodexAssistant, CommandService, DiagnosticEvent, DiagnosticLevel, DiagnosticLog,
@@ -19,7 +19,7 @@ use diary_control::{
     bind_loopback, load_or_create_tag_key, load_runtime_attachment, random_id, serve,
 };
 use diary_control_contract::{
-    CONTRACT_VERSION, CapabilitiesDto, JOB_NOT_FOUND, PreferencesDto,
+    CONTRACT_VERSION, CapabilitiesDto, JOB_NOT_FOUND, LocalPreviewDto, PreferencesDto,
     ResolveParagraphSuggestionRequest, SetupCheckDto, SourceDetailDto, StartParagraphReviewRequest,
     WorkflowDto, buffer_etag, job_status,
 };
@@ -271,7 +271,15 @@ async fn run_server() -> Result<(), &'static str> {
         source.clone(),
         source,
         clock.clone(),
-    );
+    )
+    .with_local_output(Arc::new(
+        LocalOutput::new(lifecycle.entries_root.clone()).map_err(|_| "entry-root-invalid")?,
+    ));
+    let recovery_commands = commands.clone();
+    tokio::task::spawn_blocking(move || recovery_commands.reconcile_local_intents())
+        .await
+        .map_err(|_| "publication-recovery-task-failed")?
+        .map_err(|_| "publication-recovery-failed")?;
 
     let (listener, port) = bind_loopback(lifecycle.port_fallback_count).await?;
     let instance_id = random_id("instance_").map_err(|_| "random-failed")?;
@@ -792,6 +800,11 @@ fn run_connected_session(
     let mut setup_check: Option<SetupCheckDto> = None;
     let mut preferences: Option<PreferencesDto> = None;
     let mut current_workflow: Option<WorkflowDto> = None;
+    let mut local_preview: Option<LocalPreviewDto> = None;
+    let mut local_action_pending = false;
+    let mut local_publication_job: Option<String> = None;
+    let mut conflict_day_editing = false;
+    let mut conflict_day_draft = String::new();
     let mut current_stage = Stage::Start;
     let mut focus = FocusModel::default();
     let mut start_pending = false;
@@ -971,6 +984,7 @@ fn run_connected_session(
                     match *outcome {
                         ClientOutcome::Ok(workflow) => {
                             selected_day = Some(workflow.diary_day.clone());
+                            local_preview = None;
                             let model = map_workflow(Some(&workflow), false);
                             current_stage = model.default_current;
                             sources_view.load_candidates_from(&workflow);
@@ -1060,6 +1074,7 @@ fn run_connected_session(
                         ClientOutcome::Problem(problem) if problem.code == JOB_NOT_FOUND
                     );
                     let is_recovery = job_id.is_some() && recovery_job == job_id;
+                    let is_local_publication = job_id.is_some() && local_publication_job == job_id;
                     let is_assistant = job_id.is_some()
                         && assistant_job.as_ref().map(|(id, _)| id) == job_id.as_ref();
                     let is_source = job_id
@@ -1069,6 +1084,20 @@ fn run_connected_session(
                         // A vanished job has no canonical state left to reload.
                         recovery_job = None;
                         authority.canonical_job_loaded();
+                    }
+                    if is_local_publication {
+                        let terminal = job_lost
+                            || matches!(&outcome, ClientOutcome::Ok(job) if job_status::is_terminal(&job.status));
+                        if terminal {
+                            local_publication_job = None;
+                            if let Some(workflow) = &current_workflow {
+                                let _ = worker.try_send(Intent::GetWorkflow {
+                                    workflow_id: workflow.id.clone(),
+                                });
+                            }
+                            feedback =
+                                Some("Local publication finished; reloading status".to_owned());
+                        }
                     }
                     if is_assistant {
                         match outcome {
@@ -1461,6 +1490,72 @@ fn run_connected_session(
                         }
                     }
                 }
+                WorkerResult::LocalPreviewed(outcome) => {
+                    local_action_pending = false;
+                    match *outcome {
+                        ClientOutcome::Ok(preview) => {
+                            current_workflow = Some(preview.workflow.clone());
+                            local_preview = Some(preview);
+                            feedback = Some(
+                                "Output plan ready; inspect the complete file before approval"
+                                    .to_owned(),
+                            );
+                        }
+                        ClientOutcome::Problem(problem) => feedback = Some(problem.safe_label()),
+                        ClientOutcome::Transport(error) => {
+                            feedback = Some(error.safe_label().to_owned())
+                        }
+                    }
+                }
+                WorkerResult::LocalApproved(outcome) => {
+                    local_action_pending = false;
+                    match *outcome {
+                        ClientOutcome::Ok(workflow) => {
+                            current_workflow = Some(workflow);
+                            current_stage = Stage::Publish;
+                            feedback = Some("Exact output plan approved".to_owned());
+                        }
+                        ClientOutcome::Problem(problem) => feedback = Some(problem.safe_label()),
+                        ClientOutcome::Transport(error) => {
+                            feedback = Some(error.safe_label().to_owned())
+                        }
+                    }
+                }
+                WorkerResult::LocalPublished(outcome) => {
+                    local_action_pending = false;
+                    match outcome {
+                        ClientOutcome::Ok(job) => {
+                            local_publication_job = Some(job.job_id);
+                            feedback = Some("Local publication started".to_owned());
+                        }
+                        ClientOutcome::Problem(problem) => feedback = Some(problem.safe_label()),
+                        ClientOutcome::Transport(error) => {
+                            feedback = Some(error.safe_label().to_owned())
+                        }
+                    }
+                }
+                WorkerResult::SavedUnderDay(outcome) => {
+                    local_action_pending = false;
+                    match *outcome {
+                        ClientOutcome::Ok(workflow) => {
+                            selected_day = Some(workflow.diary_day.clone());
+                            current_stage = map_workflow(Some(&workflow), false).default_current;
+                            sources_view.load_candidates_from(&workflow);
+                            compose_view.load_from_canonical(&workflow);
+                            draft_editor = DraftEditor::new(&compose_view.text);
+                            current_workflow = Some(workflow);
+                            local_preview = None;
+                            feedback = Some(
+                                "Target day opened; review and confirm its entry before output"
+                                    .to_owned(),
+                            );
+                        }
+                        ClientOutcome::Problem(problem) => feedback = Some(problem.safe_label()),
+                        ClientOutcome::Transport(error) => {
+                            feedback = Some(error.safe_label().to_owned())
+                        }
+                    }
+                }
                 WorkerResult::AssistantSelected(outcome) => {
                     assistant_selection_pending = false;
                     match *outcome {
@@ -1549,9 +1644,7 @@ fn run_connected_session(
                     }
                 },
                 WorkerResult::JobCancelled(outcome) => match outcome {
-                    ClientOutcome::Ok(()) => {
-                        feedback = Some("Assistant cancellation requested".to_owned())
-                    }
+                    ClientOutcome::Ok(()) => feedback = Some("Cancellation requested".to_owned()),
                     ClientOutcome::Problem(problem) => feedback = Some(problem.safe_label()),
                     ClientOutcome::Transport(error) => {
                         feedback = Some(error.safe_label().to_owned())
@@ -1575,7 +1668,7 @@ fn run_connected_session(
         }
         if job_poll_in_flight.is_none()
             && let Some(job_id) = next_job_poll(
-                recovery_job.as_deref(),
+                recovery_job.as_deref().or(local_publication_job.as_deref()),
                 sources_view
                     .pending_discovery_job
                     .as_deref()
@@ -1679,12 +1772,15 @@ fn run_connected_session(
             Stage::Sources => sources_view.candidates.len(),
             Stage::Compose => compose_resources.rows.len(),
             Stage::Review => 1,
-            _ => 0,
+            Stage::Preview => 1,
+            Stage::Publish => 2,
         };
         let visible_control_count = match current_stage {
             Stage::Sources => SOURCES_CONTROL_COUNT,
             Stage::Compose => COMPOSE_CONTROL_COUNT,
             Stage::Review => REVIEW_CONTROL_COUNT,
+            Stage::Preview => 3,
+            Stage::Publish => 2,
             _ => START_CONTROL_COUNT,
         };
         focus.clamp(
@@ -1710,6 +1806,8 @@ fn run_connected_session(
             DEFAULT_NOTICE.to_owned()
         } else if day_editing {
             format!("Day: {day_draft}")
+        } else if conflict_day_editing {
+            format!("New diary day: {conflict_day_draft} (Enter confirms; Esc cancels)")
         } else if source_date_editing {
             format!("Extra source date: {source_date_draft}")
         } else if empty_selection_confirmation {
@@ -1764,7 +1862,31 @@ fn run_connected_session(
                     indent: 0,
                 }],
             },
-            _ => ResourcesSidebarModel::default(),
+            Stage::Preview => ResourcesSidebarModel {
+                rows: vec![ResourceRow {
+                    label: "Local Markdown".to_owned(),
+                    state: "preview".to_owned(),
+                    indent: 0,
+                }],
+            },
+            Stage::Publish => ResourcesSidebarModel {
+                rows: vec![
+                    ResourceRow {
+                        label: "Local file".to_owned(),
+                        state: current_workflow
+                            .as_ref()
+                            .and_then(|w| w.local_status.as_deref())
+                            .unwrap_or("pending")
+                            .to_owned(),
+                        indent: 0,
+                    },
+                    ResourceRow {
+                        label: "Notion".to_owned(),
+                        state: "blocked".to_owned(),
+                        indent: 0,
+                    },
+                ],
+            },
         };
         let main_body = match current_stage {
             Stage::Start => start_screen_body(
@@ -1812,10 +1934,8 @@ fn run_connected_session(
                 &compose_view,
                 entry_confirmation_pending,
             ),
-            _ => format!(
-                "{} is not part of this increment.",
-                diary_tui::sidebar::stage_label(current_stage)
-            ),
+            Stage::Preview => preview_screen_body(&focus, local_preview.as_ref()),
+            Stage::Publish => publish_screen_body(&focus, current_workflow.as_ref()),
         };
         let drawn = guard.terminal_mut().draw(|frame| {
             let area = frame.area();
@@ -2067,6 +2187,37 @@ fn run_connected_session(
                 | InputEvent::PageUp
                 | InputEvent::PageDown
                 | InputEvent::Delete => {}
+            },
+            InputPoll::Event(event) if conflict_day_editing => match event {
+                InputEvent::Char(ch)
+                    if (ch.is_ascii_digit() || ch == '-') && conflict_day_draft.len() < 10 =>
+                {
+                    conflict_day_draft.push(ch)
+                }
+                InputEvent::Backspace => {
+                    conflict_day_draft.pop();
+                }
+                InputEvent::Enter => {
+                    if diary_tui::command_line::is_valid_day(&conflict_day_draft) {
+                        if let Some(workflow) = &current_workflow {
+                            local_action_pending = worker
+                                .try_send(Intent::SaveUnderDay {
+                                    workflow_id: workflow.id.clone(),
+                                    revision: workflow.revision,
+                                    new_day: conflict_day_draft.clone(),
+                                })
+                                .is_ok();
+                        }
+                        conflict_day_editing = false;
+                    } else {
+                        feedback = Some("New day must be YYYY-MM-DD".to_owned());
+                    }
+                }
+                InputEvent::Esc => {
+                    conflict_day_editing = false;
+                    feedback = Some("Save under another day cancelled".to_owned());
+                }
+                _ => {}
             },
             InputPoll::Event(event) if day_editing => match event {
                 InputEvent::Char(ch)
@@ -2860,6 +3011,71 @@ fn run_connected_session(
                         _ => feedback = Some("Entry cannot be confirmed yet".to_owned()),
                     }
                 }
+                FocusZone::Main if current_stage == Stage::Preview => {
+                    if can_mutate
+                        && !local_action_pending
+                        && let Some(workflow) = &current_workflow
+                    {
+                        match focus.main_control_index {
+                            0 => {
+                                local_action_pending = worker
+                                    .try_send(Intent::PreviewLocal {
+                                        workflow_id: workflow.id.clone(),
+                                        revision: workflow.revision,
+                                    })
+                                    .is_ok();
+                            }
+                            1 if workflow.state == "output-planned" => {
+                                if let Some(preview) = &local_preview {
+                                    local_action_pending = worker
+                                        .try_send(Intent::ApproveLocal {
+                                            workflow_id: workflow.id.clone(),
+                                            revision: workflow.revision,
+                                            plan_digest: preview.plan_digest.clone(),
+                                        })
+                                        .is_ok();
+                                }
+                            }
+                            2 if workflow.local_status.as_deref() == Some("conflict")
+                                || local_preview
+                                    .as_ref()
+                                    .is_some_and(|preview| preview.local_status == "conflict") =>
+                            {
+                                conflict_day_draft.clear();
+                                conflict_day_editing = true;
+                                feedback = Some("Enter a different diary day".to_owned());
+                            }
+                            _ => {
+                                feedback =
+                                    Some("Preview the current plan before approval".to_owned())
+                            }
+                        }
+                    }
+                }
+                FocusZone::Main
+                    if current_stage == Stage::Publish && can_mutate && !local_action_pending =>
+                {
+                    if focus.main_control_index == 1 {
+                        if let Some(job_id) = &local_publication_job {
+                            let _ = worker.try_send(Intent::CancelJob {
+                                job_id: job_id.clone(),
+                            });
+                        }
+                    } else if local_publication_job.is_none()
+                        && let Some(workflow) = &current_workflow
+                    {
+                        if workflow.state == "approved" || workflow.state == "partial" {
+                            local_action_pending = worker
+                                .try_send(Intent::PublishLocal {
+                                    workflow_id: workflow.id.clone(),
+                                    revision: workflow.revision,
+                                })
+                                .is_ok();
+                        } else {
+                            feedback = Some("No approved local write is pending".to_owned());
+                        }
+                    }
+                }
                 _ => {}
             },
             InputPoll::Event(_) => {}
@@ -2968,7 +3184,7 @@ fn compose_screen_body(
         "saved"
     };
     let mut body = format!(
-        "Workflow: {state}\nWriting language: {language}\nStyle: {style}\nAssistant: {backend} · {path}\nDraft: {save}\n\n{} Language: US English\n{} Language: South Korean Korean\n{} Style: concise\n{} Style: standard\n{} Style: reflective\n{} Open manual Draft editor{}\n{} Save/flush Draft\n{} Keep local Draft after conflict\n{} Use server Draft after conflict\n{} Review complete entry\n{} Extract memories\n{} Confirm reviewed memories\n{} Draft with selected assistant\n{} Review focused paragraph\n{} Cancel assistant action\n{} Refresh assistant resources\n{} Accept current suggestion\n{} Reject current suggestion",
+        "Workflow: {state}\nWriting language: {language}\nStyle: {style}\nAssistant: {backend} · {path}\nDraft: {save}\n\n{} Language: US English\n{} Language: Korean\n{} Style: concise\n{} Style: standard\n{} Style: reflective\n{} Open manual Draft editor{}\n{} Save/flush Draft\n{} Keep local Draft after conflict\n{} Use server Draft after conflict\n{} Review complete entry\n{} Extract memories\n{} Confirm reviewed memories\n{} Draft with selected assistant\n{} Review focused paragraph\n{} Cancel assistant action\n{} Refresh assistant resources\n{} Accept current suggestion\n{} Reject current suggestion",
         marker(0),
         marker(1),
         marker(2),
@@ -3064,6 +3280,62 @@ fn review_screen_body(
         marker(2),
         marker(3),
         compose.text,
+    )
+}
+
+fn preview_screen_body(focus: &FocusModel, preview: Option<&LocalPreviewDto>) -> String {
+    let marker = |index| {
+        if focus.zone == FocusZone::Main && focus.main_control_index == index {
+            ">"
+        } else {
+            " "
+        }
+    };
+    let mut text = format!(
+        "{} Generate/refresh preview\n{} Approve exact plan\n{} Save conflict under another day\n\n",
+        marker(0),
+        marker(1),
+        marker(2)
+    );
+    if let Some(preview) = preview {
+        text.push_str(&format!(
+            "Target: {}\nSHA-256: {}\nLocal: {}\nNotion: {}\n\n{}\n",
+            preview.target,
+            preview.payload_digest,
+            preview.local_status,
+            preview.notion_status,
+            preview.payload
+        ));
+        for change in &preview.intended_changes {
+            text.push_str(&format!("Planned: {change}\n"));
+        }
+        if let Some(existing) = &preview.existing_text {
+            text.push_str(&format!("\nExisting target (conflict):\n{existing}\n"));
+        }
+    } else {
+        text.push_str("Generate a read-only output preview to inspect the exact file.\n");
+    }
+    text
+}
+
+fn publish_screen_body(focus: &FocusModel, workflow: Option<&WorkflowDto>) -> String {
+    let marker = |index| {
+        if focus.zone == FocusZone::Main && focus.main_control_index == index {
+            ">"
+        } else {
+            " "
+        }
+    };
+    format!(
+        "Local publication: {}\nNotion: {} (P1-M10)\n\n{} Publish approved local file\n{} Cancel pending publication",
+        workflow
+            .and_then(|w| w.local_status.as_deref())
+            .unwrap_or("pending"),
+        workflow
+            .and_then(|w| w.notion_status.as_deref())
+            .unwrap_or("blocked"),
+        marker(0),
+        marker(1)
     )
 }
 
@@ -3698,6 +3970,8 @@ mod start_screen_tests {
             invalidation_code: None,
             entry_text: "server".to_owned(),
             entry_confirmed: false,
+            local_status: None,
+            notion_status: None,
             candidates: vec![
                 diary_control_contract::SourceCandidateDto {
                     id: "selected".to_owned(),
@@ -3761,5 +4035,36 @@ mod start_screen_tests {
         assert!(review_body.contains("Complete entry · en-US"));
         assert!(review_body.contains("local complete entry"));
         assert!(review_body.contains("save the Draft before confirming"));
+    }
+
+    #[test]
+    fn preview_and_publish_show_exact_file_conflict_and_separate_statuses() {
+        let mut workflow = composing_workflow();
+        workflow.local_status = Some("conflict".to_owned());
+        workflow.notion_status = Some("blocked".to_owned());
+        let preview = LocalPreviewDto {
+            workflow: workflow.clone(),
+            target: "/tmp/entry.md".to_owned(),
+            payload: "---\ndate: \"2026-10-29\"\n---\n\nplanned".to_owned(),
+            payload_digest: "digest".to_owned(),
+            plan_digest: "plan".to_owned(),
+            existing_text: Some("existing content".to_owned()),
+            intended_changes: Vec::new(),
+            local_status: "conflict".to_owned(),
+            notion_status: "blocked".to_owned(),
+        };
+        let focus = FocusModel {
+            zone: FocusZone::Main,
+            main_control_index: 2,
+            ..FocusModel::default()
+        };
+        let body = preview_screen_body(&focus, Some(&preview));
+        assert!(body.contains("planned"));
+        assert!(body.contains("existing content"));
+        assert!(body.contains("> Save conflict under another day"));
+        assert!(
+            publish_screen_body(&focus, Some(&workflow))
+                .contains("Local publication: conflict\nNotion: blocked")
+        );
     }
 }

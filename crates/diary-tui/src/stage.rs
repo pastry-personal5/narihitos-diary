@@ -165,10 +165,13 @@ pub fn map_workflow(
             progress: [Done, Done, Available, Available, Locked, Locked],
             default_current: Stage::Compose,
         },
-        "entry-confirmed" | "output-planned" | "approved" | "publishing" | "partial"
-        | "completed" => StageModel {
-            progress: [Done, Done, Done, Done, Locked, Locked],
-            default_current: Stage::Review,
+        "entry-confirmed" | "output-planned" => StageModel {
+            progress: [Done, Done, Done, Done, Available, Locked],
+            default_current: Stage::Preview,
+        },
+        "approved" | "publishing" | "partial" | "completed" => StageModel {
+            progress: [Done, Done, Done, Done, Done, Available],
+            default_current: Stage::Publish,
         },
         _ => StageModel {
             // Fail closed: an unknown state is never treated as Start.
@@ -275,7 +278,7 @@ mod tests {
     }
 
     #[test]
-    fn later_states_render_read_only_progress_with_preview_and_publish_locked() {
+    fn later_states_unlock_preview_then_publish() {
         for state in [
             "entry-confirmed",
             "output-planned",
@@ -286,14 +289,14 @@ mod tests {
         ] {
             let model = map_workflow(Some(&workflow(state, None)), false);
             assert_eq!(model.progress_of(Stage::Review), Progress::Done, "{state}");
-            assert_eq!(
+            assert_ne!(
                 model.progress_of(Stage::Preview),
                 Progress::Locked,
                 "{state}"
             );
             assert_eq!(
-                model.progress_of(Stage::Publish),
-                Progress::Locked,
+                model.progress_of(Stage::Publish) == Progress::Locked,
+                matches!(state, "entry-confirmed" | "output-planned"),
                 "{state}"
             );
         }

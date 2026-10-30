@@ -203,13 +203,19 @@ overview.
 
 ### P1-M9: Local publication and recovery
 
-Status: Active
+Status: Done
 
 Goal: Preview, approve, write, verify, and recover the local Markdown output
 without clobbering different content.
 
 Plan: [overview](milestone-09-local-publication-recovery-overview.md),
 [architecture plan](milestone-09-local-publication-recovery-architecture.md).
+
+Notes: Canonical local preview/approval, no-clobber file creation, receipts,
+restart reconciliation, conflict day carry-over, and TUI controls are complete.
+Synthetic adapter, SQLite, and real loopback worker acceptance passed; the
+standard Rust and Swift gate passed on 2026-10-30. Notion remains blocked for
+P1-M10.
 
 ### P1-M10: Notion publication
 
