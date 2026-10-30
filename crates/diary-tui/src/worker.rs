@@ -12,8 +12,8 @@ use std::sync::mpsc::{Receiver, SyncSender, TrySendError, sync_channel};
 use std::thread::{self, JoinHandle};
 
 use diary_control_contract::{
-    AssistantBackendListDto, CapabilitiesDto, DraftResultDto, JobAcceptedDto, JobDto,
-    LocalPreviewDto, MemoryReviewDto, NotionPreviewDto, ParagraphSuggestionDto,
+    AmendmentPreviewDto, AssistantBackendListDto, CapabilitiesDto, DraftResultDto, JobAcceptedDto,
+    JobDto, LocalPreviewDto, MemoryReviewDto, NotionPreviewDto, ParagraphSuggestionDto,
     ParagraphSuggestionListDto, PreferencesDto, ResolveParagraphSuggestionRequest, SetupCheckDto,
     SourceListDto, SourceRefineSuggestionDto, StartParagraphReviewRequest, WorkflowDto,
     WorkflowListDto,
@@ -166,6 +166,35 @@ pub enum Intent {
         revision: u64,
         new_day: String,
     },
+    SeedAmendment {
+        workflow_id: String,
+        revision: u64,
+    },
+    PreviewAmendment {
+        workflow_id: String,
+        revision: u64,
+    },
+    ApproveAmendment {
+        workflow_id: String,
+        revision: u64,
+        plan_digest: String,
+    },
+    PublishAmendment {
+        workflow_id: String,
+        revision: u64,
+    },
+    RetryAmendmentNotion {
+        workflow_id: String,
+        revision: u64,
+    },
+    RereadAmendment {
+        workflow_id: String,
+        revision: u64,
+    },
+    AbandonAmendment {
+        workflow_id: String,
+        revision: u64,
+    },
     GetAssistantBackends,
     SelectAssistant {
         workflow_id: String,
@@ -251,6 +280,13 @@ pub enum WorkerResult {
     NotionApproved(Box<ClientOutcome<WorkflowDto>>),
     NotionPublished(ClientOutcome<JobAcceptedDto>),
     SavedUnderDay(Box<ClientOutcome<WorkflowDto>>),
+    AmendmentSeeded(Box<ClientOutcome<WorkflowDto>>),
+    AmendmentPreviewed(Box<ClientOutcome<AmendmentPreviewDto>>),
+    AmendmentApproved(Box<ClientOutcome<WorkflowDto>>),
+    AmendmentPublished(ClientOutcome<JobAcceptedDto>),
+    AmendmentNotionRetried(ClientOutcome<JobAcceptedDto>),
+    AmendmentReread(Box<ClientOutcome<WorkflowDto>>),
+    AmendmentAbandoned(Box<ClientOutcome<WorkflowDto>>),
     AssistantBackends(ClientOutcome<AssistantBackendListDto>),
     AssistantSelected(Box<ClientOutcome<WorkflowDto>>),
     MemoryReview(ClientOutcome<MemoryReviewDto>),
@@ -572,6 +608,64 @@ impl Worker {
                 &workflow_id,
                 revision,
             )),
+            Intent::SeedAmendment {
+                workflow_id,
+                revision,
+            } => WorkerResult::AmendmentSeeded(Box::new(client.seed_amendment(
+                attachment,
+                &workflow_id,
+                revision,
+            ))),
+            Intent::PreviewAmendment {
+                workflow_id,
+                revision,
+            } => WorkerResult::AmendmentPreviewed(Box::new(client.preview_amendment(
+                attachment,
+                &workflow_id,
+                revision,
+            ))),
+            Intent::ApproveAmendment {
+                workflow_id,
+                revision,
+                plan_digest,
+            } => WorkerResult::AmendmentApproved(Box::new(client.approve_amendment(
+                attachment,
+                &workflow_id,
+                revision,
+                &plan_digest,
+            ))),
+            Intent::PublishAmendment {
+                workflow_id,
+                revision,
+            } => WorkerResult::AmendmentPublished(client.publish_amendment(
+                attachment,
+                &workflow_id,
+                revision,
+            )),
+            Intent::RetryAmendmentNotion {
+                workflow_id,
+                revision,
+            } => WorkerResult::AmendmentNotionRetried(client.retry_amendment_notion(
+                attachment,
+                &workflow_id,
+                revision,
+            )),
+            Intent::RereadAmendment {
+                workflow_id,
+                revision,
+            } => WorkerResult::AmendmentReread(Box::new(client.reread_amendment(
+                attachment,
+                &workflow_id,
+                revision,
+            ))),
+            Intent::AbandonAmendment {
+                workflow_id,
+                revision,
+            } => WorkerResult::AmendmentAbandoned(Box::new(client.abandon_amendment(
+                attachment,
+                &workflow_id,
+                revision,
+            ))),
             Intent::SaveUnderDay {
                 workflow_id,
                 revision,

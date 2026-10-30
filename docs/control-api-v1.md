@@ -3,8 +3,8 @@
 Status: Active
 
 This document describes how the terminal client attaches to the loopback
-server. The REST namespace remains `/v1`; P1-M10 advances the current native
-`contract_version` to `4` for the typed Notion preview resources and rejects
+server. The REST namespace remains `/v1`; P1-M11 advances the current native
+`contract_version` to `5` for the amendment resources and rejects
 incompatible clients. The checked Rust
 DTO and route table in
 `diary-control-contract` remain the executable contract.
@@ -38,7 +38,14 @@ P1-M9 exposes local output preview/approval/publication resources; P1-M10 adds
 separate Notion-only preview/approval/publication resources after a verified
 local receipt. Notion previews contain safe path labels and exact projected
 blocks, never credentials or remote IDs.
-Output, amendment, publication, and `/mcp` routes do not exist.
+P1-M11 adds amendment resources under
+`/v1/workflows/{id}/amendments`: `POST` seeds an amendment on a `Completed` day
+(`201`, workflow with an `amendment` object whose `hand_edited` flag drives the
+changed-since-publication banner), and `previews`, `approvals`, `publications`
+(job), `notion-retries` (job), `rereads`, and `abandonments` follow the usual
+revision precondition. A preview returns current and replacement content per
+destination and the plan digest to approve. The `/v1/amendments` entry is gone
+from the capabilities disabled-routes list. `/mcp` routes do not exist.
 `source:read`, including availability-aware discovery and preparation, is
 advertised and accepted only while the Swift helper is available; its absence
 does not prevent the explicit continue-without-notes action from a newly

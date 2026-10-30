@@ -17,6 +17,9 @@ use diary_core::{
 
 use crate::lifecycle::random_id;
 
+mod amendment;
+pub use amendment::{AmendmentNotionPreview, AmendmentPreview, AmendmentSeeded, local_body};
+
 #[derive(Clone, Debug)]
 pub struct LocalPreview {
     pub workflow: Workflow,
@@ -1681,6 +1684,9 @@ impl CommandService {
                 continue;
             }
             let mut workflow = self.load_workflow(&intent.day)?;
+            if workflow.amendment().is_some() {
+                continue;
+            }
             let Some(language) = workflow.language() else {
                 continue;
             };
@@ -1865,6 +1871,9 @@ impl CommandService {
                 continue;
             }
             let mut workflow = self.load_workflow(&day)?;
+            if workflow.amendment().is_some() {
+                continue;
+            }
             let Some(plan) = workflow.output_plan() else {
                 continue;
             };
@@ -1915,7 +1924,7 @@ impl CommandService {
                 .compare_and_swap(revision, None, &workflow)
                 .map_err(CommandError::Store)?;
         }
-        Ok(())
+        self.reconcile_amendment_intents()
     }
 
     /// Reconciles every uncertain Notion effect before that diary day accepts
@@ -1934,6 +1943,9 @@ impl CommandService {
                 continue;
             }
             let mut workflow = self.load_workflow(&intent.day)?;
+            if workflow.amendment().is_some() {
+                continue;
+            }
             let Some(plan) = workflow.output_plan() else {
                 continue;
             };

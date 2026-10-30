@@ -5,10 +5,10 @@ use std::fmt;
 
 use crate::digest::push_framed;
 use crate::{
-    Approval, ArtifactProvenance, AssistantSelection, CompositionPath, DestinationKind,
-    DestinationProgress, DestinationStatus, DiaryDay, Digest, DraftEntryRequest, DraftEntryResult,
-    DraftProposal, DraftProposalBinding, EntryBuffer, EntryConfirmation, FreshnessCheckpoint,
-    FreshnessOutcome, InvalidationReason, JobStatus, MemoryCandidateArtifact,
+    AmendmentSeed, Approval, ArtifactProvenance, AssistantSelection, CompositionPath,
+    DestinationKind, DestinationProgress, DestinationStatus, DiaryDay, Digest, DraftEntryRequest,
+    DraftEntryResult, DraftProposal, DraftProposalBinding, EntryBuffer, EntryConfirmation,
+    FreshnessCheckpoint, FreshnessOutcome, InvalidationReason, JobStatus, MemoryCandidateArtifact,
     MemoryCandidateBinding, MemoryCandidateSet, MemoryExtractionRequest, MemoryExtractionResult,
     OutputPlan, ParagraphReviewRequest, ParagraphReviewResult, ParagraphSuggestion,
     ParagraphSuggestionBinding, Preferences, ReflectionRange, ReviewedMemoryArtifact,
@@ -68,6 +68,7 @@ pub struct Workflow {
     job_status: Option<JobStatus>,
     all_verified_at: Option<Timestamp>,
     discarded_at: Option<Timestamp>,
+    amendment: Option<AmendmentSeed>,
 }
 
 /// Adapter-neutral durable representation. Adapters must round-trip through
@@ -102,6 +103,7 @@ pub struct PersistedWorkflow {
     pub job_status: Option<JobStatus>,
     pub all_verified_at: Option<Timestamp>,
     pub discarded_at: Option<Timestamp>,
+    pub amendment: Option<AmendmentSeed>,
 }
 
 impl Workflow {
@@ -166,6 +168,7 @@ impl Workflow {
             job_status: None,
             all_verified_at: None,
             discarded_at: None,
+            amendment: None,
         }
     }
 
@@ -199,6 +202,7 @@ impl Workflow {
             job_status: record.job_status,
             all_verified_at: record.all_verified_at,
             discarded_at: record.discarded_at,
+            amendment: record.amendment,
         };
         workflow.validate()?;
         Ok(workflow)
@@ -235,6 +239,7 @@ impl Workflow {
             job_status: self.job_status,
             all_verified_at: self.all_verified_at,
             discarded_at: self.discarded_at,
+            amendment: self.amendment.clone(),
         }
     }
 
@@ -259,6 +264,10 @@ impl Workflow {
     }
 
     #[must_use]
+    pub fn amendment(&self) -> Option<&AmendmentSeed> {
+        self.amendment.as_ref()
+    }
+
     pub fn entry(&self) -> &EntryBuffer {
         &self.entry
     }
@@ -1376,10 +1385,15 @@ impl Workflow {
             .iter()
             .find(|item| item.destination == destination)
             .ok_or(WorkflowError::UnknownDestination)?;
+        // An amendment's Notion conflict is resolved by rereading: the section
+        // is previewed again against its receipt and needs a fresh approval.
+        let rereading_amendment =
+            self.amendment.is_some() && progress.status == DestinationStatus::Conflict;
         if !matches!(
             progress.status,
             DestinationStatus::Blocked | DestinationStatus::Pending
-        ) {
+        ) && !rereading_amendment
+        {
             return Err(WorkflowError::RetryNeedsPreview);
         }
         let old_plan = self
@@ -1403,6 +1417,13 @@ impl Workflow {
         .map_err(|_| WorkflowError::PlanBindingMismatch)?;
         self.output_plan = Some(plan.clone());
         self.approval = None;
+        if rereading_amendment {
+            for item in &mut self.destination_progress {
+                if item.destination == destination {
+                    item.status = DestinationStatus::Pending;
+                }
+            }
+        }
         self.advance(WorkflowState::OutputPlanned, now);
         Ok(plan)
     }
@@ -1582,6 +1603,9 @@ impl Workflow {
         self.destination_progress = progress;
         self.job_status = Some(JobStatus::Completed);
         self.all_verified_at = all_verified.then_some(now);
+        if all_verified {
+            self.amendment = None;
+        }
         self.advance(
             if all_verified {
                 WorkflowState::Completed
@@ -1633,6 +1657,7 @@ impl Workflow {
             .all(|item| item.status == DestinationStatus::Verified);
         self.all_verified_at = all_verified.then_some(now);
         if all_verified {
+            self.amendment = None;
             self.advance(WorkflowState::Completed, now);
         } else {
             self.bump(now);
@@ -1640,23 +1665,101 @@ impl Workflow {
         Ok(())
     }
 
+    /// Opens an amendment on a `Completed` day. The editor is seeded with the
+    /// local file body; the original source snapshots and selection digest
+    /// stay, so no source is read and source freshness has nothing to check.
     pub fn seed_amendment(
         &mut self,
         expected_revision: u64,
-        current_local_text: String,
+        current_local_body: String,
+        seed: AmendmentSeed,
         now: Timestamp,
     ) -> Result<(), WorkflowError> {
         self.expect_revision(expected_revision)?;
-        if self.state != WorkflowState::Completed {
+        if self.state != WorkflowState::Completed || self.selection_digest.is_none() {
             return Err(WorkflowError::WrongState);
         }
-        self.entry.text = current_local_text;
+        self.entry.text = current_local_body;
         self.entry.version += 1;
         self.entry.confirmed = None;
         self.clear_plan_and_approval();
         self.all_verified_at = None;
+        self.amendment = Some(seed);
         self.advance(WorkflowState::Composing, now);
         Ok(())
+    }
+
+    /// Rebinds the amendment to the destination as it is now (the "reread"
+    /// resolution). The person's text is kept; the entry must be reconfirmed
+    /// and re-previewed against the new seed.
+    pub fn rebind_amendment(
+        &mut self,
+        expected_revision: u64,
+        seed: AmendmentSeed,
+        now: Timestamp,
+    ) -> Result<(), WorkflowError> {
+        self.expect_revision(expected_revision)?;
+        let local_unverified = self
+            .destination_progress
+            .iter()
+            .any(|item| item.destination == "local" && item.status != DestinationStatus::Verified);
+        if self.amendment.is_none()
+            || !(matches!(
+                self.state,
+                WorkflowState::Composing
+                    | WorkflowState::EntryConfirmed
+                    | WorkflowState::OutputPlanned
+                    | WorkflowState::Approved
+            ) || (self.state == WorkflowState::Partial && local_unverified))
+        {
+            return Err(WorkflowError::WrongState);
+        }
+        self.job_status = None;
+        self.amendment = Some(seed);
+        self.entry.confirmed = None;
+        self.clear_plan_and_approval();
+        self.invalidation_reason = None;
+        self.advance(WorkflowState::Composing, now);
+        Ok(())
+    }
+
+    /// Discards the amendment revision and returns to `Completed`. Receipts
+    /// and files are untouched; the workflow keeps only its stripped form,
+    /// like an expired one, and the amendment can be offered again.
+    pub fn abandon_amendment(
+        &mut self,
+        expected_revision: u64,
+        now: Timestamp,
+    ) -> Result<(), WorkflowError> {
+        self.expect_revision(expected_revision)?;
+        if self.amendment.is_none() || self.state == WorkflowState::Publishing {
+            return Err(WorkflowError::WrongState);
+        }
+        self.amendment = None;
+        self.state = WorkflowState::Completed;
+        self.strip_for_abandon(now);
+        Ok(())
+    }
+
+    fn strip_for_abandon(&mut self, now: Timestamp) {
+        self.revision += 1;
+        self.entry.version += 1;
+        self.entry.text.clear();
+        self.entry.confirmed = None;
+        self.reviewed_memories.clear();
+        self.assistant_draft = None;
+        self.memory_candidate_sets.clear();
+        self.reviewed_memory_artifact = None;
+        self.draft_proposals.clear();
+        self.paragraph_suggestions.clear();
+        self.source_refine_suggestions.clear();
+        for snapshot in &mut self.snapshots {
+            snapshot.body.clear();
+        }
+        self.clear_plan_and_approval();
+        self.all_verified_at = Some(now);
+        self.discarded_at = Some(now);
+        self.updated_at = now;
     }
 
     /// Navigation is deliberately side-effect free.
@@ -1973,7 +2076,18 @@ impl Workflow {
                         .any(|progress| progress.status != DestinationStatus::Verified)
             }
         };
+        let amendment_allowed = self.amendment.is_none()
+            || matches!(
+                self.state,
+                WorkflowState::Composing
+                    | WorkflowState::EntryConfirmed
+                    | WorkflowState::OutputPlanned
+                    | WorkflowState::Approved
+                    | WorkflowState::Publishing
+                    | WorkflowState::Partial
+            );
         if !valid_state
+            || !amendment_allowed
             || (self.state != WorkflowState::Completed && self.all_verified_at.is_some())
         {
             return Err(WorkflowError::InvalidPersistedState);
@@ -2256,6 +2370,7 @@ mod tests {
             .seed_amendment(
                 workflow.revision(),
                 "Edited local text".to_owned(),
+                seed(),
                 time(11),
             )
             .unwrap();
@@ -3306,6 +3421,199 @@ mod tests {
         assert_eq!(
             workflow.finish_mirror_retry(workflow.revision(), DestinationStatus::Blocked, time(30)),
             Err(WorkflowError::VerifiedDestinationRegressed)
+        );
+    }
+
+    fn seed() -> AmendmentSeed {
+        AmendmentSeed {
+            file_digest: Digest::of_bytes(b"seed file"),
+            receipt_version: 1,
+            hand_edited: false,
+        }
+    }
+
+    fn completed_workflow() -> Workflow {
+        let mut workflow = journey_to_publishing();
+        workflow
+            .finish_publication(
+                workflow.revision(),
+                vec![DestinationProgress {
+                    destination: "local".to_owned(),
+                    status: DestinationStatus::Verified,
+                }],
+                time(10),
+            )
+            .unwrap();
+        workflow
+    }
+
+    #[test]
+    fn amendment_keeps_original_sources_binds_seed_and_restarts_retention_on_completion() {
+        let mut workflow = completed_workflow();
+        let selection = workflow.selection_digest().cloned();
+        let snapshots = workflow.snapshots().to_vec();
+        workflow
+            .seed_amendment(workflow.revision(), "Amended.".to_owned(), seed(), time(11))
+            .unwrap();
+        assert_eq!(workflow.state(), WorkflowState::Composing);
+        assert_eq!(workflow.amendment(), Some(&seed()));
+        assert_eq!(workflow.selection_digest().cloned(), selection);
+        assert_eq!(workflow.snapshots(), snapshots.as_slice());
+        assert!(workflow.output_plan().is_none());
+
+        // The amendment survives a persistence round trip.
+        let restored = Workflow::restore(workflow.persisted()).unwrap();
+        assert_eq!(restored.amendment(), Some(&seed()));
+
+        workflow
+            .confirm_entry(workflow.revision(), workflow.entry().version, time(12))
+            .unwrap();
+        let plan = plan_for(&workflow, "amend-plan");
+        workflow
+            .preview_output(workflow.revision(), plan.clone(), time(13))
+            .unwrap();
+        workflow
+            .approve(workflow.revision(), &plan.plan_digest, time(14))
+            .unwrap();
+        workflow
+            .begin_publication(workflow.revision(), time(15))
+            .unwrap();
+        workflow
+            .finish_publication(
+                workflow.revision(),
+                vec![DestinationProgress {
+                    destination: "local".to_owned(),
+                    status: DestinationStatus::Verified,
+                }],
+                time(16),
+            )
+            .unwrap();
+        assert_eq!(workflow.state(), WorkflowState::Completed);
+        assert!(workflow.amendment().is_none());
+        assert_eq!(workflow.persisted().all_verified_at, Some(time(16)));
+    }
+
+    #[test]
+    fn amendment_needs_a_completed_day_and_abandon_returns_to_completed() {
+        let mut composing = composing_workflow();
+        assert_eq!(
+            composing.seed_amendment(composing.revision(), "x".into(), seed(), time(11)),
+            Err(WorkflowError::WrongState)
+        );
+        let mut workflow = completed_workflow();
+        assert_eq!(
+            workflow.abandon_amendment(workflow.revision(), time(11)),
+            Err(WorkflowError::WrongState),
+            "nothing to abandon without an amendment"
+        );
+        workflow
+            .seed_amendment(workflow.revision(), "Amended.".to_owned(), seed(), time(11))
+            .unwrap();
+        let stale = workflow.revision() - 1;
+        assert!(workflow.abandon_amendment(stale, time(12)).is_err());
+        workflow
+            .abandon_amendment(workflow.revision(), time(12))
+            .unwrap();
+        assert_eq!(workflow.state(), WorkflowState::Completed);
+        assert!(workflow.amendment().is_none());
+        assert!(workflow.entry().text.is_empty());
+        Workflow::restore(workflow.persisted()).unwrap();
+        // The day can be amended again after abandoning.
+        workflow
+            .seed_amendment(workflow.revision(), "Again.".to_owned(), seed(), time(13))
+            .unwrap();
+    }
+
+    #[test]
+    fn rebinding_keeps_text_and_requires_reconfirmation() {
+        let mut workflow = completed_workflow();
+        workflow
+            .seed_amendment(workflow.revision(), "Mine.".to_owned(), seed(), time(11))
+            .unwrap();
+        workflow
+            .confirm_entry(workflow.revision(), workflow.entry().version, time(12))
+            .unwrap();
+        let newer = AmendmentSeed {
+            file_digest: Digest::of_bytes(b"newer file"),
+            receipt_version: 1,
+            hand_edited: true,
+        };
+        workflow
+            .rebind_amendment(workflow.revision(), newer.clone(), time(13))
+            .unwrap();
+        assert_eq!(workflow.state(), WorkflowState::Composing);
+        assert_eq!(workflow.amendment(), Some(&newer));
+        assert_eq!(workflow.entry().text, "Mine.");
+        assert!(workflow.entry().confirmed.is_none());
+        let mut completed = completed_workflow();
+        assert!(
+            completed
+                .rebind_amendment(completed.revision(), newer, time(14))
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn an_amendment_notion_conflict_can_be_reread_into_a_pending_preview() {
+        let mut workflow = completed_workflow();
+        workflow
+            .seed_amendment(workflow.revision(), "Mine.".to_owned(), seed(), time(11))
+            .unwrap();
+        workflow
+            .confirm_entry(workflow.revision(), workflow.entry().version, time(12))
+            .unwrap();
+        let plan = OutputPlan::new(
+            "amend-plan",
+            workflow
+                .entry()
+                .confirmed
+                .as_ref()
+                .unwrap()
+                .entry_digest
+                .clone(),
+            workflow.selection_digest().unwrap().clone(),
+            vec![
+                target_kind("local", DestinationKind::Local),
+                target_kind("remote", DestinationKind::Remote),
+            ],
+            time(13),
+        )
+        .unwrap();
+        workflow
+            .preview_output(workflow.revision(), plan.clone(), time(14))
+            .unwrap();
+        workflow
+            .approve(workflow.revision(), &plan.plan_digest, time(15))
+            .unwrap();
+        workflow
+            .begin_publication(workflow.revision(), time(16))
+            .unwrap();
+        workflow
+            .finish_publication(
+                workflow.revision(),
+                progress_of(&[
+                    ("local", DestinationStatus::Verified),
+                    ("remote", DestinationStatus::Conflict),
+                ]),
+                time(17),
+            )
+            .unwrap();
+        assert_eq!(workflow.state(), WorkflowState::Partial);
+        let replacement = target_kind("remote", DestinationKind::Remote);
+        workflow
+            .preview_blocked_retry(
+                workflow.revision(),
+                "remote",
+                replacement,
+                "reread",
+                time(18),
+            )
+            .unwrap();
+        assert_eq!(workflow.state(), WorkflowState::OutputPlanned);
+        assert!(workflow.approval().is_none());
+        assert_eq!(
+            workflow.destination_progress()[1].status,
+            DestinationStatus::Pending
         );
     }
 

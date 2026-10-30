@@ -482,7 +482,13 @@ old body blocks. Notion's delete moves blocks to the trash rather than
 destroying them, and blocks cannot be moved, so an interruption leaves
 duplicate content instead of lost content. The intent records the old block
 IDs, and the next reconciliation trashes whichever set is stale. A completed
-amendment writes a new receipt version and restarts the 7-day purge. The
+amendment writes a new receipt version (one above the highest existing version,
+at both destinations; amendment receipt IDs carry a `#v<n>` suffix because
+receipt IDs are primary keys) and restarts the 7-day purge. The seed digest,
+receipt version, and hand-edited flag persist on the workflow (schema
+migration 6). Local-first: a Notion failure after the local replace leaves the
+day `Partial` with Notion pending, retried alone. Abandoning returns the day to
+its text-stripped `Completed` form, keeping receipts and files. The
 [Notion research](research/notion-diary-section.md#amending-an-owned-section)
 records the API facts.
 

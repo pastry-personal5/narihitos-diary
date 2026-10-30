@@ -6,7 +6,9 @@ use std::os::unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt};
 use std::path::{Component, Path, PathBuf};
 
 use diary_core::{DiaryDay, Digest, LocalOutputPort, WritingLanguage, render_local_markdown};
-pub use diary_core::{LocalOutputError as LocalError, LocalOutputState as LocalState};
+pub use diary_core::{
+    LocalOutputError as LocalError, LocalOutputState as LocalState, LocalReplaceOutcome,
+};
 
 #[derive(Clone, Debug)]
 pub struct LocalOutput {
@@ -190,6 +192,84 @@ impl LocalOutput {
         self.inspect(day, payload)
     }
 
+    /// Atomically replaces the day's file while its bytes still hash to
+    /// `expected`. See [`Self::replace_with_hook`].
+    pub fn replace(
+        &self,
+        day: &DiaryDay,
+        expected: &Digest,
+        payload: &str,
+    ) -> Result<LocalReplaceOutcome, LocalError> {
+        self.replace_with_hook(day, expected, payload, || {})
+    }
+
+    /// `before_rename` runs after the temp file is durable and before the
+    /// final digest recheck; tests use it to model a racing editor.
+    fn replace_with_hook(
+        &self,
+        day: &DiaryDay,
+        expected: &Digest,
+        payload: &str,
+        before_rename: impl FnOnce(),
+    ) -> Result<LocalReplaceOutcome, LocalError> {
+        let target = self.target(day);
+        match self.current_digest(day)? {
+            None => return Ok(LocalReplaceOutcome::Changed),
+            Some(current) if current == Self::payload_digest(payload) => {
+                return Ok(LocalReplaceOutcome::AlreadyReplaced);
+            }
+            Some(current) if &current != expected => return Ok(LocalReplaceOutcome::Changed),
+            Some(_) => {}
+        }
+        let parent = target.parent().ok_or(LocalError::UnsafePath)?;
+        let mut temp = None;
+        for attempt in 0..32 {
+            let path = parent.join(format!(".nd-{}-{}-{attempt}.tmp", std::process::id(), day));
+            match OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .mode(0o600)
+                .open(&path)
+            {
+                Ok(file) => {
+                    temp = Some((path, file));
+                    break;
+                }
+                Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {}
+                Err(_) => return Err(LocalError::Unavailable),
+            }
+        }
+        let (temp_path, mut file) = temp.ok_or(LocalError::Unavailable)?;
+        let outcome = (|| {
+            file.write_all(payload.as_bytes())
+                .map_err(|_| LocalError::Unavailable)?;
+            file.sync_all().map_err(|_| LocalError::Unavailable)?;
+            before_rename();
+            // The immediate pre-rename guard: any change since the seed wins.
+            if self.current_digest(day)?.as_ref() != Some(expected) {
+                return Ok(LocalReplaceOutcome::Changed);
+            }
+            fs::rename(&temp_path, &target).map_err(|_| LocalError::Unavailable)?;
+            File::open(parent)
+                .and_then(|dir| dir.sync_all())
+                .map_err(|_| LocalError::Unavailable)?;
+            Ok(LocalReplaceOutcome::Replaced)
+        })();
+        drop(file);
+        if outcome != Ok(LocalReplaceOutcome::Replaced) {
+            let _ = fs::remove_file(&temp_path);
+        }
+        outcome
+    }
+
+    fn current_digest(&self, day: &DiaryDay) -> Result<Option<Digest>, LocalError> {
+        Ok(match self.inspect(day, "")? {
+            LocalState::Absent => None,
+            LocalState::Identical => Some(Self::payload_digest("")),
+            LocalState::Different(text) => Some(Self::payload_digest(&text)),
+        })
+    }
+
     fn validate_ancestors(&self, target: &Path) -> Result<(), LocalError> {
         for ancestor in target
             .ancestors()
@@ -221,6 +301,14 @@ impl LocalOutputPort for LocalOutput {
     }
     fn write(&self, day: &DiaryDay, payload: &str) -> Result<LocalState, LocalError> {
         self.write(day, payload)
+    }
+    fn replace(
+        &self,
+        day: &DiaryDay,
+        expected: &Digest,
+        payload: &str,
+    ) -> Result<LocalReplaceOutcome, LocalError> {
+        self.replace(day, expected, payload)
     }
 }
 
@@ -256,6 +344,79 @@ mod tests {
             Ok(LocalState::Different(_))
         ));
         assert_eq!(fs::read_to_string(output.target(&day)).unwrap(), payload);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn replace_swaps_atomically_only_when_the_seed_digest_still_matches() {
+        let root = scratch("replace");
+        let day = DiaryDay::parse("2026-10-30").unwrap();
+        let output = LocalOutput::new(root.join("entries")).unwrap();
+        let old = LocalOutput::render(&day, WritingLanguage::EnUs, "Old day\n");
+        let new = LocalOutput::render(&day, WritingLanguage::EnUs, "New day\n");
+        let old_digest = LocalOutput::payload_digest(&old);
+        output.write(&day, &old).unwrap();
+
+        assert_eq!(
+            output.replace(&day, &old_digest, &new),
+            Ok(LocalReplaceOutcome::Replaced)
+        );
+        assert_eq!(fs::read_to_string(output.target(&day)).unwrap(), new);
+        // Replaying after success is a no-op, not a second replacement.
+        assert_eq!(
+            output.replace(&day, &old_digest, &new),
+            Ok(LocalReplaceOutcome::AlreadyReplaced)
+        );
+        let leftovers: Vec<_> = fs::read_dir(output.target(&day).parent().unwrap())
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name())
+            .collect();
+        assert_eq!(leftovers.len(), 1, "no temp file may remain: {leftovers:?}");
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn replace_refuses_a_hand_edit_and_a_race_before_the_rename() {
+        let root = scratch("replace-race");
+        let day = DiaryDay::parse("2026-10-30").unwrap();
+        let output = LocalOutput::new(root.join("entries")).unwrap();
+        let old = LocalOutput::render(&day, WritingLanguage::EnUs, "Old day\n");
+        let new = LocalOutput::render(&day, WritingLanguage::EnUs, "New day\n");
+        let old_digest = LocalOutput::payload_digest(&old);
+        output.write(&day, &old).unwrap();
+
+        // Edited before the call.
+        fs::write(output.target(&day), "hand edit").unwrap();
+        assert_eq!(
+            output.replace(&day, &old_digest, &new),
+            Ok(LocalReplaceOutcome::Changed)
+        );
+        assert_eq!(
+            fs::read_to_string(output.target(&day)).unwrap(),
+            "hand edit"
+        );
+
+        // Edited after the first check but before the rename.
+        fs::write(output.target(&day), &old).unwrap();
+        let target = output.target(&day);
+        let outcome = output.replace_with_hook(&day, &old_digest, &new, || {
+            fs::write(&target, "raced edit").unwrap();
+        });
+        assert_eq!(outcome, Ok(LocalReplaceOutcome::Changed));
+        assert_eq!(fs::read_to_string(&target).unwrap(), "raced edit");
+        let names: Vec<_> = fs::read_dir(target.parent().unwrap())
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name())
+            .collect();
+        assert_eq!(names.len(), 1, "temp file must be cleaned up: {names:?}");
+
+        // A missing file is not a replacement target.
+        fs::remove_file(&target).unwrap();
+        assert_eq!(
+            output.replace(&day, &old_digest, &new),
+            Ok(LocalReplaceOutcome::Changed)
+        );
+        assert!(!target.exists());
         fs::remove_dir_all(root).unwrap();
     }
 

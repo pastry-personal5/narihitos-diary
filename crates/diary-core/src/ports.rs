@@ -128,7 +128,29 @@ pub enum LocalOutputError {
     Unavailable,
 }
 
+/// Result of a digest-guarded replacement of an app-owned file.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum LocalReplaceOutcome {
+    Replaced,
+    /// The file already holds the replacement bytes (a replayed attempt).
+    AlreadyReplaced,
+    /// The file is absent or no longer matches the expected digest; nothing
+    /// was written.
+    Changed,
+}
+
 pub trait LocalOutputPort: Send + Sync {
+    /// Atomically replaces the day's file, but only while its current bytes
+    /// hash to `expected`. The default refuses so a port without replacement
+    /// support can never overwrite.
+    fn replace(
+        &self,
+        _day: &DiaryDay,
+        _expected: &Digest,
+        _payload: &str,
+    ) -> Result<LocalReplaceOutcome, LocalOutputError> {
+        Err(LocalOutputError::Unavailable)
+    }
     fn target(&self, day: &DiaryDay) -> String;
     fn inspect(&self, day: &DiaryDay, payload: &str) -> Result<LocalOutputState, LocalOutputError>;
     fn write(&self, day: &DiaryDay, payload: &str) -> Result<LocalOutputState, LocalOutputError>;
@@ -175,12 +197,57 @@ pub struct NotionRequest {
     pub expected_state_digest: Digest,
 }
 
+/// Replaces only the section the app itself receipted. `owned_*` come from
+/// the latest Notion receipt; nothing here is user-supplied.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct NotionReplaceRequest {
+    pub day: DiaryDay,
+    pub markdown: String,
+    pub expected_target_identity: String,
+    pub expected_payload_digest: Digest,
+    /// Month page the receipt recorded.
+    pub owned_month_id: String,
+    /// Receipted heading block ID first, then the owned body block IDs.
+    pub owned_block_ids: Vec<String>,
+    /// Payload digest the receipt recorded for the owned section.
+    pub owned_payload_digest: Digest,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct NotionReplacePreflight {
+    /// `observed_state_digest` is the digest of the verified owned section.
+    /// A mismatch reports `Conflict` with the reason.
+    pub preflight: NotionPreflight,
+    pub current_blocks: Vec<NotionBlockPreview>,
+}
+
 /// Secret-bearing remote destination. Implementations own credentials and
 /// remote IDs; neither is exposed through preview DTOs or diagnostics.
 pub trait NotionOutputPort: Send + Sync {
     fn preflight(&self, day: &DiaryDay, markdown: &str) -> Result<NotionPreflight, String>;
     fn write(&self, request: &NotionRequest, cancelled: &AtomicBool) -> WriteOutcome;
     fn inspect(&self, request: &NotionRequest) -> InspectionOutcome;
+
+    /// Read-only: verifies the owned section against its receipt.
+    fn preflight_replace(
+        &self,
+        _request: &NotionReplaceRequest,
+    ) -> Result<NotionReplacePreflight, String> {
+        Err("notion-amend-unsupported".to_owned())
+    }
+
+    /// Resumable replacement: inserts the new body after the heading, reads it
+    /// back, then trashes the old body blocks. It inspects before every step,
+    /// so calling it again after an interruption never duplicates a write.
+    fn replace_section(&self, _request: &NotionReplaceRequest, _: &AtomicBool) -> WriteOutcome {
+        WriteOutcome::Unavailable
+    }
+
+    /// Finishes an interrupted replacement by trashing whichever set is stale,
+    /// never inserting, and reports the resulting section.
+    fn reconcile_replace(&self, _request: &NotionReplaceRequest) -> InspectionOutcome {
+        InspectionOutcome::Unavailable
+    }
 }
 
 pub trait SourceCatalog {

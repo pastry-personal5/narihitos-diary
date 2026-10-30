@@ -13,7 +13,10 @@ pub use codex_assistant::{
     CodexAppServerTransport, CodexAssistant, CodexInvocation, CodexLaunch, CodexTransportError,
     ProcessCodexTransport,
 };
-pub use commands::{CommandError, CommandService, ControlStore, NotionPreview};
+pub use commands::{
+    AmendmentNotionPreview, AmendmentPreview, AmendmentSeeded, CommandError, CommandService,
+    ControlStore, NotionPreview, local_body,
+};
 pub use diagnostic_tags::{DiagnosticTag, DiagnosticTagger};
 pub use diagnostics::{
     AssistantSnapshot, DiagnosticEvent, DiagnosticLevel, DiagnosticLog, LogClock, ValidationReport,

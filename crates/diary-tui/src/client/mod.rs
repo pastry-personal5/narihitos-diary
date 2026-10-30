@@ -17,11 +17,11 @@ pub use transport::{
 };
 
 use diary_control_contract::{
-    AssistantBackendListDto, CapabilitiesDto, ConfirmEntryRequest, ConfirmSelectionRequest,
-    DeleteSourceRequest, DiscoveryRequest, DraftResultDto, EditSourceBodyRequest, HealthDto,
-    JobAcceptedDto, JobDto, LocalApprovalRequest, LocalPreviewDto, MAX_RESPONSE_BYTES,
-    MAX_SOURCE_BYTES, MemoryReviewDto, NotionPreviewDto, ParagraphSuggestionDto,
-    ParagraphSuggestionListDto, PreferencesDto, PrepareSourcesRequest,
+    AmendmentPreviewDto, AssistantBackendListDto, CapabilitiesDto, ConfirmEntryRequest,
+    ConfirmSelectionRequest, DeleteSourceRequest, DiscoveryRequest, DraftResultDto,
+    EditSourceBodyRequest, HealthDto, JobAcceptedDto, JobDto, LocalApprovalRequest,
+    LocalPreviewDto, MAX_RESPONSE_BYTES, MAX_SOURCE_BYTES, MemoryReviewDto, NotionPreviewDto,
+    ParagraphSuggestionDto, ParagraphSuggestionListDto, PreferencesDto, PrepareSourcesRequest,
     PutAssistantSelectionRequest, PutMemoryReviewRequest, RefineSourceRequest,
     ResolveParagraphSuggestionRequest, ResolveSourceRefineRequest, SaveEntryRequest,
     SaveUnderDayRequest, SetupCheckDto, SourceDetailDto, SourceListDto, SourceRefineSuggestionDto,
@@ -668,6 +668,123 @@ impl<T: Transport> ApiClient<T> {
         self.send_json(
             "POST",
             &format!("/v1/workflows/{workflow_id}/notion-publications"),
+            Some(b"{}".to_vec()),
+            Some(workflow_etag(revision)),
+            MAX_RESPONSE_BYTES,
+            attachment,
+        )
+    }
+
+    pub fn seed_amendment(
+        &self,
+        attachment: &Attachment,
+        workflow_id: &str,
+        revision: u64,
+    ) -> ClientOutcome<WorkflowDto> {
+        self.send_json(
+            "POST",
+            &format!("/v1/workflows/{workflow_id}/amendments"),
+            Some(b"{}".to_vec()),
+            Some(workflow_etag(revision)),
+            MAX_RESPONSE_BYTES,
+            attachment,
+        )
+    }
+
+    pub fn preview_amendment(
+        &self,
+        attachment: &Attachment,
+        workflow_id: &str,
+        revision: u64,
+    ) -> ClientOutcome<AmendmentPreviewDto> {
+        self.send_json(
+            "POST",
+            &format!("/v1/workflows/{workflow_id}/amendments/previews"),
+            Some(b"{}".to_vec()),
+            Some(workflow_etag(revision)),
+            MAX_RESPONSE_BYTES,
+            attachment,
+        )
+    }
+
+    pub fn approve_amendment(
+        &self,
+        attachment: &Attachment,
+        workflow_id: &str,
+        revision: u64,
+        plan_digest: &str,
+    ) -> ClientOutcome<WorkflowDto> {
+        let body = serde_json::to_vec(&LocalApprovalRequest {
+            plan_digest: plan_digest.to_owned(),
+        })
+        .unwrap_or_default();
+        self.send_json(
+            "POST",
+            &format!("/v1/workflows/{workflow_id}/amendments/approvals"),
+            Some(body),
+            Some(workflow_etag(revision)),
+            MAX_RESPONSE_BYTES,
+            attachment,
+        )
+    }
+
+    pub fn publish_amendment(
+        &self,
+        attachment: &Attachment,
+        workflow_id: &str,
+        revision: u64,
+    ) -> ClientOutcome<JobAcceptedDto> {
+        self.send_json(
+            "POST",
+            &format!("/v1/workflows/{workflow_id}/amendments/publications"),
+            Some(b"{}".to_vec()),
+            Some(workflow_etag(revision)),
+            MAX_RESPONSE_BYTES,
+            attachment,
+        )
+    }
+
+    pub fn retry_amendment_notion(
+        &self,
+        attachment: &Attachment,
+        workflow_id: &str,
+        revision: u64,
+    ) -> ClientOutcome<JobAcceptedDto> {
+        self.send_json(
+            "POST",
+            &format!("/v1/workflows/{workflow_id}/amendments/notion-retries"),
+            Some(b"{}".to_vec()),
+            Some(workflow_etag(revision)),
+            MAX_RESPONSE_BYTES,
+            attachment,
+        )
+    }
+
+    pub fn reread_amendment(
+        &self,
+        attachment: &Attachment,
+        workflow_id: &str,
+        revision: u64,
+    ) -> ClientOutcome<WorkflowDto> {
+        self.send_json(
+            "POST",
+            &format!("/v1/workflows/{workflow_id}/amendments/rereads"),
+            Some(b"{}".to_vec()),
+            Some(workflow_etag(revision)),
+            MAX_RESPONSE_BYTES,
+            attachment,
+        )
+    }
+
+    pub fn abandon_amendment(
+        &self,
+        attachment: &Attachment,
+        workflow_id: &str,
+        revision: u64,
+    ) -> ClientOutcome<WorkflowDto> {
+        self.send_json(
+            "POST",
+            &format!("/v1/workflows/{workflow_id}/amendments/abandonments"),
             Some(b"{}".to_vec()),
             Some(workflow_etag(revision)),
             MAX_RESPONSE_BYTES,

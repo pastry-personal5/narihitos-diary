@@ -1,6 +1,6 @@
 # P1-M11: Amendments overview
 
-Status: Planned
+Status: Done
 
 This milestone adds the architecture's one intentional replacement path: a
 completed entry can be amended, and only content the app itself wrote and
@@ -73,38 +73,46 @@ interruption.
 Every item is verified by automated tests or the standard gate. No item depends
 on a human performing a manual run.
 
-- [ ] P1-M10 is `Done` and its receipts are confirmed to carry the heading block
+- [x] (Entry criterion waived by the owner on 2026-10-30 while P1-M10 is
+  `In progress`; its live Notion checks remain open there.) P1-M10 is `Done`
+  and its receipts are confirmed to carry the heading block
   ID, owned body block IDs and digests, and local file digest (or a recorded
   forward migration adds them).
-- [ ] Choosing a `Completed` day offers amendment instead of the existing-entry
+- [x] Choosing a `Completed` day offers amendment instead of the existing-entry
   check, seeds the editor with the current local body, preserves the original
   source digests, waives source freshness, and never reads sources.
-- [ ] The seed-time file digest and receipt version are persisted; a hand-edited
+- [x] The seed-time file digest and receipt version are persisted; a hand-edited
   body or front matter is flagged by the banner and is not treated as a conflict.
-- [ ] Local amendment rechecks the seed-time digest immediately before the
+- [x] Local amendment rechecks the seed-time digest immediately before the
   atomic rename and refuses any intervening change, leaving the file untouched.
-- [ ] Notion amendment locates only the receipted section by heading block ID,
+- [x] Notion amendment locates only the receipted section by heading block ID,
   requires heading and body digests to match, inserts and reads back
   replacement blocks before trashing old body blocks, and reports a conflict on
   any ownership mismatch without writing.
-- [ ] Deterministic crash-boundary tests cover every local and Notion
+- [x] Deterministic crash-boundary tests cover every local and Notion
   replacement boundary (temp file written, renamed, receipt not yet stored,
   Notion insert sent, read-back done, partway through trashing, new receipt not
   yet stored) and show no data loss, no blind replay, and no deletion of
   unrelated blocks.
-- [ ] A local success followed by a Notion failure or uncertain write leaves the
+- [x] A local success followed by a Notion failure or uncertain write leaves the
   workflow `Partial` with Notion pending or blocked; a Notion-only retry reuses
   the approval only for an unchanged plan.
-- [ ] A conflict offers exactly reread and abandon-amendment; abandoning leaves
+- [x] A conflict offers exactly reread and abandon-amendment; abandoning leaves
   the `Completed` workflow, files, and receipts unchanged.
-- [ ] A completed amendment writes a new receipt version and restarts the
+- [x] A completed amendment writes a new receipt version and restarts the
   seven-day purge, verified with an injected clock.
-- [ ] The Control API enables the amendment route, bumps the contract version
+- [x] The Control API enables the amendment route, bumps the contract version
   with forward migration of persisted data, and the capabilities list and
   contract tests no longer treat amendment routes as disabled.
-- [ ] TUI state tests cover the amendment offer, banner, replacement preview,
+- [x] TUI state tests cover the amendment offer, banner, replacement preview,
   Conflict view, partial state, and completion over rendered state.
-- [ ] README, user guide, `architecture.md`, `product-behavior.md`,
+- [x] README, user guide, `architecture.md`, `product-behavior.md`,
   `control-api-v1.md`, and `ux-tui.md` reflect the shipped behavior.
-- [ ] The standard Rust and Swift gate passes, and the dated results are
+- [x] The standard Rust and Swift gate passes, and the dated results are
   recorded here.
+
+## Gate results
+
+2026-10-30: `cargo fmt --all -- --check`, `cargo clippy --all-targets --all-features -- -D warnings`, `cargo test --all-features --workspace` (456 tests), and `swift build` + `swift test` in `helpers/apple-bridge` (13 tests) all pass.
+
+Known limits: the iCloud mirror is not updated by an amendment; the Notion paths are tested against fakes only (no live Notion call, per the plan).

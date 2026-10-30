@@ -2,16 +2,16 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use diary_core::{
-    Approval, ArtifactProvenance, AssistantBackendId, AssistantSelection, CompositionPath,
-    DateEvidence, DestinationKind, DestinationPlan, DestinationProgress, DestinationStatus,
-    DiaryDay, Digest, DraftProposal, DraftProposalBinding, EntryBuffer, EntryConfirmation,
-    FreshnessStamp, IntentTerminal, InvalidationReason, JobStatus, MemoryCandidateArtifact,
-    MemoryCandidateBinding, MemoryCandidateSet, OperationIntent, OperationLog, OutputPlan,
-    ParagraphSuggestion, ParagraphSuggestionBinding, PersistedWorkflow, Preferences, Receipt,
-    ReconciliationGate, ReflectionRange, ReviewedMemoryArtifact, ReviewedMemoryBinding,
-    SourceAvailability, SourceCandidate, SourceRef, SourceRefineSuggestion, SourceSnapshot,
-    StartOutcome, StoreError, SuggestionResolution, Timestamp, Workflow, WorkflowState,
-    WorkflowStore, WorkflowSummary, WritingLanguage, WritingStyle,
+    AmendmentSeed, Approval, ArtifactProvenance, AssistantBackendId, AssistantSelection,
+    CompositionPath, DateEvidence, DestinationKind, DestinationPlan, DestinationProgress,
+    DestinationStatus, DiaryDay, Digest, DraftProposal, DraftProposalBinding, EntryBuffer,
+    EntryConfirmation, FreshnessStamp, IntentTerminal, InvalidationReason, JobStatus,
+    MemoryCandidateArtifact, MemoryCandidateBinding, MemoryCandidateSet, OperationIntent,
+    OperationLog, OutputPlan, ParagraphSuggestion, ParagraphSuggestionBinding, PersistedWorkflow,
+    Preferences, Receipt, ReconciliationGate, ReflectionRange, ReviewedMemoryArtifact,
+    ReviewedMemoryBinding, SourceAvailability, SourceCandidate, SourceRef, SourceRefineSuggestion,
+    SourceSnapshot, StartOutcome, StoreError, SuggestionResolution, Timestamp, Workflow,
+    WorkflowState, WorkflowStore, WorkflowSummary, WritingLanguage, WritingStyle,
 };
 use rusqlite::{Connection, OptionalExtension, Transaction, TransactionBehavior, params};
 
@@ -27,7 +27,7 @@ struct Migration {
 /// again. To change the schema, add `MIGRATION_{n+1}` here with
 /// `version: n + 1`; `CURRENT_SCHEMA` follows from the last entry, and the
 /// `migration_list_is_contiguous_from_one` test rejects gaps or reordering.
-const MIGRATIONS: [Migration; 5] = [
+const MIGRATIONS: [Migration; 6] = [
     Migration {
         version: 1,
         sql: MIGRATION_1,
@@ -47,6 +47,10 @@ const MIGRATIONS: [Migration; 5] = [
     Migration {
         version: 5,
         sql: MIGRATION_5,
+    },
+    Migration {
+        version: 6,
+        sql: MIGRATION_6,
     },
 ];
 
@@ -941,6 +945,12 @@ ALTER TABLE preferences DROP COLUMN last_composition_path;
 ALTER TABLE preferences ADD COLUMN last_assistant_backend_id TEXT;
 "#;
 
+const MIGRATION_6: &str = r#"
+ALTER TABLE workflows ADD COLUMN amendment_file_digest TEXT;
+ALTER TABLE workflows ADD COLUMN amendment_receipt_version INTEGER;
+ALTER TABLE workflows ADD COLUMN amendment_hand_edited INTEGER;
+"#;
+
 const MIGRATION_5: &str = r#"
 CREATE TABLE assistant_memory_candidate_sets (
   day TEXT NOT NULL REFERENCES workflows(day) ON DELETE CASCADE,
@@ -1114,10 +1124,13 @@ fn insert_workflow(
                selection_digest, invalidation_kind, invalidation_connector,
                invalidation_source_id, job_status, all_verified_at, discarded_at,
                entry_text, buffer_version, confirmed_buffer_version,
-               confirmed_entry_digest, confirmed_at, assistant_draft
+               confirmed_entry_digest, confirmed_at, assistant_draft,
+               amendment_file_digest, amendment_receipt_version,
+               amendment_hand_edited
              ) VALUES (
                ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12,
-               ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24
+               ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24,
+               ?25, ?26, ?27
              )",
             params![
                 record.day.as_str(),
@@ -1152,6 +1165,12 @@ fn insert_workflow(
                 confirmation.map(|value| value.entry_digest.as_str()),
                 confirmation.map(|value| value.confirmed_at.0),
                 record.assistant_draft,
+                record
+                    .amendment
+                    .as_ref()
+                    .map(|seed| seed.file_digest.as_str()),
+                record.amendment.as_ref().map(|seed| seed.receipt_version),
+                record.amendment.as_ref().map(|seed| seed.hand_edited),
             ],
         )
         .map_err(map_sql_error)?;
@@ -1176,7 +1195,8 @@ fn replace_workflow(
                all_verified_at = ?17, discarded_at = ?18, entry_text = ?19,
                buffer_version = ?20, confirmed_buffer_version = ?21,
                confirmed_entry_digest = ?22, confirmed_at = ?23,
-               assistant_draft = ?24
+               assistant_draft = ?24, amendment_file_digest = ?25,
+               amendment_receipt_version = ?26, amendment_hand_edited = ?27
              WHERE day = ?1",
             params![
                 record.day.as_str(),
@@ -1211,6 +1231,12 @@ fn replace_workflow(
                 confirmation.map(|value| value.entry_digest.as_str()),
                 confirmation.map(|value| value.confirmed_at.0),
                 record.assistant_draft,
+                record
+                    .amendment
+                    .as_ref()
+                    .map(|seed| seed.file_digest.as_str()),
+                record.amendment.as_ref().map(|seed| seed.receipt_version),
+                record.amendment.as_ref().map(|seed| seed.hand_edited),
             ],
         )
         .map_err(map_sql_error)?;
@@ -1664,6 +1690,9 @@ fn load_workflow(connection: &Connection, day: &DiaryDay) -> Result<Option<Workf
         Option<String>,
         Option<i64>,
         Option<String>,
+        Option<String>,
+        Option<u32>,
+        Option<bool>,
     );
     let row: Option<WorkflowRow> = connection
         .query_row(
@@ -1673,7 +1702,9 @@ fn load_workflow(connection: &Connection, day: &DiaryDay) -> Result<Option<Workf
                     selection_digest, invalidation_kind, invalidation_connector,
                     invalidation_source_id, job_status, all_verified_at, discarded_at,
                     entry_text, buffer_version, confirmed_buffer_version,
-                    confirmed_entry_digest, confirmed_at, assistant_draft
+                    confirmed_entry_digest, confirmed_at, assistant_draft,
+                    amendment_file_digest, amendment_receipt_version,
+                    amendment_hand_edited
              FROM workflows WHERE day = ?1",
             [day.as_str()],
             |row| {
@@ -1701,6 +1732,9 @@ fn load_workflow(connection: &Connection, day: &DiaryDay) -> Result<Option<Workf
                     row.get(20)?,
                     row.get(21)?,
                     row.get(22)?,
+                    row.get(23)?,
+                    row.get(24)?,
+                    row.get(25)?,
                 ))
             },
         )
@@ -1728,6 +1762,19 @@ fn load_workflow(connection: &Connection, day: &DiaryDay) -> Result<Option<Workf
         _ => {
             return Err(StoreError::InvalidRecord(
                 "partial entry confirmation".to_owned(),
+            ));
+        }
+    };
+    let amendment = match (row.23, row.24, row.25) {
+        (None, None, None) => None,
+        (Some(digest), Some(receipt_version), Some(hand_edited)) => Some(AmendmentSeed {
+            file_digest: parse_digest(digest)?,
+            receipt_version,
+            hand_edited,
+        }),
+        _ => {
+            return Err(StoreError::InvalidRecord(
+                "partial amendment seed".to_owned(),
             ));
         }
     };
@@ -1785,6 +1832,7 @@ fn load_workflow(connection: &Connection, day: &DiaryDay) -> Result<Option<Workf
         output_plan,
         approval,
         destination_progress,
+        amendment,
     };
     Workflow::restore(record)
         .map(Some)
@@ -3465,6 +3513,11 @@ mod tests {
             .seed_amendment(
                 amended.revision(),
                 "An amended invented day.".to_owned(),
+                AmendmentSeed {
+                    file_digest: Digest::of_bytes(b"file"),
+                    receipt_version: 1,
+                    hand_edited: false,
+                },
                 Timestamp(150),
             )
             .unwrap();
@@ -3817,6 +3870,38 @@ mod tests {
         fn observe(&self, event: MigrationEvent) {
             self.0.lock().unwrap().push(event);
         }
+    }
+
+    #[test]
+    fn amendment_seed_round_trips_and_legacy_rows_load_without_one() {
+        let scratch = Scratch::new("amendment-seed");
+        let store = SqliteStore::open(scratch.db()).unwrap();
+        let mut workflow = create_started(&store, "2026-10-28");
+        make_confirmed(&mut workflow);
+        make_completed(&mut workflow, "plan-v1", Timestamp(100));
+        store.compare_and_swap(0, Some(0), &workflow).unwrap();
+        let loaded = store.load(&day("2026-10-28")).unwrap().unwrap();
+        assert!(loaded.amendment().is_none());
+
+        let seed = AmendmentSeed {
+            file_digest: Digest::of_bytes(b"seed"),
+            receipt_version: 3,
+            hand_edited: true,
+        };
+        let mut amended = loaded.clone();
+        amended
+            .seed_amendment(
+                amended.revision(),
+                "Body.".to_owned(),
+                seed.clone(),
+                Timestamp(150),
+            )
+            .unwrap();
+        store
+            .compare_and_swap(loaded.revision(), Some(loaded.entry().version), &amended)
+            .unwrap();
+        let reloaded = store.load(&day("2026-10-28")).unwrap().unwrap();
+        assert_eq!(reloaded.amendment(), Some(&seed));
     }
 
     #[test]

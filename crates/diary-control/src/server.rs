@@ -168,6 +168,31 @@ pub fn build_router(config: ServerConfig) -> ServerHandle {
             "/v1/workflows/{id}/notion-publications",
             post(publish_notion_output),
         )
+        .route("/v1/workflows/{id}/amendments", post(seed_amendment))
+        .route(
+            "/v1/workflows/{id}/amendments/previews",
+            post(preview_amendment),
+        )
+        .route(
+            "/v1/workflows/{id}/amendments/approvals",
+            post(approve_amendment),
+        )
+        .route(
+            "/v1/workflows/{id}/amendments/publications",
+            post(publish_amendment),
+        )
+        .route(
+            "/v1/workflows/{id}/amendments/notion-retries",
+            post(retry_amendment_notion),
+        )
+        .route(
+            "/v1/workflows/{id}/amendments/rereads",
+            post(reread_amendment),
+        )
+        .route(
+            "/v1/workflows/{id}/amendments/abandonments",
+            post(abandon_amendment),
+        )
         .route("/v1/workflows/{id}/save-under-day", post(save_under_day))
         .route("/v1/workflows/{id}/discoveries", post(discover))
         .route("/v1/workflows/{id}/sources", get(list_sources))
@@ -603,7 +628,6 @@ async fn capabilities(State(state): State<AppState>) -> Json<CapabilitiesDto> {
             "/mcp".to_owned(),
             "/v1/drafts".to_owned(),
             "/v1/publications".to_owned(),
-            "/v1/amendments".to_owned(),
         ],
     })
 }
@@ -1901,6 +1925,231 @@ async fn run_notion_publication_job(
     }
 }
 
+async fn seed_amendment(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    headers: HeaderMap,
+) -> Result<Response, ApiError> {
+    let day = day_from_id(&id)?;
+    let revision = workflow_precondition(&headers)?;
+    let service = state.0.config.commands.clone();
+    let seeded = blocking(move || service.seed_amendment(&day, revision)).await?;
+    publish_event(
+        &state,
+        "workflow.changed",
+        Some(id),
+        Some(seeded.workflow.revision()),
+        None,
+        None,
+    );
+    workflow_response(StatusCode::CREATED, &seeded.workflow)
+}
+
+async fn reread_amendment(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    headers: HeaderMap,
+) -> Result<Response, ApiError> {
+    let day = day_from_id(&id)?;
+    let revision = workflow_precondition(&headers)?;
+    let service = state.0.config.commands.clone();
+    let seeded = blocking(move || service.reread_amendment(&day, revision)).await?;
+    publish_event(
+        &state,
+        "workflow.changed",
+        Some(id),
+        Some(seeded.workflow.revision()),
+        None,
+        None,
+    );
+    workflow_response(StatusCode::OK, &seeded.workflow)
+}
+
+async fn abandon_amendment(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    headers: HeaderMap,
+) -> Result<Response, ApiError> {
+    let day = day_from_id(&id)?;
+    let revision = workflow_precondition(&headers)?;
+    let service = state.0.config.commands.clone();
+    let workflow = blocking(move || service.abandon_amendment(&day, revision)).await?;
+    publish_event(
+        &state,
+        "workflow.changed",
+        Some(id),
+        Some(workflow.revision()),
+        None,
+        None,
+    );
+    workflow_response(StatusCode::OK, &workflow)
+}
+
+async fn preview_amendment(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    headers: HeaderMap,
+) -> Result<Json<AmendmentPreviewDto>, ApiError> {
+    let day = day_from_id(&id)?;
+    let revision = workflow_precondition(&headers)?;
+    let service = state.0.config.commands.clone();
+    let preview = blocking(move || service.preview_amendment(&day, revision)).await?;
+    let plan_digest = preview
+        .workflow
+        .output_plan()
+        .map(|plan| plan.plan_digest.as_str().to_owned())
+        .ok_or_else(|| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal-failure"))?;
+    let blocks = |blocks: Vec<diary_core::NotionBlockPreview>| {
+        blocks
+            .into_iter()
+            .map(|block| NotionBlockDto {
+                kind: block.kind,
+                text: block.text,
+                depth: block.depth,
+            })
+            .collect()
+    };
+    let result = AmendmentPreviewDto {
+        workflow: workflow_dto(&preview.workflow),
+        plan_digest,
+        local_target: preview.local_target,
+        local_current: preview.local_current,
+        local_payload: preview.local_payload,
+        local_status: preview.local_status.as_str().to_owned(),
+        notion: preview.notion.map(|notion| AmendmentNotionDto {
+            current_blocks: blocks(notion.current_blocks),
+            replacement_blocks: blocks(notion.replacement_blocks),
+            status: notion.status.as_str().to_owned(),
+            reason: notion.reason,
+        }),
+    };
+    publish_event(
+        &state,
+        "workflow.changed",
+        Some(id),
+        Some(result.workflow.revision),
+        None,
+        None,
+    );
+    Ok(Json(result))
+}
+
+async fn approve_amendment(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    headers: HeaderMap,
+    Json(request): Json<LocalApprovalRequest>,
+) -> Result<Response, ApiError> {
+    let day = day_from_id(&id)?;
+    let revision = workflow_precondition(&headers)?;
+    let digest = Digest::parse(request.plan_digest)
+        .map_err(|_| ApiError::new(StatusCode::BAD_REQUEST, "invalid-plan-digest"))?;
+    let service = state.0.config.commands.clone();
+    let workflow = blocking(move || service.approve_amendment(&day, revision, &digest)).await?;
+    publish_event(
+        &state,
+        "workflow.changed",
+        Some(id),
+        Some(workflow.revision()),
+        None,
+        None,
+    );
+    workflow_response(StatusCode::OK, &workflow)
+}
+
+async fn publish_amendment(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    headers: HeaderMap,
+) -> Result<(StatusCode, Json<JobAcceptedDto>), ApiError> {
+    let day = day_from_id(&id)?;
+    let revision = workflow_precondition(&headers)?;
+    let job_id = new_job(&state, "amendment-publication", &id)?;
+    tokio::spawn(run_amendment_job(
+        state,
+        job_id.clone(),
+        id,
+        day,
+        revision,
+        false,
+    ));
+    Ok((StatusCode::ACCEPTED, Json(JobAcceptedDto { job_id })))
+}
+
+async fn retry_amendment_notion(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    headers: HeaderMap,
+) -> Result<(StatusCode, Json<JobAcceptedDto>), ApiError> {
+    let day = day_from_id(&id)?;
+    let revision = workflow_precondition(&headers)?;
+    let job_id = new_job(&state, "amendment-notion-retry", &id)?;
+    tokio::spawn(run_amendment_job(
+        state,
+        job_id.clone(),
+        id,
+        day,
+        revision,
+        true,
+    ));
+    Ok((StatusCode::ACCEPTED, Json(JobAcceptedDto { job_id })))
+}
+
+async fn run_amendment_job(
+    state: AppState,
+    job_id: String,
+    workflow_id: String,
+    day: DiaryDay,
+    revision: u64,
+    notion_only: bool,
+) {
+    let Ok(_permit) = Arc::clone(&state.0.workers).acquire_owned().await else {
+        return;
+    };
+    if !mark_running(&state, &job_id) {
+        return;
+    }
+    let Some((commit_state, cancelled)) = assistant_job_state(&state, &job_id) else {
+        fail_job(&state, &job_id, "internal-failure");
+        return;
+    };
+    if commit_state
+        .compare_exchange(
+            COMMIT_ACTIVE,
+            COMMITTING,
+            Ordering::AcqRel,
+            Ordering::Acquire,
+        )
+        .is_err()
+    {
+        return;
+    }
+    let service = state.0.config.commands.clone();
+    let outcome = tokio::task::spawn_blocking(move || {
+        if notion_only {
+            service.retry_amendment_notion(&day, revision, &cancelled)
+        } else {
+            service.publish_amendment(&day, revision, &cancelled)
+        }
+    })
+    .await;
+    match outcome {
+        Ok(Ok(workflow)) => {
+            publish_event(
+                &state,
+                "workflow.changed",
+                Some(workflow_id),
+                Some(workflow.revision()),
+                None,
+                None,
+            );
+            finish_job(&state, &job_id, None, None);
+        }
+        Ok(Err(error)) => fail_job(&state, &job_id, error.diagnostic_code()),
+        Err(_) => fail_job(&state, &job_id, "internal-failure"),
+    }
+}
+
 async fn save_under_day(
     State(state): State<AppState>,
     Path(id): Path<String>,
@@ -1965,6 +2214,8 @@ async fn cancel_job(
         record.expires_at_ms = now_ms().saturating_add(JOB_EXPIRY_MS);
     } else if record.status == job_status::RUNNING
         && (record.kind == "notion-publication"
+            || record.kind == "amendment-publication"
+            || record.kind == "amendment-notion-retry"
             || record
                 .commit_state
                 .compare_exchange(
@@ -2941,6 +3192,9 @@ fn workflow_dto(workflow: &Workflow) -> WorkflowDto {
             .iter()
             .find(|item| item.destination == "icloud")
             .map(|item| item.status.as_str().to_owned()),
+        amendment: workflow.amendment().map(|seed| AmendmentDto {
+            hand_edited: seed.hand_edited,
+        }),
         candidates: candidate_dtos(workflow),
     }
 }

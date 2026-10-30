@@ -555,6 +555,17 @@ pub struct EntryBuffer {
     pub confirmed: Option<EntryConfirmation>,
 }
 
+/// What an amendment was seeded from. The digest is of the whole local file
+/// at seed time; approval and the pre-rename guard bind to it.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AmendmentSeed {
+    pub file_digest: Digest,
+    /// Highest receipt version of the completed publication.
+    pub receipt_version: u32,
+    /// The file no longer matched the receipt (the person edited it).
+    pub hand_edited: bool,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct EntryConfirmation {
     pub buffer_version: u64,

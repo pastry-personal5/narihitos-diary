@@ -1,6 +1,6 @@
 # P1-M11: Amendments architecture plan
 
-Status: Planned
+Status: Done
 
 This plan adds the architecture's one intentional replacement path with
 digest-guarded, interruption-safe writes at both destinations.

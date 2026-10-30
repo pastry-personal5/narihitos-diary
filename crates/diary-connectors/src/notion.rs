@@ -11,7 +11,8 @@ use std::time::Duration;
 
 use diary_core::{
     DiaryDay, Digest, InspectionOutcome, NotionBlockPreview, NotionOutputPort, NotionPreflight,
-    NotionPreflightStatus, NotionRequest, WriteOutcome,
+    NotionPreflightStatus, NotionReplacePreflight, NotionReplaceRequest, NotionRequest,
+    WriteOutcome,
 };
 use pulldown_cmark::{CodeBlockKind, Event, HeadingLevel, Options, Parser, Tag, TagEnd};
 use serde::{Deserialize, Serialize};
@@ -21,6 +22,27 @@ pub const RENDERER_VERSION: u32 = 1;
 pub const MAX_RICH_TEXT_CHARS: usize = 2_000;
 pub const MAX_APPEND_BLOCKS: usize = 100;
 pub const MAX_CHILDREN: usize = 100;
+
+fn chunk_blocks(blocks: &[NotionBlock]) -> Vec<&[NotionBlock]> {
+    let mut chunks = Vec::new();
+    let mut start = 0;
+    while start < blocks.len() {
+        let mut end = start;
+        let mut bytes: usize = 0;
+        while end < blocks.len() && end - start < MAX_APPEND_BLOCKS {
+            let block_bytes =
+                serde_json::to_vec(&blocks[end]).map_or(usize::MAX, |value| value.len());
+            if end > start && bytes.saturating_add(block_bytes) > 450 * 1024 {
+                break;
+            }
+            bytes = bytes.saturating_add(block_bytes);
+            end += 1;
+        }
+        chunks.push(&blocks[start..end]);
+        start = end;
+    }
+    chunks
+}
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct NotionPlan {
@@ -36,24 +58,7 @@ pub struct NotionPlan {
 impl NotionPlan {
     #[must_use]
     pub fn append_chunks(&self) -> Vec<&[NotionBlock]> {
-        let mut chunks = Vec::new();
-        let mut start = 0;
-        while start < self.blocks.len() {
-            let mut end = start;
-            let mut bytes: usize = 0;
-            while end < self.blocks.len() && end - start < MAX_APPEND_BLOCKS {
-                let block_bytes =
-                    serde_json::to_vec(&self.blocks[end]).map_or(usize::MAX, |value| value.len());
-                if end > start && bytes.saturating_add(block_bytes) > 450 * 1024 {
-                    break;
-                }
-                bytes = bytes.saturating_add(block_bytes);
-                end += 1;
-            }
-            chunks.push(&self.blocks[start..end]);
-            start = end;
-        }
-        chunks
+        chunk_blocks(&self.blocks)
     }
 
     pub fn validate(&self) -> Result<(), NotionError> {
@@ -753,6 +758,8 @@ trait NotionRemote: Send + Sync {
         after: Option<&str>,
         cancelled: &AtomicBool,
     ) -> Result<Vec<RemoteBlock>, RemoteError>;
+    /// Moves one block (and its children) to the trash.
+    fn trash_block(&self, block_id: &str, cancelled: &AtomicBool) -> Result<(), RemoteError>;
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1092,6 +1099,298 @@ impl NotionOutputPort for NotionClient {
             Err(RemoteError::Ambiguous | RemoteError::Pending) => InspectionOutcome::Unavailable,
         }
     }
+
+    fn preflight_replace(
+        &self,
+        request: &NotionReplaceRequest,
+    ) -> Result<NotionReplacePreflight, String> {
+        let plan = render_notion(&request.day, &request.markdown)
+            .map_err(|_| "notion-render-invalid".to_owned())?;
+        let cancelled = AtomicBool::new(false);
+        if request.expected_target_identity != self.root_page_id {
+            return Err("notion-target-changed".to_owned());
+        }
+        let (status, reason, section, current) =
+            match self.read_owned_section(request, &plan, &cancelled) {
+                Ok((OwnedSection::Original { .. }, remote)) => {
+                    let current = owned_blocks(&remote, request);
+                    (NotionPreflightStatus::Ready, None, true, current)
+                }
+                Ok(_) => (NotionPreflightStatus::Ready, None, true, Vec::new()),
+                Err(RemoteError::Invalid) => (
+                    NotionPreflightStatus::Conflict,
+                    Some("notion-section-not-owned".to_owned()),
+                    false,
+                    Vec::new(),
+                ),
+                Err(error) => return Err(remote_reason(error)),
+            };
+        let observed = if section {
+            request.owned_payload_digest.clone()
+        } else {
+            Digest::of_bytes(b"notion-section-not-owned")
+        };
+        Ok(NotionReplacePreflight {
+            preflight: NotionPreflight {
+                target_identity: self.root_page_id.clone(),
+                root_label: "Notion root".to_owned(),
+                year_title: plan.year_title.clone(),
+                month_title: plan.month_title.clone(),
+                year_exists: true,
+                month_exists: true,
+                renderer_version: plan.renderer_version,
+                api_version: plan.api_version.clone(),
+                payload_digest: Digest::parse(&plan.payload_digest)
+                    .map_err(|_| "notion-render-invalid".to_owned())?,
+                observed_state_digest: observed,
+                blocks: flatten_preview(&plan.blocks),
+                status,
+                reason,
+            },
+            current_blocks: flatten_preview(&current),
+        })
+    }
+
+    fn replace_section(
+        &self,
+        request: &NotionReplaceRequest,
+        cancelled: &AtomicBool,
+    ) -> WriteOutcome {
+        if request.expected_target_identity != self.root_page_id {
+            return WriteOutcome::Conflict;
+        }
+        let plan = match Self::replace_plan(request) {
+            Ok(plan) => plan,
+            Err(outcome) => return outcome,
+        };
+        let wanted = &plan.blocks[1..];
+        let mut wrote = false;
+        loop {
+            if cancelled.load(Ordering::Acquire) {
+                return if wrote {
+                    WriteOutcome::AmbiguousWrite
+                } else {
+                    WriteOutcome::DefiniteNoEffect
+                };
+            }
+            let state = match self.read_owned_section(request, &plan, cancelled) {
+                Ok((state, _)) => state,
+                Err(RemoteError::Invalid) => return WriteOutcome::Conflict,
+                Err(RemoteError::Pending) if !wrote => return WriteOutcome::DefiniteNoEffect,
+                Err(RemoteError::Blocked(_)) if !wrote => return WriteOutcome::Unavailable,
+                Err(_) => return WriteOutcome::AmbiguousWrite,
+            };
+            let (heading_id, fresh_ids, stale_ids) = match state {
+                OwnedSection::Original { .. } => (
+                    request.owned_block_ids[0].clone(),
+                    Vec::new(),
+                    request.owned_block_ids[1..].to_vec(),
+                ),
+                OwnedSection::Replacing {
+                    heading_id,
+                    fresh_ids,
+                    stale_ids,
+                } => (heading_id, fresh_ids, stale_ids),
+            };
+            if fresh_ids.len() < wanted.len() {
+                // Insert the next chunk directly after the last verified block.
+                let remaining = &wanted[fresh_ids.len()..];
+                let chunk = chunk_blocks(remaining)[0];
+                let after = fresh_ids.last().unwrap_or(&heading_id).clone();
+                match self.remote.append_blocks(
+                    &request.owned_month_id,
+                    chunk,
+                    Some(&after),
+                    cancelled,
+                ) {
+                    Ok(_) => {}
+                    Err(RemoteError::Pending) if !wrote => return WriteOutcome::DefiniteNoEffect,
+                    Err(_) => return WriteOutcome::AmbiguousWrite,
+                }
+                // Loop: the next pass reads the insert back before anything else.
+                wrote = true;
+                continue;
+            }
+            if !stale_ids.is_empty() {
+                if self.trash_stale(&stale_ids, cancelled).is_err() {
+                    return WriteOutcome::AmbiguousWrite;
+                }
+                wrote = true;
+                continue;
+            }
+            let mut returned = vec![heading_id];
+            returned.extend(fresh_ids);
+            return WriteOutcome::Verified {
+                receipt_id: request.owned_month_id.clone(),
+                returned_ids: returned,
+            };
+        }
+    }
+
+    fn reconcile_replace(&self, request: &NotionReplaceRequest) -> InspectionOutcome {
+        let plan = match Self::replace_plan(request) {
+            Ok(plan) => plan,
+            Err(_) => return InspectionOutcome::Conflict,
+        };
+        let cancelled = AtomicBool::new(false);
+        let wanted = plan.blocks.len() - 1;
+        match self.read_owned_section(request, &plan, &cancelled) {
+            Ok((OwnedSection::Original { .. }, _)) => InspectionOutcome::Absent,
+            Ok((
+                OwnedSection::Replacing {
+                    heading_id,
+                    fresh_ids,
+                    stale_ids,
+                },
+                _,
+            )) => {
+                if fresh_ids.len() < wanted {
+                    // A partial insert is neither absent nor complete; the
+                    // caller resumes it with `replace_section`.
+                    return InspectionOutcome::Unavailable;
+                }
+                if self.trash_stale(&stale_ids, &cancelled).is_err() {
+                    return InspectionOutcome::Unavailable;
+                }
+                let mut returned = vec![heading_id];
+                returned.extend(fresh_ids);
+                InspectionOutcome::Matching {
+                    receipt_id: request.owned_month_id.clone(),
+                    returned_ids: returned,
+                }
+            }
+            Err(RemoteError::Invalid | RemoteError::Blocked(_)) => InspectionOutcome::Conflict,
+            Err(RemoteError::Ambiguous | RemoteError::Pending) => InspectionOutcome::Unavailable,
+        }
+    }
+}
+
+fn owned_blocks(remote: &[RemoteBlock], request: &NotionReplaceRequest) -> Vec<NotionBlock> {
+    remote
+        .iter()
+        .filter(|item| request.owned_block_ids.contains(&item.id))
+        .map(|item| item.block.clone())
+        .collect()
+}
+
+/// Where an owned section stands relative to its receipt and the wanted body.
+#[derive(Clone, Debug, Eq, PartialEq)]
+enum OwnedSection {
+    /// Heading and body still match the receipt exactly; nothing replaced.
+    Original { body_ids: Vec<String> },
+    /// `fresh` leading body blocks are the wanted body (possibly only a
+    /// prefix) and `stale` receipted body blocks have not been trashed yet.
+    Replacing {
+        heading_id: String,
+        fresh_ids: Vec<String>,
+        stale_ids: Vec<String>,
+    },
+}
+
+impl NotionClient {
+    fn read_owned_section(
+        &self,
+        request: &NotionReplaceRequest,
+        plan: &NotionPlan,
+        cancelled: &AtomicBool,
+    ) -> Result<(OwnedSection, Vec<RemoteBlock>), RemoteError> {
+        let month = self
+            .resolve_path(plan, cancelled)?
+            .month
+            .ok_or(RemoteError::Invalid)?;
+        if month.id != request.owned_month_id {
+            return Err(RemoteError::Invalid);
+        }
+        let remote = self.remote.list_blocks(&month.id, cancelled)?;
+        let heading_id = request
+            .owned_block_ids
+            .first()
+            .ok_or(RemoteError::Invalid)?;
+        let index = remote
+            .iter()
+            .position(|item| &item.id == heading_id)
+            .ok_or(RemoteError::Invalid)?;
+        let end = remote
+            .iter()
+            .enumerate()
+            .skip(index + 1)
+            .find(|(_, item)| matches!(item.block.kind, BlockKind::Heading1 | BlockKind::Heading2))
+            .map_or(remote.len(), |(position, _)| position);
+        let section = &remote[index..end];
+        if section[0].block.display_text() != plan.heading {
+            return Err(RemoteError::Invalid);
+        }
+        let owned_body = &request.owned_block_ids[1..];
+        let body = &section[1..];
+        let (fresh, stale): (Vec<_>, Vec<_>) =
+            body.iter().partition(|item| !owned_body.contains(&item.id));
+        let wanted = &plan.blocks[1..];
+        if fresh.is_empty() {
+            let ids: Vec<_> = body.iter().map(|item| item.id.clone()).collect();
+            let blocks: Vec<_> = section.iter().map(|item| item.block.clone()).collect();
+            let digest = plan_digest(
+                RENDERER_VERSION,
+                API_VERSION,
+                &plan.year_title,
+                &plan.month_title,
+                &plan.heading,
+                &blocks,
+            )
+            .map_err(|_| RemoteError::Invalid)?;
+            if ids != owned_body || digest != request.owned_payload_digest.as_str() {
+                return Err(RemoteError::Invalid);
+            }
+            return Ok((OwnedSection::Original { body_ids: ids }, remote));
+        }
+        // Every receipted body block that remains must still be in receipt
+        // order, and the inserted blocks must come first and be a prefix of
+        // the wanted body.
+        let stale_ids: Vec<_> = stale.iter().map(|item| item.id.clone()).collect();
+        let order_ok = stale_ids
+            .iter()
+            .filter_map(|id| owned_body.iter().position(|owned| owned == id))
+            .collect::<Vec<_>>()
+            .windows(2)
+            .all(|pair| pair[0] < pair[1]);
+        let fresh_first = body
+            .iter()
+            .take(fresh.len())
+            .all(|item| !owned_body.contains(&item.id));
+        if !order_ok
+            || !fresh_first
+            || fresh.len() > wanted.len()
+            || fresh
+                .iter()
+                .map(|item| &item.block)
+                .ne(wanted[..fresh.len()].iter())
+        {
+            return Err(RemoteError::Invalid);
+        }
+        Ok((
+            OwnedSection::Replacing {
+                heading_id: heading_id.clone(),
+                fresh_ids: fresh.iter().map(|item| item.id.clone()).collect(),
+                stale_ids,
+            },
+            remote,
+        ))
+    }
+
+    fn replace_plan(request: &NotionReplaceRequest) -> Result<NotionPlan, WriteOutcome> {
+        let plan = render_notion(&request.day, &request.markdown)
+            .map_err(|_| WriteOutcome::Unavailable)?;
+        if plan.payload_digest != request.expected_payload_digest.as_str() {
+            return Err(WriteOutcome::Conflict);
+        }
+        Ok(plan)
+    }
+
+    fn trash_stale(&self, stale_ids: &[String], cancelled: &AtomicBool) -> Result<(), RemoteError> {
+        for id in stale_ids {
+            self.remote.trash_block(id, cancelled)?;
+        }
+        Ok(())
+    }
 }
 
 struct ResolvedPath {
@@ -1257,6 +1556,12 @@ impl HttpRemote {
                     .header("Notion-Version", API_VERSION)
                     .header("Content-Type", "application/json")
                     .send(encoded),
+                ("DELETE", None) => self
+                    .agent
+                    .delete(&url)
+                    .header("Authorization", &authorization)
+                    .header("Notion-Version", API_VERSION)
+                    .call(),
                 ("PATCH", Some(encoded)) => self
                     .agent
                     .patch(&url)
@@ -1485,6 +1790,17 @@ impl NotionRemote for HttpRemote {
             .iter()
             .map(|value| self.parse_block_tree(value, cancelled))
             .collect()
+    }
+
+    fn trash_block(&self, block_id: &str, cancelled: &AtomicBool) -> Result<(), RemoteError> {
+        self.request(
+            "DELETE",
+            &format!("/blocks/{block_id}"),
+            None,
+            true,
+            cancelled,
+        )
+        .map(|_| ())
     }
 }
 
@@ -1922,6 +2238,10 @@ mod tests {
         fail_list_blocks_on_call: Option<(usize, RemoteError)>,
         list_errors: BTreeMap<String, RemoteError>,
         creates: usize,
+        trashed: Vec<String>,
+        /// Trash calls numbered from 0 at or past this fail without effect.
+        fail_trash_from: Option<usize>,
+        trash_calls: usize,
     }
 
     #[derive(Default)]
@@ -1962,6 +2282,26 @@ mod tests {
 
         fn lose_next_append_reply(&self) {
             self.0.lock().unwrap().lose_next_append_reply = true;
+        }
+
+        fn fail_trash_from(&self, call: Option<usize>) {
+            let mut state = self.0.lock().unwrap();
+            state.fail_trash_from = call;
+            state.trash_calls = 0;
+        }
+
+        fn month_ids(&self, parent: &str) -> Vec<String> {
+            self.0.lock().unwrap().blocks[parent]
+                .iter()
+                .map(|item| item.id.clone())
+                .collect()
+        }
+
+        fn month_texts(&self, parent: &str) -> Vec<String> {
+            self.0.lock().unwrap().blocks[parent]
+                .iter()
+                .map(|item| item.block.display_text())
+                .collect()
         }
 
         fn lose_append_reply_on_call(&self, call: usize, committed: bool) {
@@ -2065,6 +2405,289 @@ mod tests {
                 return Err(RemoteError::Ambiguous);
             }
             Ok(appended)
+        }
+
+        fn trash_block(&self, block_id: &str, _: &AtomicBool) -> Result<(), RemoteError> {
+            let mut state = self.0.lock().unwrap();
+            let call = state.trash_calls;
+            state.trash_calls += 1;
+            if state.fail_trash_from.is_some_and(|from| call >= from) {
+                return Err(RemoteError::Ambiguous);
+            }
+            for blocks in state.blocks.values_mut() {
+                blocks.retain(|item| item.id != block_id);
+            }
+            state.trashed.push(block_id.to_owned());
+            Ok(())
+        }
+    }
+
+    struct Published {
+        client: NotionClient,
+        remote: Arc<FakeRemote>,
+        month: String,
+        ids: Vec<String>,
+        digest: Digest,
+        day: DiaryDay,
+    }
+
+    /// Publishes `markdown` for 2026-10-30 with an unrelated section on each side.
+    fn published(markdown: &str) -> Published {
+        let remote = Arc::new(FakeRemote::default());
+        let client = NotionClient::scripted(remote.clone(), ROOT);
+        let diary_day = day("2026-10-30");
+        let preflight = client.preflight(&diary_day, markdown).unwrap();
+        let request = NotionRequest {
+            day: diary_day.clone(),
+            markdown: markdown.into(),
+            expected_target_identity: preflight.target_identity,
+            expected_payload_digest: preflight.payload_digest.clone(),
+            expected_state_digest: preflight.observed_state_digest,
+        };
+        let WriteOutcome::Verified {
+            receipt_id,
+            returned_ids,
+        } = client.write(&request, &AtomicBool::new(false))
+        else {
+            panic!("initial publication must verify");
+        };
+        // An unrelated section after the owned one, written by someone else.
+        remote
+            .append_blocks(
+                &receipt_id,
+                &[
+                    text_block(BlockKind::Heading2, "2026-10-31 (SAT)".into()),
+                    text_block(BlockKind::Paragraph, "Someone else's day.".into()),
+                ],
+                None,
+                &AtomicBool::new(false),
+            )
+            .unwrap();
+        Published {
+            client,
+            remote,
+            month: receipt_id,
+            ids: returned_ids,
+            digest: preflight.payload_digest,
+            day: diary_day,
+        }
+    }
+
+    impl Published {
+        fn request(&self, markdown: &str) -> NotionReplaceRequest {
+            NotionReplaceRequest {
+                day: self.day.clone(),
+                markdown: markdown.into(),
+                expected_target_identity: ROOT.into(),
+                expected_payload_digest: Digest::parse(
+                    render_notion(&self.day, markdown).unwrap().payload_digest,
+                )
+                .unwrap(),
+                owned_month_id: self.month.clone(),
+                owned_block_ids: self.ids.clone(),
+                owned_payload_digest: self.digest.clone(),
+            }
+        }
+    }
+
+    #[test]
+    fn replace_swaps_only_the_owned_body_and_keeps_the_heading_and_neighbors() {
+        let owned = published("Old one.\n\nOld two.");
+        let before = owned.remote.month_ids(&owned.month);
+        let request = owned.request("New only.");
+        let WriteOutcome::Verified {
+            receipt_id,
+            returned_ids,
+        } = owned
+            .client
+            .replace_section(&request, &AtomicBool::new(false))
+        else {
+            panic!("an untouched owned section must be replaced");
+        };
+        assert_eq!(receipt_id, owned.month);
+        assert_eq!(returned_ids[0], owned.ids[0], "heading ID is kept");
+        assert_eq!(returned_ids.len(), 2);
+        assert_eq!(
+            owned.remote.month_texts(&owned.month),
+            vec![
+                "2026-10-30 (FRI)",
+                "New only.",
+                "2026-10-31 (SAT)",
+                "Someone else's day."
+            ]
+        );
+        let after = owned.remote.month_ids(&owned.month);
+        assert_eq!(&after[after.len() - 2..], &before[before.len() - 2..]);
+        // A replay is a no-op: nothing is inserted or trashed again.
+        let state = owned.remote.0.lock().unwrap().trashed.len();
+        assert_eq!(state, 2);
+        assert!(matches!(
+            owned
+                .client
+                .replace_section(&request, &AtomicBool::new(false)),
+            WriteOutcome::Verified { .. }
+        ));
+        assert_eq!(owned.remote.0.lock().unwrap().trashed.len(), 2);
+    }
+
+    #[test]
+    fn replace_refuses_edited_extended_or_missing_sections_without_writing() {
+        for tamper in 0..3 {
+            let owned = published("Old one.");
+            {
+                let mut state = owned.remote.0.lock().unwrap();
+                let blocks = state.blocks.get_mut(&owned.month).unwrap();
+                match tamper {
+                    0 => blocks[1].block = text_block(BlockKind::Paragraph, "Edited.".into()),
+                    1 => blocks.insert(
+                        2,
+                        RemoteBlock {
+                            id: "extra".into(),
+                            block: text_block(BlockKind::Paragraph, "Added by hand.".into()),
+                        },
+                    ),
+                    _ => {
+                        blocks.remove(1);
+                    }
+                }
+            }
+            let appends = owned.remote.0.lock().unwrap().append_anchors.len();
+            let request = owned.request("New.");
+            assert_eq!(
+                owned
+                    .client
+                    .replace_section(&request, &AtomicBool::new(false)),
+                WriteOutcome::Conflict,
+                "tamper {tamper}"
+            );
+            assert_eq!(
+                owned.client.reconcile_replace(&request),
+                InspectionOutcome::Conflict
+            );
+            let preflight = owned.client.preflight_replace(&request).unwrap();
+            assert_eq!(preflight.preflight.status, NotionPreflightStatus::Conflict);
+            let state = owned.remote.0.lock().unwrap();
+            assert_eq!(state.append_anchors.len(), appends, "tamper {tamper}");
+            assert!(state.trashed.is_empty(), "tamper {tamper}");
+        }
+    }
+
+    #[test]
+    fn every_interruption_boundary_keeps_content_and_resumes_without_replaying() {
+        // (label, trash failures from call, lose insert reply on call (committed))
+        type Case = (&'static str, Option<usize>, Option<(usize, bool)>);
+        let cases: [Case; 6] = [
+            ("insert never reaches notion", None, Some((3, false))),
+            ("insert committed, reply lost", None, Some((3, true))),
+            ("read-back done, first trash fails", Some(0), None),
+            ("partway through trashing", Some(1), None),
+            ("all trashed, nothing left to do", None, None),
+            ("second chunk insert lost", None, Some((4, true))),
+        ];
+        for (label, fail_trash, lose_insert) in cases {
+            let long = (0..120)
+                .map(|n| format!("Paragraph {n}."))
+                .collect::<Vec<_>>()
+                .join("\n\n");
+            let markdown = if label.starts_with("second chunk") {
+                long.as_str()
+            } else {
+                "Old one.\n\nOld two."
+            };
+            let owned = published(markdown);
+            let replacement = if label.starts_with("second chunk") {
+                long.replace("Paragraph", "Rewritten")
+            } else {
+                "New one.\n\nNew two.\n\nNew three.".to_owned()
+            };
+            let request = owned.request(&replacement);
+            owned.remote.fail_trash_from(fail_trash);
+            // Appends so far: the initial publication plus the neighbor section.
+            let base = owned.remote.0.lock().unwrap().append_anchors.len();
+            if let Some((call, committed)) = lose_insert {
+                let offset = if label.starts_with("second chunk") {
+                    2
+                } else {
+                    1
+                };
+                owned
+                    .remote
+                    .lose_append_reply_on_call(base + offset, committed);
+                let _ = call;
+            }
+            let first = owned
+                .client
+                .replace_section(&request, &AtomicBool::new(false));
+            let interrupted = !matches!(first, WriteOutcome::Verified { .. });
+            assert_eq!(
+                interrupted,
+                fail_trash.is_some() || lose_insert.is_some(),
+                "{label}"
+            );
+
+            // No loss at the crash: until the old body is gone, it is still all there.
+            let texts = owned.remote.month_texts(&owned.month);
+            assert!(texts.contains(&"Someone else's day.".to_owned()), "{label}");
+            assert!(texts.contains(&"2026-10-30 (FRI)".to_owned()), "{label}");
+
+            // Recovery: the destination is healthy again; reconcile, then resume.
+            owned.remote.fail_trash_from(None);
+            let inserted_before = owned.remote.0.lock().unwrap().append_anchors.len();
+            let mut outcome = owned.client.reconcile_replace(&request);
+            if !matches!(outcome, InspectionOutcome::Matching { .. }) {
+                assert!(
+                    matches!(
+                        outcome,
+                        InspectionOutcome::Absent | InspectionOutcome::Unavailable
+                    ),
+                    "{label}: {outcome:?}"
+                );
+                let WriteOutcome::Verified {
+                    receipt_id,
+                    returned_ids,
+                } = owned
+                    .client
+                    .replace_section(&request, &AtomicBool::new(false))
+                else {
+                    panic!("{label}: resume must finish");
+                };
+                outcome = InspectionOutcome::Matching {
+                    receipt_id,
+                    returned_ids,
+                };
+            }
+            let InspectionOutcome::Matching { returned_ids, .. } = outcome else {
+                unreachable!()
+            };
+            let final_texts = owned.remote.month_texts(&owned.month);
+            let expected_body = render_notion(&owned.day, &replacement)
+                .unwrap()
+                .blocks
+                .len()
+                - 1;
+            assert_eq!(returned_ids.len(), expected_body + 1, "{label}");
+            assert_eq!(returned_ids[0], owned.ids[0], "{label}");
+            assert_eq!(
+                final_texts.len(),
+                expected_body + 1 + 2,
+                "{label}: {final_texts:?}"
+            );
+            assert_eq!(
+                &final_texts[final_texts.len() - 2..],
+                ["2026-10-31 (SAT)", "Someone else's day."]
+            );
+            let state = owned.remote.0.lock().unwrap();
+            // Old body trashed exactly once each; nothing else was ever trashed.
+            let mut trashed = state.trashed.clone();
+            trashed.sort();
+            let mut old_body = owned.ids[1..].to_vec();
+            old_body.sort();
+            assert_eq!(trashed, old_body, "{label}");
+            // Committed inserts are never repeated: a recovery that finds the
+            // body already inserted adds no append.
+            if label.contains("committed") || label.contains("trash") || label.contains("nothing") {
+                assert_eq!(state.append_anchors.len(), inserted_before, "{label}");
+            }
         }
     }
 

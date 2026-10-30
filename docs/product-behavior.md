@@ -10,7 +10,7 @@ P1-M7 implements the manual journey through complete-entry Review. P1-M8 adds
 the optional Codex hosted and Apple Foundation Models assistant paths inside
 Compose. P1-M9 adds local Preview and Publish; P1-M10 adds the local-first
 Notion-only retry flow while keeping live hierarchy qualification gated;
-amendments remain planned for a later milestone.
+P1-M11 adds amendments of a completed day.
 
 ## Core journey
 
@@ -124,7 +124,15 @@ mirror can be retried alone. Without the setting nothing changes. See the
 - A completed entry can be amended: the editor opens with the saved text
   (including your own hand edits to the file, flagged), and approving the
   replacement plan replaces only content the app itself wrote. Anything else
-  stays a conflict.
+  stays a conflict. The local file is replaced first, atomically and only while
+  it still matches the digest recorded when the editor was seeded; Notion is
+  then replaced section-wise (new body inserted and read back before the old
+  blocks are trashed). If Notion then fails or is uncertain, the local file
+  keeps the new text and Notion is retried alone. A conflict offers reread
+  (rebind to the file as it is now, or re-preview the Notion section, keeping
+  your text) or abandoning the
+  amendment, which leaves files and receipts untouched. The iCloud mirror is
+  not updated by an amendment in this milestone.
 - If Notion is unconfigured, unreachable, or fails its preflight, the local
   entry can still be approved and written, and Notion shows blocked and can be
   retried later after a new Notion-only preview and approval. If Notion fails

@@ -91,7 +91,13 @@ bypass review.
 - Offer to amend a completed day. The editor opens with the saved text and, if
   the file was hand-edited, a banner saying it changed since publication. The
   output preview shows current and replacement content per destination, and a
-  destination that no longer matches our receipt is a Conflict.
+  destination that no longer matches our receipt is a Conflict. The offer
+  appears on the Publish stage of a completed day ("Amend this entry"); the
+  Preview stage then lists preview, approve, and, only on a local conflict,
+  reread, plus abandon the amendment. After the local file is replaced, a Notion
+  conflict offers the same two: reread previews the section again and needs a
+  new approval. Publish then replaces, or retries Notion alone while it is
+  pending.
 - Display the macOS input language through Text Input Source Services
   notifications, use a 500 ms polling fallback when notification registration
   fails, show `IME: EN` or `IME: KO` for English and Korean, and show `IME: ?`

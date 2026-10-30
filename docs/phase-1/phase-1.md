@@ -238,7 +238,7 @@ configured-root and disposable-hierarchy acceptance remain open.
 
 ### P1-M11: Amendments
 
-Status: Planned
+Status: Done
 
 Goal: Add safe, interruption-proof amendment replacement of a completed entry
 at the local and Notion destinations.

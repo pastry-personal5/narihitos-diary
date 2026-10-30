@@ -14,7 +14,10 @@ and [ux-tui.md](ux-tui.md); this doc does not duplicate their detail.
    running" state with the `nd serve` command.
 3. On **Start**, choose a diary day. A new workflow defaults to today in the
    Mac's local time zone; unfinished drafts are listed first. Choosing a day
-   with a completed entry offers to amend it.
+   with a completed entry offers to amend it: open the Publish stage and choose
+   **Amend this entry**. The editor opens with the saved text, then you confirm,
+   preview current against replacement content, approve, and publish. If the file
+   was edited by hand since publication, a banner says so.
 
 ## Moving around
 

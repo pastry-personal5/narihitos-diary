@@ -5,7 +5,7 @@
 use serde::{Deserialize, Serialize};
 
 pub const API_VERSION: &str = "v1";
-pub const CONTRACT_VERSION: u32 = 4;
+pub const CONTRACT_VERSION: u32 = 5;
 /// Covers one maximum-size source body plus a bounded JSON envelope. Individual
 /// routes still enforce their narrower action-specific limits.
 pub const MAX_REQUEST_BYTES: usize = 8 * 1024 * 1024 + 64 * 1024;
@@ -110,6 +110,34 @@ pub struct NotionPreviewDto {
     pub reason: Option<String>,
 }
 
+/// Present on a workflow while a completed day is being amended.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct AmendmentDto {
+    /// The local file no longer matched its receipt when the amendment was
+    /// seeded (or reread): the changed-since-publication banner.
+    pub hand_edited: bool,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct AmendmentNotionDto {
+    pub current_blocks: Vec<NotionBlockDto>,
+    pub replacement_blocks: Vec<NotionBlockDto>,
+    pub status: String,
+    pub reason: Option<String>,
+}
+
+/// Current against replacement content per destination.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct AmendmentPreviewDto {
+    pub workflow: WorkflowDto,
+    pub plan_digest: String,
+    pub local_target: String,
+    pub local_current: String,
+    pub local_payload: String,
+    pub local_status: String,
+    pub notion: Option<AmendmentNotionDto>,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct SaveUnderDayRequest {
     pub diary_day: String,
@@ -211,6 +239,48 @@ pub const ROUTES: &[RouteSpec] = &[
     RouteSpec {
         method: "POST",
         path: "/v1/workflows/{id}/notion-publications",
+        capability: Some("workflow:write"),
+        authenticated: true,
+    },
+    RouteSpec {
+        method: "POST",
+        path: "/v1/workflows/{id}/amendments",
+        capability: Some("workflow:write"),
+        authenticated: true,
+    },
+    RouteSpec {
+        method: "POST",
+        path: "/v1/workflows/{id}/amendments/previews",
+        capability: Some("workflow:write"),
+        authenticated: true,
+    },
+    RouteSpec {
+        method: "POST",
+        path: "/v1/workflows/{id}/amendments/approvals",
+        capability: Some("workflow:write"),
+        authenticated: true,
+    },
+    RouteSpec {
+        method: "POST",
+        path: "/v1/workflows/{id}/amendments/publications",
+        capability: Some("workflow:write"),
+        authenticated: true,
+    },
+    RouteSpec {
+        method: "POST",
+        path: "/v1/workflows/{id}/amendments/notion-retries",
+        capability: Some("workflow:write"),
+        authenticated: true,
+    },
+    RouteSpec {
+        method: "POST",
+        path: "/v1/workflows/{id}/amendments/rereads",
+        capability: Some("workflow:write"),
+        authenticated: true,
+    },
+    RouteSpec {
+        method: "POST",
+        path: "/v1/workflows/{id}/amendments/abandonments",
         capability: Some("workflow:write"),
         authenticated: true,
     },
@@ -520,6 +590,8 @@ dto!(
         pub notion_status: Option<String>,
         #[serde(default)]
         pub icloud_status: Option<String>,
+        #[serde(default)]
+        pub amendment: Option<AmendmentDto>,
         pub candidates: Vec<SourceCandidateDto>,
     }
 );
@@ -543,6 +615,7 @@ pub struct WorkflowDto {
     pub local_status: Option<String>,
     pub notion_status: Option<String>,
     pub icloud_status: Option<String>,
+    pub amendment: Option<AmendmentDto>,
     pub candidates: Vec<SourceCandidateDto>,
 }
 
@@ -575,6 +648,7 @@ impl TryFrom<WorkflowDtoWire> for WorkflowDto {
             local_status: value.local_status,
             notion_status: value.notion_status,
             icloud_status: value.icloud_status,
+            amendment: value.amendment,
             candidates: value.candidates,
         })
     }
@@ -1011,11 +1085,22 @@ mod tests {
 
     #[test]
     fn route_table_contains_local_and_notion_publication_and_excludes_future_surfaces() {
-        assert!(
-            ROUTES
-                .iter()
-                .all(|route| { !route.path.contains("mcp") && !route.path.contains("amend") })
-        );
+        assert!(ROUTES.iter().all(|route| !route.path.contains("mcp")));
+        for suffix in [
+            "/amendments",
+            "/amendments/previews",
+            "/amendments/approvals",
+            "/amendments/publications",
+            "/amendments/notion-retries",
+            "/amendments/rereads",
+            "/amendments/abandonments",
+        ] {
+            assert!(
+                ROUTES.iter().any(|route| route.path.ends_with(suffix)),
+                "{suffix}"
+            );
+        }
+        assert_eq!(CONTRACT_VERSION, 5, "amendments bumped the contract");
         assert!(
             ROUTES
                 .iter()

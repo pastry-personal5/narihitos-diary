@@ -6,6 +6,12 @@ This changelog records owner decisions and material plan changes for Phase 1.
 
 ## Entries
 
+- 2026-10-30 — P1-M11 amendments — Owner waived the "P1-M10 is Done" entry
+  criterion. Contract version 5 and SQLite migration 6 add the amendment seed
+  (file digest, receipt version, hand-edited flag). Amendment receipts take the
+  next version and a `#v<n>` receipt ID. Abandon returns the day to its
+  text-stripped Completed form; reread rebinds the seed and keeps the person's
+  text. The iCloud mirror is not amended in this milestone.
 - 2026-10-30 — P1-M14 iCloud output — Added an optional iCloud Drive
   Markdown mirror (`paths.icloud_entries_root`) written automatically after the
   verified local write under the same approval, isolated from local and Notion.

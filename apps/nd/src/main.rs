@@ -27,6 +27,7 @@ use diary_core::{
     AssistantBackendId, Clock, DiaryDay, Digest, DraftAssistant, DraftAssistantRegistry,
     OperationLog, Timestamp, WorkflowStore,
 };
+use diary_tui::amendment_view;
 use diary_tui::assistant_view::{AssistantResource, AssistantViewModel};
 use diary_tui::client::{
     ApiClient, Attachment as ClientAttachment, AttachmentState, ClientOutcome, UreqTransport,
@@ -829,6 +830,7 @@ fn run_connected_session(
     let mut current_workflow: Option<WorkflowDto> = None;
     let mut local_preview: Option<LocalPreviewDto> = None;
     let mut notion_preview: Option<NotionPreviewDto> = None;
+    let mut amendment_preview: Option<diary_control_contract::AmendmentPreviewDto> = None;
     let mut local_action_pending = false;
     let mut local_publication_job: Option<String> = None;
     let mut conflict_day_editing = false;
@@ -1610,6 +1612,90 @@ fn run_connected_session(
                         }
                     }
                 }
+                WorkerResult::AmendmentSeeded(outcome) | WorkerResult::AmendmentReread(outcome) => {
+                    local_action_pending = false;
+                    match *outcome {
+                        ClientOutcome::Ok(workflow) => {
+                            current_stage = Stage::Compose;
+                            compose_view.load_from_canonical(&workflow);
+                            draft_editor = DraftEditor::new(&compose_view.text);
+                            feedback = Some(
+                                amendment_view::banner(&workflow)
+                                    .or_else(|| amendment_view::status_text(&workflow))
+                                    .unwrap_or("Amendment opened")
+                                    .to_owned(),
+                            );
+                            current_workflow = Some(workflow);
+                            amendment_preview = None;
+                            local_preview = None;
+                            notion_preview = None;
+                        }
+                        ClientOutcome::Problem(problem) => feedback = Some(problem.safe_label()),
+                        ClientOutcome::Transport(error) => {
+                            feedback = Some(error.safe_label().to_owned())
+                        }
+                    }
+                }
+                WorkerResult::AmendmentPreviewed(outcome) => {
+                    local_action_pending = false;
+                    match *outcome {
+                        ClientOutcome::Ok(preview) => {
+                            current_workflow = Some(preview.workflow.clone());
+                            feedback =
+                                amendment_view::status_text(&preview.workflow).map(str::to_owned);
+                            amendment_preview = Some(preview);
+                        }
+                        ClientOutcome::Problem(problem) => feedback = Some(problem.safe_label()),
+                        ClientOutcome::Transport(error) => {
+                            feedback = Some(error.safe_label().to_owned())
+                        }
+                    }
+                }
+                WorkerResult::AmendmentApproved(outcome) => {
+                    local_action_pending = false;
+                    match *outcome {
+                        ClientOutcome::Ok(workflow) => {
+                            current_stage = Stage::Publish;
+                            feedback = amendment_view::status_text(&workflow).map(str::to_owned);
+                            current_workflow = Some(workflow);
+                        }
+                        ClientOutcome::Problem(problem) => feedback = Some(problem.safe_label()),
+                        ClientOutcome::Transport(error) => {
+                            feedback = Some(error.safe_label().to_owned())
+                        }
+                    }
+                }
+                WorkerResult::AmendmentPublished(outcome)
+                | WorkerResult::AmendmentNotionRetried(outcome) => {
+                    local_action_pending = false;
+                    match outcome {
+                        ClientOutcome::Ok(job) => {
+                            local_publication_job = Some(job.job_id);
+                            feedback = Some("Replacement started".to_owned());
+                        }
+                        ClientOutcome::Problem(problem) => feedback = Some(problem.safe_label()),
+                        ClientOutcome::Transport(error) => {
+                            feedback = Some(error.safe_label().to_owned())
+                        }
+                    }
+                }
+                WorkerResult::AmendmentAbandoned(outcome) => {
+                    local_action_pending = false;
+                    match *outcome {
+                        ClientOutcome::Ok(workflow) => {
+                            current_stage = Stage::Publish;
+                            current_workflow = Some(workflow);
+                            amendment_preview = None;
+                            feedback = Some(
+                                "Amendment abandoned; files and receipts are unchanged".to_owned(),
+                            );
+                        }
+                        ClientOutcome::Problem(problem) => feedback = Some(problem.safe_label()),
+                        ClientOutcome::Transport(error) => {
+                            feedback = Some(error.safe_label().to_owned())
+                        }
+                    }
+                }
                 WorkerResult::SavedUnderDay(outcome) => {
                     local_action_pending = false;
                     match *outcome {
@@ -1856,6 +1942,13 @@ fn run_connected_session(
             Stage::Sources => SOURCES_CONTROL_COUNT,
             Stage::Compose => COMPOSE_CONTROL_COUNT,
             Stage::Review => REVIEW_CONTROL_COUNT,
+            Stage::Preview
+                if current_workflow
+                    .as_ref()
+                    .is_some_and(|w| w.amendment.is_some()) =>
+            {
+                4
+            }
             Stage::Preview => 3,
             Stage::Publish => 2,
             _ => START_CONTROL_COUNT,
@@ -2011,6 +2104,17 @@ fn run_connected_session(
                 &compose_view,
                 entry_confirmation_pending,
             ),
+            Stage::Preview
+                if current_workflow
+                    .as_ref()
+                    .is_some_and(|workflow| workflow.amendment.is_some()) =>
+            {
+                amendment_preview_screen_body(
+                    &focus,
+                    current_workflow.as_ref(),
+                    amendment_preview.as_ref(),
+                )
+            }
             Stage::Preview => {
                 preview_screen_body(&focus, local_preview.as_ref(), notion_preview.as_ref())
             }
@@ -3090,6 +3194,54 @@ fn run_connected_session(
                         _ => feedback = Some("Entry cannot be confirmed yet".to_owned()),
                     }
                 }
+                FocusZone::Main
+                    if current_stage == Stage::Preview
+                        && current_workflow
+                            .as_ref()
+                            .is_some_and(|workflow| workflow.amendment.is_some()) =>
+                {
+                    if can_mutate
+                        && !local_action_pending
+                        && let Some(workflow) = &current_workflow
+                    {
+                        let choices = amendment_view::conflict_choices(workflow).unwrap_or(&[]);
+                        let sent = match focus.main_control_index {
+                            0 => Some(Intent::PreviewAmendment {
+                                workflow_id: workflow.id.clone(),
+                                revision: workflow.revision,
+                            }),
+                            1 if workflow.state == "output-planned" => amendment_preview
+                                .as_ref()
+                                .map(|preview| Intent::ApproveAmendment {
+                                    workflow_id: workflow.id.clone(),
+                                    revision: workflow.revision,
+                                    plan_digest: preview.plan_digest.clone(),
+                                }),
+                            2 if choices.contains(&amendment_view::ConflictChoice::Reread) => {
+                                Some(Intent::RereadAmendment {
+                                    workflow_id: workflow.id.clone(),
+                                    revision: workflow.revision,
+                                })
+                            }
+                            3 if choices
+                                .contains(&amendment_view::ConflictChoice::AbandonAmendment) =>
+                            {
+                                Some(Intent::AbandonAmendment {
+                                    workflow_id: workflow.id.clone(),
+                                    revision: workflow.revision,
+                                })
+                            }
+                            _ => None,
+                        };
+                        match sent {
+                            Some(intent) => local_action_pending = worker.try_send(intent).is_ok(),
+                            None => {
+                                feedback =
+                                    Some("Preview the replacement before approval".to_owned());
+                            }
+                        }
+                    }
+                }
                 FocusZone::Main if current_stage == Stage::Preview => {
                     if can_mutate
                         && !local_action_pending
@@ -3167,7 +3319,43 @@ fn run_connected_session(
                     } else if local_publication_job.is_none()
                         && let Some(workflow) = &current_workflow
                     {
-                        if workflow.state == "approved" || workflow.state == "partial" {
+                        if amendment_view::offers_amendment(workflow) {
+                            local_action_pending = worker
+                                .try_send(Intent::SeedAmendment {
+                                    workflow_id: workflow.id.clone(),
+                                    revision: workflow.revision,
+                                })
+                                .is_ok();
+                        } else if workflow.amendment.is_some() {
+                            let intent = match workflow.state.as_str() {
+                                "approved" => Some(Intent::PublishAmendment {
+                                    workflow_id: workflow.id.clone(),
+                                    revision: workflow.revision,
+                                }),
+                                "partial"
+                                    if workflow.local_status.as_deref() == Some("verified") =>
+                                {
+                                    Some(Intent::RetryAmendmentNotion {
+                                        workflow_id: workflow.id.clone(),
+                                        revision: workflow.revision,
+                                    })
+                                }
+                                "partial" => Some(Intent::PublishAmendment {
+                                    workflow_id: workflow.id.clone(),
+                                    revision: workflow.revision,
+                                }),
+                                _ => None,
+                            };
+                            match intent {
+                                Some(intent) => {
+                                    local_action_pending = worker.try_send(intent).is_ok();
+                                }
+                                None => {
+                                    feedback =
+                                        Some("No approved replacement is pending".to_owned());
+                                }
+                            }
+                        } else if workflow.state == "approved" || workflow.state == "partial" {
                             local_action_pending =
                                 if workflow.local_status.as_deref() == Some("verified") {
                                     worker
@@ -3469,6 +3657,58 @@ fn preview_screen_body(
     text
 }
 
+fn amendment_preview_screen_body(
+    focus: &FocusModel,
+    workflow: Option<&WorkflowDto>,
+    preview: Option<&diary_control_contract::AmendmentPreviewDto>,
+) -> String {
+    let marker = |index| {
+        if focus.zone == FocusZone::Main && focus.main_control_index == index {
+            ">"
+        } else {
+            " "
+        }
+    };
+    let mut text = String::new();
+    if let Some(workflow) = workflow {
+        if let Some(banner) = amendment_view::banner(workflow) {
+            text.push_str(banner);
+            text.push_str("\n\n");
+        }
+        if let Some(status) = amendment_view::status_text(workflow) {
+            text.push_str(status);
+            text.push_str("\n\n");
+        }
+    }
+    text.push_str(&format!(
+        "{} Preview the replacement\n{} Approve exact plan\n",
+        marker(0),
+        marker(1)
+    ));
+    let choices = workflow
+        .and_then(amendment_view::conflict_choices)
+        .unwrap_or(&[]);
+    for (index, choice) in [
+        amendment_view::ConflictChoice::Reread,
+        amendment_view::ConflictChoice::AbandonAmendment,
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        if choices.contains(&choice) {
+            text.push_str(&format!("{} {}\n", marker(index + 2), choice.label()));
+        }
+    }
+    text.push('\n');
+    if let Some(preview) = preview {
+        for line in amendment_view::preview_lines(preview) {
+            text.push_str(&line);
+            text.push('\n');
+        }
+    }
+    text
+}
+
 fn publish_screen_body(focus: &FocusModel, workflow: Option<&WorkflowDto>) -> String {
     let marker = |index| {
         if focus.zone == FocusZone::Main && focus.main_control_index == index {
@@ -3491,8 +3731,17 @@ fn publish_screen_body(focus: &FocusModel, workflow: Option<&WorkflowDto>) -> St
         Some(status) if status != "verified" => format!("iCloud mirror: {status}\n"),
         _ => String::new(),
     };
+    let completion = workflow
+        .and_then(amendment_view::completion_text)
+        .map(|text| format!("{text}\n\n"))
+        .unwrap_or_default();
+    let primary = if workflow.is_some_and(amendment_view::offers_amendment) {
+        "Amend this entry"
+    } else {
+        "Publish approved destination"
+    };
     format!(
-        "Local publication: {local}{local_note}\n{icloud_row}Notion: {}\n\n{} Publish approved destination\n{} Cancel pending publication",
+        "{completion}Local publication: {local}{local_note}\n{icloud_row}Notion: {}\n\n{} {primary}\n{} Cancel pending publication",
         workflow
             .and_then(|w| w.notion_status.as_deref())
             .unwrap_or("blocked"),
@@ -4136,6 +4385,7 @@ mod start_screen_tests {
             local_status: None,
             notion_status: None,
             icloud_status: None,
+            amendment: None,
             candidates: vec![
                 diary_control_contract::SourceCandidateDto {
                     id: "selected".to_owned(),
