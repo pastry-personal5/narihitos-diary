@@ -5,7 +5,9 @@ use std::io::{self, Read, Write};
 use std::os::unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt};
 use std::path::{Component, Path, PathBuf};
 
-use diary_core::{DiaryDay, Digest, LocalOutputPort, WritingLanguage, render_local_markdown};
+use diary_core::{
+    DiaryDay, Digest, LocalOutputPort, WritingLanguage, backup_file_name, render_local_markdown,
+};
 pub use diary_core::{
     LocalOutputError as LocalError, LocalOutputState as LocalState, LocalReplaceOutcome,
 };
@@ -263,6 +265,56 @@ impl LocalOutput {
         outcome
     }
 
+    /// Copies the day's file to its backup name while its bytes still hash to
+    /// `expected`, then reads the copy back. `Ok(false)` means the file is
+    /// absent or changed. The name comes from the replaced content, so a
+    /// replay reuses the same backup and an interrupted copy is rewritten.
+    pub fn backup(&self, day: &DiaryDay, expected: &Digest) -> Result<bool, LocalError> {
+        let text = match self.inspect(day, "")? {
+            LocalState::Absent => return Ok(false),
+            LocalState::Identical => String::new(),
+            LocalState::Different(text) => text,
+        };
+        if &Self::payload_digest(&text) != expected {
+            return Ok(false);
+        }
+        let target = self.target(day);
+        let backup = PathBuf::from(backup_file_name(&target.to_string_lossy(), expected));
+        let parent = backup.parent().ok_or(LocalError::UnsafePath)?;
+        let mut file = match OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(&backup)
+        {
+            Ok(file) => Some(file),
+            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => None,
+            Err(_) => return Err(LocalError::Unavailable),
+        };
+        if file.is_none() && fs::read(&backup).ok().as_deref() != Some(text.as_bytes()) {
+            // Only this exact name can hold a partial copy of these bytes.
+            file = Some(
+                OpenOptions::new()
+                    .write(true)
+                    .truncate(true)
+                    .open(&backup)
+                    .map_err(|_| LocalError::Unavailable)?,
+            );
+        }
+        if let Some(mut file) = file {
+            file.write_all(text.as_bytes())
+                .and_then(|()| file.sync_all())
+                .map_err(|_| LocalError::Unavailable)?;
+        }
+        if fs::read(&backup).map_err(|_| LocalError::Unavailable)? != text.as_bytes() {
+            return Err(LocalError::Unavailable);
+        }
+        File::open(parent)
+            .and_then(|dir| dir.sync_all())
+            .map_err(|_| LocalError::Unavailable)?;
+        Ok(true)
+    }
+
     /// Removes temp files a crashed earlier process left for this day. Only
     /// the exact `.nd-<pid>-<day>-<n>.tmp` pattern of another process is
     /// matched; this process's own temp files and all other names are kept.
@@ -341,6 +393,9 @@ impl LocalOutputPort for LocalOutput {
         payload: &str,
     ) -> Result<LocalReplaceOutcome, LocalError> {
         self.replace(day, expected, payload)
+    }
+    fn backup(&self, day: &DiaryDay, expected: &Digest) -> Result<bool, LocalError> {
+        self.backup(day, expected)
     }
 }
 
@@ -449,6 +504,49 @@ mod tests {
             Ok(LocalReplaceOutcome::Changed)
         );
         assert!(!target.exists());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn backup_copies_the_exact_bytes_beside_the_entry_and_replays_idempotently() {
+        let root = scratch("backup");
+        let day = DiaryDay::parse("2026-10-30").unwrap();
+        let output = LocalOutput::new(root.join("entries")).unwrap();
+        let old = "hand written, no front matter\r\nsecond line";
+        fs::create_dir_all(output.target(&day).parent().unwrap()).unwrap();
+        fs::write(output.target(&day), old).unwrap();
+        let digest = LocalOutput::payload_digest(old);
+        assert_eq!(output.backup(&day, &digest), Ok(true));
+        let backup = PathBuf::from(backup_file_name(
+            &output.target(&day).to_string_lossy(),
+            &digest,
+        ));
+        assert_eq!(fs::read_to_string(&backup).unwrap(), old);
+        assert!(!backup.to_string_lossy().ends_with(".md"));
+        // A replay finds the same backup and leaves it alone.
+        assert_eq!(output.backup(&day, &digest), Ok(true));
+        // An interrupted, shorter copy under the same name is rewritten.
+        fs::write(&backup, "hand wri").unwrap();
+        assert_eq!(output.backup(&day, &digest), Ok(true));
+        assert_eq!(fs::read_to_string(&backup).unwrap(), old);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn backup_refuses_a_changed_or_missing_file_and_writes_nothing() {
+        let root = scratch("backup-changed");
+        let day = DiaryDay::parse("2026-10-30").unwrap();
+        let output = LocalOutput::new(root.join("entries")).unwrap();
+        let digest = LocalOutput::payload_digest("seen");
+        assert_eq!(output.backup(&day, &digest), Ok(false));
+        fs::create_dir_all(output.target(&day).parent().unwrap()).unwrap();
+        fs::write(output.target(&day), "edited since").unwrap();
+        assert_eq!(output.backup(&day, &digest), Ok(false));
+        let names: Vec<_> = fs::read_dir(output.target(&day).parent().unwrap())
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name())
+            .collect();
+        assert_eq!(names.len(), 1, "no backup may be written: {names:?}");
         fs::remove_dir_all(root).unwrap();
     }
 

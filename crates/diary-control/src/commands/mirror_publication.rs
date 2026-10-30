@@ -62,11 +62,18 @@ impl CommandService {
         ) else {
             return DestinationStatus::Blocked;
         };
+        // Only a plan built for Append or Overwrite may replace a mirror file,
+        // and only while it still holds what the person previewed.
+        let replacing = existing_entry::replacing_guard(target);
         // Read-only preflight: never record an intent for a mirror that
         // cannot be inspected, so a missing folder cannot gate the day.
         match mirror.inspect(day, payload) {
             Err(_) => return DestinationStatus::Blocked,
-            Ok(LocalOutputState::Different(_)) => return DestinationStatus::Conflict,
+            Ok(LocalOutputState::Different(text)) => {
+                if replacing != Some(&Digest::of_bytes(text.as_bytes())) {
+                    return DestinationStatus::Conflict;
+                }
+            }
             Ok(_) => {}
         }
         let Ok(attempt) = random_id("attempt_") else {
@@ -84,11 +91,13 @@ impl CommandService {
         ) else {
             return DestinationStatus::Blocked;
         };
-        let mut destination = LocalDestination {
+        let mut destination = existing_entry::ReplacingDestination {
             output: mirror.as_ref(),
             day,
             payload,
             receipt_id,
+            replacing,
+            backup: true,
         };
         match PublicationCoordinator::execute(
             self.store.as_ref(),
@@ -130,13 +139,18 @@ impl CommandService {
             .output_plan()
             .ok_or(CommandError::Workflow(WorkflowError::MissingPlan))?
             .clone();
-        let payload = render_local_markdown(
-            day,
-            workflow
-                .language()
-                .ok_or(CommandError::Workflow(WorkflowError::LanguageRequired))?,
-            &workflow.entry().text,
-        );
+        let local = self
+            .local_output
+            .as_ref()
+            .ok_or(CommandError::LocalOutput(LocalOutputError::Unavailable))?;
+        let local_target = plan
+            .targets
+            .iter()
+            .find(|target| target.kind == DestinationKind::Local)
+            .ok_or(CommandError::Workflow(WorkflowError::MissingPlan))?;
+        let payload = self
+            .planned_local_payload(local.as_ref(), &workflow, &local_target.payload_digest)
+            .ok_or(CommandError::PreconditionFailed)?;
         self.ensure_mirror_binding(&plan, day, &Digest::of_bytes(payload.as_bytes()))?;
         if !commit() {
             return Err(CommandError::Cancelled);
@@ -170,13 +184,15 @@ impl CommandService {
             if workflow.amendment().is_some() {
                 continue;
             }
-            let Some(language) = workflow.language() else {
+            let Some(local) = &self.local_output else {
                 continue;
             };
-            let payload = render_local_markdown(&intent.day, language, &workflow.entry().text);
-            if Digest::of_bytes(payload.as_bytes()) != intent.payload_digest
-                || mirror.target(&intent.day) != intent.target_identity
-            {
+            let Some(payload) =
+                self.planned_local_payload(local.as_ref(), &workflow, &intent.payload_digest)
+            else {
+                continue;
+            };
+            if mirror.target(&intent.day) != intent.target_identity {
                 continue;
             }
             let mut destination = LocalDestination {

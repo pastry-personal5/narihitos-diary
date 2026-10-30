@@ -44,6 +44,7 @@ This index lists the design and process docs, one line each. Read only the doc y
 | [phase-1/milestone-18-clean-architecture-refactor-architecture.md](phase-1/milestone-18-clean-architecture-refactor-architecture.md) | P1-M18 module ownership, refactor sequence, and verification boundaries. |
 | [phase-1/milestone-19-publish-readiness-overview.md](phase-1/milestone-19-publish-readiness-overview.md) | P1-M19 Publish-stage readiness check for Notion and iCloud, with completion checklist. |
 | [phase-1/milestone-20-notion-ascending-order-overview.md](phase-1/milestone-20-notion-ascending-order-overview.md) | P1-M20 Notion daily sections in ascending date order, with completion checklist. |
+| [phase-1/milestone-21-append-overwrite-existing-entry-overview.md](phase-1/milestone-21-append-overwrite-existing-entry-overview.md) | P1-M21 Append and Overwrite for an existing entry at every output connector, with completion checklist. |
 | [superpowers/specs/2026-10-30-icloud-output-design.md](superpowers/specs/2026-10-30-icloud-output-design.md) | iCloud Markdown mirror output design. |
 | [superpowers/specs/2026-10-30-notion-ascending-order-design.md](superpowers/specs/2026-10-30-notion-ascending-order-design.md) | Design for P1-M20: insert Notion daily sections in ascending date order. |
 | [superpowers/specs/2026-10-30-append-overwrite-existing-entry-design.md](superpowers/specs/2026-10-30-append-overwrite-existing-entry-design.md) | Draft design (proposed P1-M21): Append and Overwrite resolutions for existing entries at local, iCloud, and Notion. |

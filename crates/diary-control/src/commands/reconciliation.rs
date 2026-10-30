@@ -8,18 +8,19 @@ impl CommandService {
             .local_output
             .as_ref()
             .ok_or(CommandError::LocalOutput(LocalOutputError::Unavailable))?;
-        let language = workflow
-            .language()
-            .ok_or(CommandError::Workflow(WorkflowError::LanguageRequired))?;
-        let payload = render_local_markdown(workflow.day(), language, &workflow.entry().text);
-        let payload_digest = Digest::of_bytes(payload.as_bytes());
-        if output
-            .inspect(workflow.day(), &payload)
+        // The file must still hold exactly the bytes a receipt vouches for,
+        // which after an Append or Overwrite are not the plain rendering.
+        let current = match output
+            .inspect(workflow.day(), "")
             .map_err(CommandError::LocalOutput)?
-            != LocalOutputState::Identical
         {
-            return Err(CommandError::Workflow(WorkflowError::LocalMustBeVerified));
-        }
+            LocalOutputState::Absent => {
+                return Err(CommandError::Workflow(WorkflowError::LocalMustBeVerified));
+            }
+            LocalOutputState::Identical => String::new(),
+            LocalOutputState::Different(text) => text,
+        };
+        let payload_digest = Digest::of_bytes(current.as_bytes());
         let confirmation = workflow
             .entry()
             .confirmed
@@ -61,13 +62,12 @@ impl CommandService {
                 continue;
             }
             let mut workflow = self.load_workflow(&intent.day)?;
-            let Some(language) = workflow.language() else {
+            let Some(payload) =
+                self.planned_local_payload(output.as_ref(), &workflow, &intent.payload_digest)
+            else {
                 continue;
             };
-            let payload = render_local_markdown(&intent.day, language, &workflow.entry().text);
-            if Digest::of_bytes(payload.as_bytes()) != intent.payload_digest
-                || output.target(&intent.day) != intent.target_identity
-            {
+            if output.target(&intent.day) != intent.target_identity {
                 continue;
             }
             let mut destination = LocalDestination {
@@ -145,13 +145,11 @@ impl CommandService {
             else {
                 continue;
             };
-            let Some(language) = workflow.language() else {
+            let Some(payload) =
+                self.planned_local_payload(output.as_ref(), &workflow, &target.payload_digest)
+            else {
                 continue;
             };
-            let payload = render_local_markdown(&day, language, &workflow.entry().text);
-            if Digest::of_bytes(payload.as_bytes()) != target.payload_digest {
-                continue;
-            }
             let receipted = self
                 .store
                 .receipts(&day)

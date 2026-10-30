@@ -20,7 +20,7 @@ pub mod workflow;
 pub use assistant::*;
 pub use assistant_registry::{DraftAssistantRegistry, RegistryError, RegistryInvokeError};
 pub use digest::Digest;
-pub use local_markdown::render_local_markdown;
+pub use local_markdown::{append_to_existing, backup_file_name, render_local_markdown};
 pub use ports::{
     Clock, Destination, DraftAssistant, IntentTerminal, LocalOutputError, LocalOutputPort,
     LocalOutputState, LocalReplaceOutcome, NotionBlockPreview, NotionOutputPort, NotionPreflight,

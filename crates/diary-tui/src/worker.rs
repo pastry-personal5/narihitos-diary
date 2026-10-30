@@ -142,6 +142,13 @@ pub enum Intent {
         workflow_id: String,
         revision: u64,
     },
+    /// Previews the local file and iCloud mirror for an entry that already
+    /// exists, as `append` or `overwrite`.
+    PreviewExisting {
+        workflow_id: String,
+        revision: u64,
+        existing_mode: String,
+    },
     ApproveLocal {
         workflow_id: String,
         revision: u64,
@@ -580,6 +587,16 @@ impl Worker {
                 attachment,
                 &workflow_id,
                 revision,
+            ))),
+            Intent::PreviewExisting {
+                workflow_id,
+                revision,
+                existing_mode,
+            } => WorkerResult::LocalPreviewed(Box::new(client.preview_local_existing(
+                attachment,
+                &workflow_id,
+                revision,
+                &existing_mode,
             ))),
             Intent::ApproveLocal {
                 workflow_id,

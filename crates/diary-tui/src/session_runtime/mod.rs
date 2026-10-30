@@ -133,6 +133,7 @@ pub fn run_connected_session(
     let mut source_mutation_pending = false;
     let mut source_editor_active = false;
     let mut empty_selection_confirmation = false;
+    let mut overwrite_confirmation = false;
     // Scroll offset of the open Sources Help Overlay; `None` when closed.
     let mut sources_help: Option<u16> = None;
     // Workflows whose first automatic discovery was already attempted, so a
@@ -1327,7 +1328,13 @@ pub fn run_connected_session(
             {
                 4
             }
-            Stage::Preview => 3,
+            Stage::Preview => {
+                3 + if existing_entry_offered(current_workflow.as_ref(), local_preview.as_ref()) {
+                    crate::existing_entry_view::EXTRA_CONTROLS
+                } else {
+                    0
+                }
+            }
             Stage::Publish => 3,
             _ => START_CONTROL_COUNT,
         };
@@ -1386,6 +1393,9 @@ pub fn run_connected_session(
                     detail.source_note_name.as_str()
                 });
             format!("Delete {name} and linked audio? Enter confirms; Esc cancels")
+        } else if overwrite_confirmation {
+            "Overwrite the existing entry? A backup is kept first. Enter confirms; Esc cancels"
+                .to_owned()
         } else if quit_confirmation {
             if compose_view.is_dirty() || save_in_flight.is_some() {
                 "Draft is not safely saved. Ctrl-C again to quit; Esc cancels".to_owned()
@@ -1668,6 +1678,7 @@ pub fn run_connected_session(
                 || source_editor_active
                 || editor_active,
             confirmation_active: empty_selection_confirmation
+                || overwrite_confirmation
                 || sources_view.pending_delete_confirmation.is_some()
                 || discard_confirmation.is_some()
                 || quit_confirmation,
@@ -1948,6 +1959,25 @@ pub fn run_connected_session(
                 }
                 _ => {}
             },
+            InputPoll::Event(InputEvent::Enter) if overwrite_confirmation => {
+                overwrite_confirmation = false;
+                if can_mutate
+                    && !local_action_pending
+                    && let Some(workflow) = &current_workflow
+                {
+                    local_action_pending = worker
+                        .try_send(Intent::PreviewExisting {
+                            workflow_id: workflow.id.clone(),
+                            revision: workflow.revision,
+                            existing_mode: "overwrite".to_owned(),
+                        })
+                        .is_ok();
+                }
+            }
+            InputPoll::Event(InputEvent::Esc) if overwrite_confirmation => {
+                overwrite_confirmation = false;
+                feedback = Some("Overwrite cancelled".to_owned());
+            }
             InputPoll::Event(InputEvent::Enter) if empty_selection_confirmation => {
                 empty_selection_confirmation = false;
                 if can_mutate
@@ -2630,6 +2660,28 @@ pub fn run_connected_session(
                                 conflict_day_editing = true;
                                 feedback = Some("Enter a different diary day".to_owned());
                             }
+                            index @ (3 | 4)
+                                if existing_entry_offered(
+                                    current_workflow.as_ref(),
+                                    local_preview.as_ref(),
+                                ) =>
+                            {
+                                if crate::existing_entry_view::mode_for(index) == Some("append") {
+                                    local_action_pending = worker
+                                        .try_send(Intent::PreviewExisting {
+                                            workflow_id: workflow.id.clone(),
+                                            revision: workflow.revision,
+                                            existing_mode: "append".to_owned(),
+                                        })
+                                        .is_ok();
+                                } else {
+                                    overwrite_confirmation = true;
+                                    feedback = Some(
+                                        "Overwrite replaces the existing entry; Enter to confirm"
+                                            .to_owned(),
+                                    );
+                                }
+                            }
                             _ => {
                                 feedback =
                                     Some("Preview the current plan before approval".to_owned())
@@ -2937,3 +2989,12 @@ pub fn run_connected_session(
 
 #[cfg(test)]
 mod tests;
+
+/// Whether Preview offers Append and Overwrite for the current workflow.
+fn existing_entry_offered(
+    workflow: Option<&WorkflowDto>,
+    preview: Option<&LocalPreviewDto>,
+) -> bool {
+    let local_verified = workflow.is_some_and(|w| w.local_status.as_deref() == Some("verified"));
+    crate::existing_entry_view::offered(local_verified, preview)
+}

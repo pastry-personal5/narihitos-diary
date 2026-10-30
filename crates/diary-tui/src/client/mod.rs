@@ -20,13 +20,14 @@ use diary_control_contract::{
     AmendmentPreviewDto, AssistantBackendListDto, CapabilitiesDto, ConfirmEntryRequest,
     ConfirmSelectionRequest, DeleteSourceRequest, DiscoveryRequest, DraftResultDto,
     EditSourceBodyRequest, HealthDto, JobAcceptedDto, JobDto, LocalApprovalRequest,
-    LocalPreviewDto, MAX_RESPONSE_BYTES, MAX_SOURCE_BYTES, MemoryReviewDto, NotionPreviewDto,
-    ParagraphSuggestionDto, ParagraphSuggestionListDto, PreferencesDto, PrepareSourcesRequest,
-    PublishReadinessDto, PutAssistantSelectionRequest, PutMemoryReviewRequest, RefineSourceRequest,
-    ResolveParagraphSuggestionRequest, ResolveSourceRefineRequest, SaveEntryRequest,
-    SaveUnderDayRequest, SetupCheckDto, SourceDetailDto, SourceListDto, SourceRefineSuggestionDto,
-    StartDraftRequest, StartMemoryExtractionRequest, StartParagraphReviewRequest, WorkflowDto,
-    WorkflowListDto, WritingSettingsRequest, buffer_etag, workflow_etag,
+    LocalPreviewDto, LocalPreviewRequest, MAX_RESPONSE_BYTES, MAX_SOURCE_BYTES, MemoryReviewDto,
+    NotionPreviewDto, ParagraphSuggestionDto, ParagraphSuggestionListDto, PreferencesDto,
+    PrepareSourcesRequest, PublishReadinessDto, PutAssistantSelectionRequest,
+    PutMemoryReviewRequest, RefineSourceRequest, ResolveParagraphSuggestionRequest,
+    ResolveSourceRefineRequest, SaveEntryRequest, SaveUnderDayRequest, SetupCheckDto,
+    SourceDetailDto, SourceListDto, SourceRefineSuggestionDto, StartDraftRequest,
+    StartMemoryExtractionRequest, StartParagraphReviewRequest, WorkflowDto, WorkflowListDto,
+    WritingSettingsRequest, buffer_etag, workflow_etag,
 };
 
 const SOURCE_DETAIL_RESPONSE_BYTES: usize = MAX_SOURCE_BYTES + 64 * 1024;
@@ -584,6 +585,28 @@ impl<T: Transport> ApiClient<T> {
             "POST",
             &format!("/v1/workflows/{workflow_id}/output-previews"),
             Some(b"{}".to_vec()),
+            Some(workflow_etag(revision)),
+            MAX_RESPONSE_BYTES,
+            attachment,
+        )
+    }
+
+    /// Previews an entry that already exists as `append` or `overwrite`.
+    pub fn preview_local_existing(
+        &self,
+        attachment: &Attachment,
+        workflow_id: &str,
+        revision: u64,
+        existing_mode: &str,
+    ) -> ClientOutcome<LocalPreviewDto> {
+        let body = serde_json::to_vec(&LocalPreviewRequest {
+            existing_mode: Some(existing_mode.to_owned()),
+        })
+        .unwrap_or_else(|_| b"{}".to_vec());
+        self.send_json(
+            "POST",
+            &format!("/v1/workflows/{workflow_id}/output-previews"),
+            Some(body),
             Some(workflow_etag(revision)),
             MAX_RESPONSE_BYTES,
             attachment,

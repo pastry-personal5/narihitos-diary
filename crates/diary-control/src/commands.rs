@@ -38,6 +38,7 @@ pub struct LocalPreview {
     pub payload_digest: Digest,
     pub existing_text: Option<String>,
     pub intended_changes: Vec<String>,
+    pub mode: ExistingEntryMode,
     pub mirror_target: Option<String>,
     pub mirror_status: Option<DestinationStatus>,
 }
@@ -226,6 +227,8 @@ impl CommandService {
 
 mod assistants;
 mod composition;
+mod existing_entry;
+pub use existing_entry::ExistingEntryMode;
 mod local_publication;
 mod mirror_publication;
 mod notion_publication;

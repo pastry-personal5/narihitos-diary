@@ -138,8 +138,8 @@ fn route_table_contains_local_and_notion_publication_and_excludes_future_surface
         );
     }
     assert_eq!(
-        CONTRACT_VERSION, 7,
-        "Notion section placement bumped the contract"
+        CONTRACT_VERSION, 8,
+        "the existing-entry choice bumped the contract"
     );
     assert!(
         ROUTES

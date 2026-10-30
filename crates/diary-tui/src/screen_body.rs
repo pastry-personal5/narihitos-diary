@@ -173,11 +173,21 @@ pub fn preview_screen_body(
         }
     };
     let mut text = format!(
-        "{} Generate/refresh preview\n{} Approve exact plan\n{} Save conflict under another day\n\n",
+        "{} Generate/refresh preview\n{} Approve exact plan\n{} Save conflict under another day\n",
         marker(0),
         marker(1),
         marker(2)
     );
+    let local_verified =
+        preview.is_some_and(|preview| preview.workflow.local_status.as_deref() == Some("verified"));
+    if notion.is_none() && crate::existing_entry_view::offered(local_verified, preview) {
+        text.push_str(&format!(
+            "{} Append to the existing entry\n{} Overwrite the existing entry\n",
+            marker(crate::existing_entry_view::APPEND_CONTROL),
+            marker(crate::existing_entry_view::OVERWRITE_CONTROL)
+        ));
+    }
+    text.push('\n');
     if let Some(notion) = notion {
         text.push_str(&format!(
             "Path: {}\nPosition: {}\nRenderer: {} · API: {}\nSHA-256: {}\nNotion: {}\nYear: {} · Month: {}\n",
@@ -225,12 +235,23 @@ pub fn preview_screen_body(
                 preview.icloud_status.as_deref().unwrap_or("pending")
             ));
         }
+        if let Some(mode) = &preview.existing_mode {
+            text.push_str(&format!(
+                "{}\n",
+                crate::existing_entry_view::mode_line(mode)
+            ));
+        }
         text.push_str(&format!("\n{}\n", preview.payload));
         for change in &preview.intended_changes {
             text.push_str(&format!("Planned: {change}\n"));
         }
         if let Some(existing) = &preview.existing_text {
-            text.push_str(&format!("\nExisting target (conflict):\n{existing}\n"));
+            let label = match preview.existing_mode.as_deref() {
+                Some("append") => "will be appended to",
+                Some("overwrite") => "will be replaced",
+                _ => "conflict",
+            };
+            text.push_str(&format!("\nExisting target ({label}):\n{existing}\n"));
         }
     } else {
         text.push_str("Generate a read-only output preview to inspect the exact destination.\n");

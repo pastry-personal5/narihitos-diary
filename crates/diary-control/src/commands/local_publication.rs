@@ -8,6 +8,18 @@ impl CommandService {
         day: &DiaryDay,
         expected_revision: u64,
     ) -> Result<LocalPreview, CommandError> {
+        self.preview_local_with(day, expected_revision, ExistingEntryMode::Refuse)
+    }
+
+    /// Previews the local file and iCloud mirror. A chosen `mode` turns
+    /// differing existing content from a conflict into an Append or Overwrite
+    /// plan; it changes nothing until the person approves that exact plan.
+    pub fn preview_local_with(
+        &self,
+        day: &DiaryDay,
+        expected_revision: u64,
+        mode: ExistingEntryMode,
+    ) -> Result<LocalPreview, CommandError> {
         self.ensure_clear(day)?;
         let output = self
             .local_output
@@ -33,9 +45,20 @@ impl CommandService {
         let language = workflow
             .language()
             .ok_or(CommandError::Workflow(WorkflowError::LanguageRequired))?;
-        let payload = render_local_markdown(day, language, &workflow.entry().text);
+        let created_at = self.clock.now();
+        let plain = render_local_markdown(day, language, &workflow.entry().text);
+        let state = output.inspect(day, &plain);
+        let payload = match (&state, mode) {
+            (Ok(LocalOutputState::Different(existing)), ExistingEntryMode::Append) => {
+                diary_core::append_to_existing(
+                    existing,
+                    &workflow.entry().text,
+                    &existing_entry::append_stamp(created_at),
+                )
+            }
+            _ => plain,
+        };
         let payload_digest = Digest::of_bytes(payload.as_bytes());
-        let state = output.inspect(day, &payload);
         let (observed, status, existing_text) = match state {
             Ok(LocalOutputState::Absent) => (
                 Digest::of_bytes(b"absent"),
@@ -47,7 +70,11 @@ impl CommandService {
             }
             Ok(LocalOutputState::Different(text)) => (
                 Digest::of_bytes(text.as_bytes()),
-                DestinationStatus::Conflict,
+                if mode.chosen() {
+                    DestinationStatus::Pending
+                } else {
+                    DestinationStatus::Conflict
+                },
                 Some(text),
             ),
             Err(_) => (
@@ -57,8 +84,21 @@ impl CommandService {
             ),
         };
         let target = output.target(day);
-        let intended_changes = if status == DestinationStatus::Pending {
-            if existing_text.is_none() && observed == Digest::of_bytes(b"absent") {
+        let mut intended_changes = if status == DestinationStatus::Pending {
+            if let (Some(_), true) = (&existing_text, mode.chosen()) {
+                match mode {
+                    ExistingEntryMode::Append => vec![format!(
+                        "Append a dated separator and the new text to {target}; the existing text stays above it"
+                    )],
+                    _ => vec![
+                        format!(
+                            "Back up the existing file to {}",
+                            diary_core::backup_file_name(&target, &observed)
+                        ),
+                        format!("Replace {target} while it still matches the content shown above"),
+                    ],
+                }
+            } else if existing_text.is_none() && observed == Digest::of_bytes(b"absent") {
                 vec![
                     format!("Create parent directories as needed for {target}"),
                     format!("Create {target} without replacing an existing file"),
@@ -69,11 +109,16 @@ impl CommandService {
         } else {
             Vec::new()
         };
+        let local_intent = if existing_text.is_some() && mode.chosen() {
+            existing_entry::replacement_intent(&observed, &payload_digest)
+        } else {
+            payload_digest.clone()
+        };
         let local = DestinationPlan::new(
             DestinationKind::Local,
             "local",
             target.clone(),
-            payload_digest.clone(),
+            local_intent,
             payload_digest.clone(),
             observed,
         )
@@ -82,12 +127,25 @@ impl CommandService {
         let mut mirror_target = None;
         let mut mirror_status = None;
         if let Some(mirror) = &self.mirror_output {
+            let identity = mirror.target(day);
+            let mut mirror_replaces = false;
             let (observed, status) = match mirror.inspect(day, &payload) {
                 Ok(LocalOutputState::Absent) => {
                     (Digest::of_bytes(b"absent"), DestinationStatus::Pending)
                 }
                 Ok(LocalOutputState::Identical) => {
                     (payload_digest.clone(), DestinationStatus::Pending)
+                }
+                // The mirror always ends byte-identical to the final local
+                // file, so a differing mirror is backed up and replaced.
+                Ok(LocalOutputState::Different(text)) if mode.chosen() => {
+                    mirror_replaces = true;
+                    let observed = Digest::of_bytes(text.as_bytes());
+                    intended_changes.push(format!(
+                        "Back up the existing iCloud file to {}, then replace it with the final local bytes",
+                        diary_core::backup_file_name(&identity, &observed)
+                    ));
+                    (observed, DestinationStatus::Pending)
                 }
                 Ok(LocalOutputState::Different(text)) => (
                     Digest::of_bytes(text.as_bytes()),
@@ -98,13 +156,17 @@ impl CommandService {
                     DestinationStatus::Blocked,
                 ),
             };
-            let identity = mirror.target(day);
+            let mirror_intent = if mirror_replaces {
+                existing_entry::replacement_intent(&observed, &payload_digest)
+            } else {
+                payload_digest.clone()
+            };
             targets.push(
                 DestinationPlan::new(
                     DestinationKind::Mirror,
                     MIRROR_DESTINATION,
                     identity.clone(),
-                    payload_digest.clone(),
+                    mirror_intent,
                     payload_digest.clone(),
                     observed,
                 )
@@ -140,7 +202,7 @@ impl CommandService {
                 targets.push(blocked);
                 targets
             },
-            self.clock.now(),
+            created_at,
         )
         .map_err(|_| CommandError::LocalOutput(LocalOutputError::Unavailable))?;
         let mut progress = vec![DestinationProgress {
@@ -170,6 +232,7 @@ impl CommandService {
             payload_digest,
             existing_text,
             intended_changes,
+            mode,
             mirror_target,
             mirror_status,
         })
@@ -211,15 +274,10 @@ impl CommandService {
             .local_output
             .as_ref()
             .ok_or(CommandError::LocalOutput(LocalOutputError::Unavailable))?;
-        let payload = render_local_markdown(
-            day,
-            workflow
-                .language()
-                .ok_or(CommandError::Workflow(WorkflowError::LanguageRequired))?,
-            &workflow.entry().text,
-        );
-        if Digest::of_bytes(payload.as_bytes()) != target.payload_digest
-            || output.target(day) != target.target_identity
+        let payload = self
+            .planned_local_payload(output.as_ref(), &workflow, &target.payload_digest)
+            .ok_or(CommandError::PreconditionFailed)?;
+        if output.target(day) != target.target_identity
             || observed_digest(
                 output
                     .inspect(day, &payload)
@@ -269,15 +327,10 @@ impl CommandService {
             .iter()
             .find(|target| target.kind == DestinationKind::Local)
             .ok_or(CommandError::Workflow(WorkflowError::MissingPlan))?;
-        let payload = render_local_markdown(
-            day,
-            workflow
-                .language()
-                .ok_or(CommandError::Workflow(WorkflowError::LanguageRequired))?,
-            &workflow.entry().text,
-        );
-        if Digest::of_bytes(payload.as_bytes()) != target.payload_digest
-            || output.target(day) != target.target_identity
+        let payload = self
+            .planned_local_payload(output.as_ref(), &workflow, &target.payload_digest)
+            .ok_or(CommandError::PreconditionFailed)?;
+        if output.target(day) != target.target_identity
             || observed_digest(
                 output
                     .inspect(day, &payload)
@@ -329,11 +382,23 @@ impl CommandService {
             self.clock.now(),
         )
         .map_err(|_| CommandError::LocalOutput(LocalOutputError::Unavailable))?;
-        let mut destination = LocalDestination {
+        // Overwrite keeps a backup of the file it replaces; Append keeps the
+        // whole existing text inside the new file, so it needs none.
+        let replacing = existing_entry::replacing_guard(target);
+        let plain = render_local_markdown(
+            day,
+            workflow
+                .language()
+                .ok_or(CommandError::Workflow(WorkflowError::LanguageRequired))?,
+            &workflow.entry().text,
+        );
+        let mut destination = existing_entry::ReplacingDestination {
             output: output.as_ref(),
             day,
             payload: &payload,
             receipt_id: format!("local-{}", intent.attempt_id),
+            replacing,
+            backup: payload == plain,
         };
         let result = PublicationCoordinator::execute(
             self.store.as_ref(),

@@ -12,6 +12,7 @@ pub mod date_display;
 pub mod display;
 pub mod editor;
 pub mod events;
+pub mod existing_entry_view;
 pub mod focus;
 pub mod help_overlay;
 pub mod ime;

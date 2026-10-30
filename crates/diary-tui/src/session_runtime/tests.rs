@@ -443,6 +443,7 @@ fn preview_and_publish_show_exact_file_conflict_and_separate_statuses() {
         notion_status: "blocked".to_owned(),
         icloud_target: None,
         icloud_status: None,
+        existing_mode: None,
     };
     let focus = FocusModel {
         zone: FocusZone::Main,
@@ -553,4 +554,64 @@ fn workflow_dto_for_publish_tests() -> WorkflowDto {
     workflow.notion_status = None;
     workflow.icloud_status = None;
     workflow
+}
+
+fn preview_with(local: &str, icloud: Option<&str>, mode: Option<&str>) -> LocalPreviewDto {
+    LocalPreviewDto {
+        workflow: composing_workflow(),
+        target: "/tmp/entry.md".to_owned(),
+        payload: "planned".to_owned(),
+        payload_digest: "digest".to_owned(),
+        plan_digest: "plan".to_owned(),
+        existing_text: Some("existing content".to_owned()),
+        intended_changes: Vec::new(),
+        local_status: local.to_owned(),
+        notion_status: "blocked".to_owned(),
+        icloud_target: None,
+        icloud_status: icloud.map(str::to_owned),
+        existing_mode: mode.map(str::to_owned),
+    }
+}
+
+#[test]
+fn append_and_overwrite_are_offered_only_for_an_existing_entry() {
+    use crate::existing_entry_view::{mode_for, offered};
+    assert!(!offered(false, None));
+    assert!(!offered(false, Some(&preview_with("pending", None, None))));
+    assert!(offered(false, Some(&preview_with("conflict", None, None))));
+    assert!(offered(
+        false,
+        Some(&preview_with("pending", Some("conflict"), None))
+    ));
+    assert!(offered(
+        false,
+        Some(&preview_with("pending", None, Some("append")))
+    ));
+    // Once the local file is verified the Notion phase owns the screen.
+    assert!(!offered(true, Some(&preview_with("conflict", None, None))));
+    assert_eq!(mode_for(3), Some("append"));
+    assert_eq!(mode_for(4), Some("overwrite"));
+    assert_eq!(mode_for(2), None);
+}
+
+#[test]
+fn preview_lists_the_commands_and_the_chosen_mode_only_when_an_entry_exists() {
+    let focus = FocusModel {
+        zone: FocusZone::Main,
+        main_control_index: 3,
+        ..FocusModel::default()
+    };
+    let conflict = preview_with("conflict", None, None);
+    let body = preview_screen_body(&focus, Some(&conflict), None);
+    assert!(body.contains("> Append to the existing entry"));
+    assert!(body.contains("  Overwrite the existing entry"));
+    let plain = preview_screen_body(&focus, Some(&preview_with("pending", None, None)), None);
+    assert!(!plain.contains("Append to the existing entry"));
+    let chosen = preview_screen_body(
+        &focus,
+        Some(&preview_with("pending", None, Some("overwrite"))),
+        None,
+    );
+    assert!(chosen.contains("Mode: Overwrite"));
+    assert!(chosen.contains("Existing target (will be replaced)"));
 }

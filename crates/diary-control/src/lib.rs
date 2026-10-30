@@ -16,7 +16,8 @@ pub use codex_assistant::{
 };
 pub use commands::{
     AmendmentNotionPreview, AmendmentPreview, AmendmentSeeded, CommandError, CommandService,
-    ControlStore, DestinationReadiness, NotionPreview, PublishReadiness, Readiness, local_body,
+    ControlStore, DestinationReadiness, ExistingEntryMode, LocalPreview, NotionPreview,
+    PublishReadiness, Readiness, local_body,
 };
 pub use diagnostic_tags::{DiagnosticTag, DiagnosticTagger};
 pub use diagnostics::{

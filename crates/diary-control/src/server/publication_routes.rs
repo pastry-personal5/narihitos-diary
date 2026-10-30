@@ -2,15 +2,29 @@
 
 use super::*;
 
+use crate::ExistingEntryMode;
+
 pub(super) async fn preview_local_output(
     State(state): State<AppState>,
     Path(id): Path<String>,
     headers: HeaderMap,
+    body: Bytes,
 ) -> Result<Json<LocalPreviewDto>, ApiError> {
     let day = day_from_id(&id)?;
     let revision = workflow_precondition(&headers)?;
+    let request: LocalPreviewRequest = if body.is_empty() {
+        LocalPreviewRequest::default()
+    } else {
+        serde_json::from_slice(&body)
+            .map_err(|_| ApiError::new(StatusCode::BAD_REQUEST, "invalid-request"))?
+    };
+    let mode = match request.existing_mode.as_deref() {
+        None => ExistingEntryMode::Refuse,
+        Some(value) => ExistingEntryMode::parse(value)
+            .ok_or_else(|| ApiError::new(StatusCode::BAD_REQUEST, "invalid-existing-mode"))?,
+    };
     let service = state.0.config.commands.clone();
-    let preview = blocking(move || service.preview_local(&day, revision)).await?;
+    let preview = blocking(move || service.preview_local_with(&day, revision, mode)).await?;
     let plan = preview
         .workflow
         .output_plan()
@@ -36,6 +50,8 @@ pub(super) async fn preview_local_output(
         icloud_status: preview
             .mirror_status
             .map(|status| status.as_str().to_owned()),
+        existing_mode: (preview.mode != ExistingEntryMode::Refuse)
+            .then(|| preview.mode.as_str().to_owned()),
     };
     publish_event(
         &state,

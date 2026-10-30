@@ -19,6 +19,19 @@ pub struct LocalPreviewDto {
     pub icloud_target: Option<String>,
     #[serde(default)]
     pub icloud_status: Option<String>,
+    /// `append` or `overwrite` when this plan replaces existing content;
+    /// absent for an ordinary plan or a server that predates the choice.
+    #[serde(default)]
+    pub existing_mode: Option<String>,
+}
+
+/// Optional body of an output preview. Without `existing_mode`, differing
+/// existing content is reported as a conflict.
+#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LocalPreviewRequest {
+    #[serde(default)]
+    pub existing_mode: Option<String>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]

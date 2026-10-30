@@ -53,6 +53,15 @@ pub(crate) fn local_time(note_name: &str) -> Option<String> {
     Some(format_local(epoch, utc_offset_seconds(epoch)?))
 }
 
+/// `YYYY-MM-DD HH:MM` in the Mac's local zone for a Unix instant, marked UTC
+/// when the offset cannot be read.
+pub(crate) fn local_minute(epoch: i64) -> String {
+    match utc_offset_seconds(epoch) {
+        Some(offset) => format_local(epoch, offset)[..16].to_owned(),
+        None => format!("{} UTC", &format_local(epoch, 0)[..16]),
+    }
+}
+
 /// The Mac-local calendar day of the note, when it can be determined.
 pub(crate) fn local_note_day(note_name: &str) -> Option<DiaryDay> {
     let epoch = utc_epoch_from_note_name(note_name)?;
@@ -69,6 +78,16 @@ mod tests {
         assert_eq!(parse_offset("-0330"), Some(-12_600));
         assert_eq!(parse_offset("0900"), None);
         assert_eq!(parse_offset("+09:00"), None);
+    }
+
+    #[test]
+    fn local_minute_has_a_fixed_shape() {
+        let stamp = local_minute(1_793_400_000);
+        let bare = stamp.strip_suffix(" UTC").unwrap_or(&stamp);
+        assert_eq!(bare.len(), 16, "{stamp}");
+        assert_eq!(&bare[4..5], "-");
+        assert_eq!(&bare[10..11], " ");
+        assert_eq!(&bare[13..14], ":");
     }
 
     #[test]

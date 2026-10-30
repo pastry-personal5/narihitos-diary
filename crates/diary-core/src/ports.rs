@@ -151,6 +151,13 @@ pub trait LocalOutputPort: Send + Sync {
     ) -> Result<LocalReplaceOutcome, LocalOutputError> {
         Err(LocalOutputError::Unavailable)
     }
+    /// Copies the day's file beside it, but only while its current bytes hash
+    /// to `expected`, and reads the copy back. `Ok(false)` means the file is
+    /// absent or changed and nothing was copied. The default refuses, so a
+    /// port without backup support can never be asked to overwrite.
+    fn backup(&self, _day: &DiaryDay, _expected: &Digest) -> Result<bool, LocalOutputError> {
+        Err(LocalOutputError::Unavailable)
+    }
     fn target(&self, day: &DiaryDay) -> String;
     fn inspect(&self, day: &DiaryDay, payload: &str) -> Result<LocalOutputState, LocalOutputError>;
     fn write(&self, day: &DiaryDay, payload: &str) -> Result<LocalOutputState, LocalOutputError>;
