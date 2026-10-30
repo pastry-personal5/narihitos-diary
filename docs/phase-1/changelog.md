@@ -6,6 +6,16 @@ This changelog records owner decisions and material plan changes for Phase 1.
 
 ## Entries
 
+- 2026-10-30 — P1-M11 plan review and split — P1-M11 now covers amendments
+  only; release qualification moved to new P1-M13 (after P1-M11; the number
+  follows P1-M12). Owner decisions: amendment conflicts offer only reread or
+  abandon; replacement is local-first, with Notion pending and retried alone on
+  failure; the editor is seeded with the body only. No exit gate may require a
+  human run: the real-terminal and disposable-fixture acceptance items were
+  replaced by pty tests, a fake Notion server, and an iCloud simulation, with
+  real-IME and live-service limits documented. P1-M11 gains a P1-M10 entry
+  criterion and persisted seed digests.
+
 - 2026-10-30 — P1-M10 documentation aligned with implementation — The
   architecture plan now describes the shipped request queue (first-in-first-out
   per request, turn held through retries, cancellable waiters), the 30-second

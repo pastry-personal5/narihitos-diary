@@ -236,13 +236,30 @@ path, restart reconciliation, and TUI flow are implemented and the standard
 gate passes; the broader failure/cancellation matrix plus separately authorized
 configured-root and disposable-hierarchy acceptance remain open.
 
-### P1-M11: Amendments and release qualification
+### P1-M11: Amendments
 
 Status: Planned
 
-Goal: Add safe amendment replacement and prove the complete macOS TUI MVP
-against every Phase 1 exit criterion.
+Goal: Add safe, interruption-proof amendment replacement of a completed entry
+at the local and Notion destinations.
 
-Plan: [overview](milestone-11-amendments-release-qualification-overview.md),
-[architecture plan](milestone-11-amendments-release-qualification-architecture.md).
+Plan: [overview](milestone-11-amendments-overview.md),
+[architecture plan](milestone-11-amendments-architecture.md).
 
+Notes: Requires P1-M10 `Done`. Conflicts offer only reread or abandon; the
+local file is replaced first and Notion is retried alone on failure. All
+completion evidence is automated.
+
+### P1-M13: Release qualification
+
+Status: Planned
+
+Goal: Prove the complete macOS TUI MVP against every Phase 1 exit criterion
+with automated evidence only.
+
+Plan: [overview](milestone-13-release-qualification-overview.md),
+[architecture plan](milestone-13-release-qualification-architecture.md).
+
+Notes: The number follows P1-M12, which ran earlier; this milestone runs after
+P1-M11. No exit gate requires a human run; real-IME and live-service limits
+are documented instead.

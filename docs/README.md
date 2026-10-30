@@ -32,8 +32,10 @@ This index lists the design and process docs, one line each. Read only the doc y
 | [phase-1/milestone-09-local-publication-recovery-architecture.md](phase-1/milestone-09-local-publication-recovery-architecture.md) | P1-M9 local output intent, receipt, reconciliation, and TUI sequence. |
 | [phase-1/milestone-10-notion-publication-overview.md](phase-1/milestone-10-notion-publication-overview.md) | P1-M10 compatibility gate, lossless Notion projection, partial-success, and acceptance checklist. |
 | [phase-1/milestone-10-notion-publication-architecture.md](phase-1/milestone-10-notion-publication-architecture.md) | P1-M10 renderer, tolerant hierarchy, bounded retry, append, read-back, and reconciliation design. |
-| [phase-1/milestone-11-amendments-release-qualification-overview.md](phase-1/milestone-11-amendments-release-qualification-overview.md) | P1-M11 amendment, end-to-end acceptance, and Phase 1 qualification checklist. |
-| [phase-1/milestone-11-amendments-release-qualification-architecture.md](phase-1/milestone-11-amendments-release-qualification-architecture.md) | P1-M11 guarded replacement and release-evidence sequence. |
+| [phase-1/milestone-11-amendments-overview.md](phase-1/milestone-11-amendments-overview.md) | P1-M11 amendment decisions, scope, and automated completion checklist. |
+| [phase-1/milestone-11-amendments-architecture.md](phase-1/milestone-11-amendments-architecture.md) | P1-M11 seed digests, guarded local and Notion replacement, and crash-boundary sequence. |
+| [phase-1/milestone-13-release-qualification-overview.md](phase-1/milestone-13-release-qualification-overview.md) | P1-M13 automated exit-criteria evidence matrix and qualification checklist. |
+| [phase-1/milestone-13-release-qualification-architecture.md](phase-1/milestone-13-release-qualification-architecture.md) | P1-M13 automated end-to-end, pty, fake-service, and security test sequence. |
 | [architecture.md](architecture.md) | Local control server, two-sidebar TUI client, clean-architecture boundaries, connectors, multi-backend assistants, paragraph review, workflow states, amendments, data egress, REST, streaming, and future MCP design. |
 | [control-api-v1.md](control-api-v1.md) | `/v1` native-client attachment, contract-version negotiation, assistant-neutral capabilities, route/precondition rules, preparation handles, numeric bounds, jobs, and SSE recovery. |
 | [product-behavior.md](product-behavior.md) | Intended user journey, confirmed diary behavior, and product boundaries. |
