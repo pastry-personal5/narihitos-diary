@@ -30,6 +30,8 @@ saved assistant choice; an existing workflow retains its own stored settings.
 
 ## Completion checklist
 
+- [x] Source code and test names use technical terms instead of phase or
+  milestone labels; required Rust and Swift gates pass after the cleanup.
 - [x] Changing language or style keeps the selected assistant, and the saved
   preference matches the workflow after either action.
 - [x] Selecting a backend or manual mode persists the choice; a new TUI session
@@ -46,6 +48,10 @@ saved assistant choice; an existing workflow retains its own stored settings.
 
 ## Acceptance evidence
 
+- The source and test scan found no project phase or milestone labels; the
+  retained diagnostic `phase` field is part of the `ndlog-v1` record format.
+  Rust formatting, Clippy, and all-feature tests plus Swift build and tests
+  passed on 2026-10-30.
 - `assistant_choice_survives_restart_and_new_workflows_inherit_session_settings`
   exercises the real loopback server, SQLite reopen, backend selection,
   writing-settings preservation, session settings on a new workflow, manual

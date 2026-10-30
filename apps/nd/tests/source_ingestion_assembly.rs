@@ -11,7 +11,7 @@ static SCRATCH_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 #[test]
 fn source_connector_assembles_without_reading_a_private_tree_or_starting_a_service() {
     let scratch = std::env::temp_dir().join(format!(
-        "nd-p1-m5-assembly-{}-{}",
+        "nd-source-ingestion-assembly-{}-{}",
         std::process::id(),
         SCRATCH_SEQUENCE.fetch_add(1, Ordering::Relaxed)
     ));

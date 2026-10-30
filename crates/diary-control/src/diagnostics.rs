@@ -132,7 +132,7 @@ pub struct AssistantSnapshot {
     /// One of the four `assistant-*` job kinds.
     pub kind: &'static str,
     /// `start` or `failed`.
-    pub phase: &'static str,
+    pub event_status: &'static str,
     pub workflow: DiagnosticTag,
     /// `None` when no assistant is selected.
     pub backend: Option<DiagnosticTag>,
@@ -158,19 +158,19 @@ pub struct AssistantSnapshot {
 }
 
 impl AssistantSnapshot {
-    /// Summarizes `workflow` for `kind`/`phase`. `None` when `log` has no tag
+    /// Summarizes `workflow` for `kind`/`event_status`. `None` when `log` has no tag
     /// key, because an untagged snapshot could not be correlated.
     #[must_use]
     pub fn capture(
         log: &DiagnosticLog,
         workflow: &Workflow,
         kind: &'static str,
-        phase: &'static str,
+        event_status: &'static str,
     ) -> Option<Self> {
         let selection = workflow.assistant_selection();
         Some(Self {
             kind,
-            phase,
+            event_status,
             workflow: log.tag("workflow", workflow.day().as_str().as_bytes())?,
             backend: match selection {
                 Some(selection) => {
@@ -213,7 +213,7 @@ pub struct PublicationSnapshot {
     /// One of the publication job kinds.
     pub kind: &'static str,
     /// `finished` or `failed`.
-    pub phase: &'static str,
+    pub event_status: &'static str,
     pub workflow: DiagnosticTag,
     /// `WorkflowState::as_str`.
     pub state: &'static str,
@@ -236,7 +236,7 @@ impl PublicationSnapshot {
         log: &DiagnosticLog,
         workflow: &Workflow,
         kind: &'static str,
-        phase: &'static str,
+        event_status: &'static str,
         receipts: u64,
         unresolved: u64,
     ) -> Option<Self> {
@@ -249,7 +249,7 @@ impl PublicationSnapshot {
         };
         Some(Self {
             kind,
-            phase,
+            event_status,
             workflow: log.tag("workflow", workflow.day().as_str().as_bytes())?,
             state: workflow.state().as_str(),
             revision: workflow.revision(),
@@ -589,7 +589,7 @@ fn encode(
         }
         DiagnosticEvent::PublicationState(snapshot) => {
             if !vocab_publication_kind(snapshot.kind)
-                || !matches!(snapshot.phase, "finished" | "failed")
+                || !matches!(snapshot.event_status, "finished" | "failed")
                 || !WORKFLOW_STATES.contains(&snapshot.state)
                 || ![snapshot.local, snapshot.notion, snapshot.icloud]
                     .into_iter()
@@ -605,7 +605,7 @@ fn encode(
                     ("kind", snapshot.kind.to_owned()),
                     ("local", snapshot.local.to_owned()),
                     ("notion", snapshot.notion.to_owned()),
-                    ("phase", snapshot.phase.to_owned()),
+                    ("phase", snapshot.event_status.to_owned()),
                     ("receipts", snapshot.receipts.to_string()),
                     ("revision", snapshot.revision.to_string()),
                     ("state", snapshot.state.to_owned()),
@@ -616,7 +616,7 @@ fn encode(
         }
         DiagnosticEvent::AssistantState(snapshot) => {
             if !ASSISTANT_KINDS.contains(&snapshot.kind)
-                || !matches!(snapshot.phase, "start" | "failed")
+                || !matches!(snapshot.event_status, "start" | "failed")
                 || !WORKFLOW_STATES.contains(&snapshot.state)
                 || !matches!(snapshot.language, "none" | "en-US" | "ko-KR")
                 || !matches!(snapshot.reviewed_memory, "absent" | "current" | "stale")
@@ -640,7 +640,7 @@ fn encode(
                     ("kind", snapshot.kind.to_owned()),
                     ("language", snapshot.language.to_owned()),
                     ("memory_sets", snapshot.memory_sets.to_string()),
-                    ("phase", snapshot.phase.to_owned()),
+                    ("phase", snapshot.event_status.to_owned()),
                     ("reviewed_memory", snapshot.reviewed_memory.to_owned()),
                     ("revision", snapshot.revision.to_string()),
                     ("selected", flag(snapshot.selected)),
@@ -997,7 +997,7 @@ fn vocab_destination_status(value: &str) -> bool {
     )
 }
 
-fn vocab_publication_phase(value: &str) -> bool {
+fn vocab_publication_status(value: &str) -> bool {
     matches!(value, "finished" | "failed")
 }
 
@@ -1005,7 +1005,7 @@ fn vocab_assistant_kind(value: &str) -> bool {
     ASSISTANT_KINDS.contains(&value)
 }
 
-fn vocab_phase(value: &str) -> bool {
+fn vocab_event_status(value: &str) -> bool {
     matches!(value, "start" | "failed")
 }
 
@@ -1045,7 +1045,7 @@ const SNAPSHOT_SPEC: &[KeySpec] = &[
     required("kind", ValueKind::Vocab(vocab_assistant_kind)),
     required("language", ValueKind::Vocab(vocab_language)),
     required("memory_sets", ValueKind::Number),
-    required("phase", ValueKind::Vocab(vocab_phase)),
+    required("phase", ValueKind::Vocab(vocab_event_status)),
     required("reviewed_memory", ValueKind::Vocab(vocab_reviewed_memory)),
     required("revision", ValueKind::Number),
     required("selected", ValueKind::Flag),
@@ -1063,7 +1063,7 @@ const PUBLICATION_SPEC: &[KeySpec] = &[
     required("kind", ValueKind::Vocab(vocab_publication_kind)),
     required("local", ValueKind::Vocab(vocab_destination_status)),
     required("notion", ValueKind::Vocab(vocab_destination_status)),
-    required("phase", ValueKind::Vocab(vocab_publication_phase)),
+    required("phase", ValueKind::Vocab(vocab_publication_status)),
     required("receipts", ValueKind::Number),
     required("revision", ValueKind::Number),
     required("state", ValueKind::Vocab(vocab_state)),

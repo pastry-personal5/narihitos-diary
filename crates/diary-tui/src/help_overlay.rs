@@ -1,4 +1,4 @@
-//! The Help Overlay (P1-M16): a modal pane over the whole frame listing the
+//! The Help Overlay is a modal pane over the whole frame listing the
 //! Sources-stage shortcuts. It sizes itself to the frame with a margin, wraps
 //! its text to the pane, and scrolls when the text is longer than the pane.
 

@@ -1,4 +1,4 @@
-//! The flat Sources-stage menu (P1-M16): the items that apply to the current
+//! The flat Sources-stage menu contains the items that apply to the current
 //! state, in a fixed order. A menu item and its letter shortcut resolve to the
 //! same [`SourcesAction`], so both share the same availability rules.
 

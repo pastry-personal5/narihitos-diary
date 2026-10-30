@@ -22,7 +22,7 @@ P1-M2 and P1-M3 are done and the needed dependencies are approved.
   immutable plans, typed local/remote targets, per-target progress, unresolved
   intents, and versioned receipts. `PRAGMA user_version` is forward-only;
   unknown newer, corrupt, and invalid records fail without reset.
-- `apps/nd/tests/p1_m4_assembly.rs` is the only composition-root assembly in
+- `apps/nd/tests/workflow_assembly.rs` is the only composition-root assembly in
   this milestone. It uses a temporary database and starts no listener, real
   Application Support database, helper, source connector, or destination.
 

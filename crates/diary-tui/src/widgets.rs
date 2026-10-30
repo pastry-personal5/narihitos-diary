@@ -1,5 +1,5 @@
 //! The rightmost Utility Sidebar: a vertical stack of Widgets that stay
-//! reachable in every stage. P1-M15 ships the read-only Diary Day Widget above
+//! reachable in every stage. The read-only Diary Day Widget appears above
 //! the Assistant Widget. Presentation only: selection is sent through the
 //! existing assistant-selection request, never decided here.
 

@@ -1,12 +1,12 @@
 //! Narrow Carbon/Core Foundation boundary for the macOS Text Input Source
-//! (TIS) query and selected-source notification used by the P1-M7 IME
+//! (TIS) query and selected-source notification used by the terminal IME
 //! indicator.
 //!
 //! This crate isolates the audited `unsafe` FFI calls so that `diary-tui`
 //! can keep `#![forbid(unsafe_code)]`. It has no third-party dependency: it
 //! links directly against the system Carbon/HIToolbox and Core Foundation
 //! frameworks through raw `extern "C"` bindings for the handful of calls
-//! P1-M7 needs.
+//! the IME indicator needs.
 
 #![cfg(target_os = "macos")]
 #![allow(unsafe_code)]
@@ -19,7 +19,7 @@ use std::rc::Rc;
 use std::sync::atomic::{AtomicU8, AtomicU64, Ordering};
 
 /// The language family of the currently selected keyboard input source, as
-/// far as P1-M7 needs to distinguish it. `Other` covers every input source
+/// far as the IME indicator needs to distinguish it. `Other` covers every input source
 /// that is neither English nor Korean; Japanese is explicitly out of scope
 /// (see AGENTS.md "Language scope").
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

@@ -4073,7 +4073,7 @@ mod tests {
             loop {
                 let sequence = SCRATCH_SEQUENCE.fetch_add(1, Ordering::Relaxed);
                 let path = std::env::temp_dir().join(format!(
-                    "nd-p1-m4-{label}-{}-{sequence}",
+                    "nd-workflow-{label}-{}-{sequence}",
                     std::process::id()
                 ));
                 match fs::create_dir(&path) {

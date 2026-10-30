@@ -1,7 +1,7 @@
 //! Diary workflow policy and inward-facing ports.
 //!
 //! This crate intentionally has no adapter, transport, terminal, or vendor
-//! dependencies. P1-M4 keeps persistence representations behind the ports in
+//! dependencies. Persistence representations stay behind the ports in
 //! [`ports`].
 
 #![forbid(unsafe_code)]

@@ -1,10 +1,9 @@
-//! Throwaway real-terminal chord probe for P1-M7 step 2.
+//! Throwaway real-terminal chord probe for terminal shortcut verification.
 //!
 //! Run in a real Wave Terminal window for primary qualification, or Apple
 //! Terminal for the secondary regression check (not over SSH, tmux, or an IDE
 //! terminal), with `cargo run -p diary-tui --example chord_probe`. It prints
-//! every key event it receives, decoded as the exact chords P1-M7 depends
-//! on, so the owner can confirm each one arrives as a distinct event before
+//! every key event it receives, decoded as the chords used by the terminal client, so the owner can confirm each one arrives as a distinct event before
 //! any editor/Command Line code relies on it. There are no function-key
 //! aliases to check (see AGENTS.md "Keybindings"): F10 never arrived as a
 //! distinct chord, and the owner decided to drop function-key aliases from

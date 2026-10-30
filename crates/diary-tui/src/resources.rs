@@ -1,6 +1,6 @@
 //! The middle Resources Sidebar: renders the active stage's source,
 //! draft, or destination resources with their explicit state, using
-//! indented trees where a server resource has a hierarchy. P1-M7's Start
+//! indented trees where a server resource has a hierarchy. The Start
 //! stage has no resources yet; later stages (Sources, Compose, Review)
 //! populate this with real server-backed entries in separate work.
 

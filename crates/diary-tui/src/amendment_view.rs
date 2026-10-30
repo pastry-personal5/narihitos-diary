@@ -12,7 +12,7 @@ pub const BANNER: &str =
 
 /// Where an amendment stands, in the order a person moves through it.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum Phase {
+pub enum AmendmentState {
     Editing,
     Confirmed,
     Previewed,
@@ -59,21 +59,21 @@ pub fn banner(workflow: &WorkflowDto) -> Option<&'static str> {
 }
 
 #[must_use]
-pub fn phase(workflow: &WorkflowDto) -> Option<Phase> {
+pub fn amendment_state(workflow: &WorkflowDto) -> Option<AmendmentState> {
     workflow.amendment.as_ref()?;
     let local = workflow.local_status.as_deref().unwrap_or("none");
     let notion = workflow.notion_status.as_deref().unwrap_or("none");
     if local == "conflict" {
-        return Some(Phase::Conflict);
+        return Some(AmendmentState::Conflict);
     }
     Some(match workflow.state.as_str() {
-        "composing" => Phase::Editing,
-        "entry-confirmed" => Phase::Confirmed,
-        "output-planned" => Phase::Previewed,
-        "approved" => Phase::Approved,
-        "publishing" => Phase::Replacing,
-        "partial" if notion == "conflict" => Phase::Conflict,
-        "partial" => Phase::LocalReplacedNotionOutstanding,
+        "composing" => AmendmentState::Editing,
+        "entry-confirmed" => AmendmentState::Confirmed,
+        "output-planned" => AmendmentState::Previewed,
+        "approved" => AmendmentState::Approved,
+        "publishing" => AmendmentState::Replacing,
+        "partial" if notion == "conflict" => AmendmentState::Conflict,
+        "partial" => AmendmentState::LocalReplacedNotionOutstanding,
         _ => return None,
     })
 }
@@ -84,8 +84,10 @@ pub fn phase(workflow: &WorkflowDto) -> Option<Phase> {
 /// way.
 #[must_use]
 pub fn conflict_choices(workflow: &WorkflowDto) -> Option<&'static [ConflictChoice]> {
-    match phase(workflow)? {
-        Phase::Conflict => Some(&[ConflictChoice::Reread, ConflictChoice::AbandonAmendment]),
+    match amendment_state(workflow)? {
+        AmendmentState::Conflict => {
+            Some(&[ConflictChoice::Reread, ConflictChoice::AbandonAmendment])
+        }
         _ => None,
     }
 }
@@ -93,16 +95,18 @@ pub fn conflict_choices(workflow: &WorkflowDto) -> Option<&'static [ConflictChoi
 /// One-line, plain-language status for the status area.
 #[must_use]
 pub fn status_text(workflow: &WorkflowDto) -> Option<&'static str> {
-    Some(match phase(workflow)? {
-        Phase::Editing => "Amending: edit the saved text, then confirm it.",
-        Phase::Confirmed => "Amending: preview the replacement.",
-        Phase::Previewed => "Amending: review current and replacement content, then approve.",
-        Phase::Approved => "Amending: approved. Replace when ready.",
-        Phase::Replacing => "Replacing... the day is locked until this is settled.",
-        Phase::LocalReplacedNotionOutstanding => {
+    Some(match amendment_state(workflow)? {
+        AmendmentState::Editing => "Amending: edit the saved text, then confirm it.",
+        AmendmentState::Confirmed => "Amending: preview the replacement.",
+        AmendmentState::Previewed => {
+            "Amending: review current and replacement content, then approve."
+        }
+        AmendmentState::Approved => "Amending: approved. Replace when ready.",
+        AmendmentState::Replacing => "Replacing... the day is locked until this is settled.",
+        AmendmentState::LocalReplacedNotionOutstanding => {
             "Local file replaced. Notion is still pending; retry Notion when ready."
         }
-        Phase::Conflict => "A destination changed. Reread it or abandon the amendment.",
+        AmendmentState::Conflict => "A destination changed. Reread it or abandon the amendment.",
     })
 }
 
@@ -212,7 +216,7 @@ mod tests {
     fn the_banner_shows_for_a_hand_edit_and_is_not_a_conflict() {
         let edited = workflow("composing", None, None, Some(true));
         assert_eq!(banner(&edited), Some(BANNER));
-        assert_eq!(phase(&edited), Some(Phase::Editing));
+        assert_eq!(amendment_state(&edited), Some(AmendmentState::Editing));
         assert!(conflict_choices(&edited).is_none());
         assert_eq!(
             banner(&workflow("composing", None, None, Some(false))),
@@ -222,30 +226,39 @@ mod tests {
     }
 
     #[test]
-    fn phases_follow_the_workflow_and_every_phase_has_status_text() {
+    fn states_follow_the_workflow_and_every_state_has_status_text() {
         let cases = [
-            ("composing", Phase::Editing),
-            ("entry-confirmed", Phase::Confirmed),
-            ("output-planned", Phase::Previewed),
-            ("approved", Phase::Approved),
-            ("publishing", Phase::Replacing),
+            ("composing", AmendmentState::Editing),
+            ("entry-confirmed", AmendmentState::Confirmed),
+            ("output-planned", AmendmentState::Previewed),
+            ("approved", AmendmentState::Approved),
+            ("publishing", AmendmentState::Replacing),
         ];
         for (state, expected) in cases {
             let flow = workflow(state, Some("pending"), Some("pending"), Some(false));
-            assert_eq!(phase(&flow), Some(expected), "{state}");
+            assert_eq!(amendment_state(&flow), Some(expected), "{state}");
             assert!(status_text(&flow).is_some(), "{state}");
         }
         let partial = workflow("partial", Some("verified"), Some("pending"), Some(false));
-        assert_eq!(phase(&partial), Some(Phase::LocalReplacedNotionOutstanding));
+        assert_eq!(
+            amendment_state(&partial),
+            Some(AmendmentState::LocalReplacedNotionOutstanding)
+        );
         assert!(
             status_text(&partial)
                 .unwrap()
                 .contains("Local file replaced")
         );
         let blocked = workflow("partial", Some("verified"), Some("blocked"), Some(false));
-        assert_eq!(phase(&blocked), Some(Phase::LocalReplacedNotionOutstanding));
+        assert_eq!(
+            amendment_state(&blocked),
+            Some(AmendmentState::LocalReplacedNotionOutstanding)
+        );
         // Not amending: no amendment state at all.
-        assert_eq!(phase(&workflow("completed", None, None, None)), None);
+        assert_eq!(
+            amendment_state(&workflow("completed", None, None, None)),
+            None
+        );
     }
 
     #[test]
@@ -268,7 +281,7 @@ mod tests {
             Some("pending"),
             Some(false),
         );
-        assert_eq!(phase(&local), Some(Phase::Conflict));
+        assert_eq!(amendment_state(&local), Some(AmendmentState::Conflict));
         assert_eq!(
             conflict_choices(&local),
             Some(&[ConflictChoice::Reread, ConflictChoice::AbandonAmendment][..])

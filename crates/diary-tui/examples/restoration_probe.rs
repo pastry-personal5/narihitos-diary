@@ -1,4 +1,4 @@
-//! Real-terminal restoration probe for P1-M7's `TerminalGuard`.
+//! Real-terminal restoration probe for `TerminalGuard`.
 //!
 //! Run each mode in Wave Terminal for primary qualification and Apple Terminal
 //! for the secondary regression check, and

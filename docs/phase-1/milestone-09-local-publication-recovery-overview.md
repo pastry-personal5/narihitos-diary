@@ -78,7 +78,7 @@ content and with enough intent/receipt evidence to recover after interruption.
 - [x] Tests simulate crashes before and after the external write, lost responses,
   cancellation before/after intent, duplicate commands, startup reconciliation,
   unavailable read-back, and per-day gating without blocking unrelated days.
-  `p1_m9_local` covers each of these boundaries with a temporary SQLite store.
+  `local_publication` covers each of these boundaries with a temporary SQLite store.
 - [x] A local conflict stops the plan and exposes only reread, discard, or save
   under another day; the carry-over rules are covered by core and TUI tests.
   The integration test proves different content blocks approval and the target

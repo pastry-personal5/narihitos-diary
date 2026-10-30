@@ -1,4 +1,4 @@
-//! Sources-stage source-list letter shortcuts (P1-M16). Bare letters are
+//! Sources-stage source-list letter shortcuts. Bare letters are
 //! allowed in exactly one place, the Resources Sidebar in the Sources stage,
 //! and only while the IME indicator reads `IME: EN`: a Korean IME composes bare
 //! letters, so under `IME: KO` or `IME: ?` every key is ignored. The gate and

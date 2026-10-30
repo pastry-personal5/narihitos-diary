@@ -53,7 +53,7 @@ use diary_tui::sources_menu::{
     SourcesAction, SourcesMenuItem, SourcesMenuState, action_item, item_action,
     label as menu_label, shortcut_action, visible_items,
 };
-use diary_tui::sources_view::{JobPhase, SourceJobKind, SourcesViewModel};
+use diary_tui::sources_view::{JobOutcome, SourceJobKind, SourcesViewModel};
 use diary_tui::stage::{ALL_STAGES, Progress, Stage, adjacent_accessible_stage, map_workflow};
 use diary_tui::stage_tip::{TipInput, next_step_tip};
 use diary_tui::start_view::StartViewModel;
@@ -639,7 +639,7 @@ fn resolve_runtime_location() -> Result<(PathBuf, u32), &'static str> {
 
 /// Dispatches to the real interactive TUI when stdout is a tty, or to a
 /// one-shot headless path otherwise. The headless path exists because an
-/// automated harness (the `command_shells`/`p1_m7_tui_attach` integration
+/// automated harness (the `command_shells`/`tui_attachment` integration
 /// tests) has no terminal to render a persistent retry screen into; a
 /// real interactive session must never exit just because the server
 /// is not running yet (see AGENTS.md "Server lifecycle").
@@ -652,7 +652,7 @@ fn tui_mode() -> ExitCode {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum AttachPhase {
+enum AttachmentFailure {
     NotRunning,
     Unsafe,
     VersionMismatch,
@@ -665,12 +665,14 @@ fn attempt_attach(
     runtime_dir: &std::path::Path,
     expected_uid: u32,
     client: &ApiClient<UreqTransport>,
-) -> Result<ClientAttachment, AttachPhase> {
+) -> Result<ClientAttachment, AttachmentFailure> {
     let control_attachment = match load_runtime_attachment(runtime_dir, expected_uid) {
         Ok(attachment) => attachment,
-        Err(LifecycleError::MissingRuntime) => return Err(AttachPhase::NotRunning),
-        Err(LifecycleError::IncompatibleContract) => return Err(AttachPhase::VersionMismatch),
-        Err(_) => return Err(AttachPhase::Unsafe),
+        Err(LifecycleError::MissingRuntime) => return Err(AttachmentFailure::NotRunning),
+        Err(LifecycleError::IncompatibleContract) => {
+            return Err(AttachmentFailure::VersionMismatch);
+        }
+        Err(_) => return Err(AttachmentFailure::Unsafe),
     };
     let client_attachment = ClientAttachment::new(
         control_attachment.instance_id().to_owned(),
@@ -681,23 +683,25 @@ fn attempt_attach(
     );
     match verify_health(client, &client_attachment) {
         AttachmentState::Connected => Ok(client_attachment),
-        AttachmentState::NotRunning => Err(AttachPhase::NotRunning),
-        AttachmentState::InstanceMismatch => Err(AttachPhase::InstanceMismatch),
-        AttachmentState::VersionMismatch => Err(AttachPhase::VersionMismatch),
-        AttachmentState::UnsafeAttachment => Err(AttachPhase::Unsafe),
+        AttachmentState::NotRunning => Err(AttachmentFailure::NotRunning),
+        AttachmentState::InstanceMismatch => Err(AttachmentFailure::InstanceMismatch),
+        AttachmentState::VersionMismatch => Err(AttachmentFailure::VersionMismatch),
+        AttachmentState::UnsafeAttachment => Err(AttachmentFailure::Unsafe),
     }
 }
 
-fn attach_phase_message(phase: AttachPhase) -> &'static str {
-    match phase {
-        AttachPhase::NotRunning => {
+fn attachment_failure_message(status: AttachmentFailure) -> &'static str {
+    match status {
+        AttachmentFailure::NotRunning => {
             "The Control API Server is not running. Start it in another terminal with: nd serve"
         }
-        AttachPhase::Unsafe => "The server responded unsafely; refusing to attach.",
-        AttachPhase::VersionMismatch => {
+        AttachmentFailure::Unsafe => "The server responded unsafely; refusing to attach.",
+        AttachmentFailure::VersionMismatch => {
             "This client does not support the running server's contract version."
         }
-        AttachPhase::InstanceMismatch => "A different server instance is now running; reattaching.",
+        AttachmentFailure::InstanceMismatch => {
+            "A different server instance is now running; reattaching."
+        }
     }
 }
 
@@ -721,7 +725,7 @@ fn tui_mode_interactive() -> ExitCode {
         let (runtime_dir, expected_uid) = match resolve_runtime_location() {
             Ok(value) => value,
             Err(_) => {
-                draw_phase_screen(
+                draw_connection_screen(
                     &mut guard,
                     "Cannot resolve the runtime location.",
                     quit_armed,
@@ -759,8 +763,8 @@ fn tui_mode_interactive() -> ExitCode {
                     return fail_tui("render-failed");
                 }
             },
-            Err(phase) => {
-                draw_phase_screen(&mut guard, attach_phase_message(phase), quit_armed);
+            Err(status) => {
+                draw_connection_screen(&mut guard, attachment_failure_message(status), quit_armed);
                 match diary_tui::terminal::poll_event(backoff) {
                     diary_tui::terminal::PollOutcome::Quit => {
                         if quit_armed {
@@ -781,7 +785,7 @@ fn tui_mode_interactive() -> ExitCode {
     }
 }
 
-fn draw_phase_screen(guard: &mut TerminalGuard, message: &str, quit_armed: bool) {
+fn draw_connection_screen(guard: &mut TerminalGuard, message: &str, quit_armed: bool) {
     let notice = if quit_armed {
         "Retrying automatically. Press Ctrl-C again to quit."
     } else {
@@ -1294,12 +1298,12 @@ fn run_connected_session(
                         };
                         let is_preview_job = job_id.is_some()
                             && job_id.as_deref() == sources_view.pending_preview_job.as_deref();
-                        let phase = sources_view.apply_job_status(outcome);
+                        let status = sources_view.apply_job_status(outcome);
                         if let Some(error) = &sources_view.last_error {
                             feedback = Some(error.safe_label());
                         }
-                        match (job_kind.as_deref(), phase) {
-                            _ if is_preview_job && phase == Some(JobPhase::Succeeded) => {
+                        match (job_kind.as_deref(), status) {
+                            _ if is_preview_job && status == Some(JobOutcome::Succeeded) => {
                                 if let (Some(workflow), Some(source_id), Some(handle)) = (
                                     current_workflow.as_ref(),
                                     sources_view.preview_source_id.clone(),
@@ -1319,11 +1323,11 @@ fn run_connected_session(
                                     }
                                 }
                             }
-                            _ if is_preview_job && phase == Some(JobPhase::Failed) => {
+                            _ if is_preview_job && status == Some(JobOutcome::Failed) => {
                                 sources_view.preview_source_id = None;
                                 feedback = Some("Preview failed; review and retry".to_owned());
                             }
-                            (Some("discovery"), Some(JobPhase::Succeeded)) => {
+                            (Some("discovery"), Some(JobOutcome::Succeeded)) => {
                                 sources_view.accept_fresh_discovery();
                                 if let Some(workflow) = &current_workflow {
                                     source_page_append = false;
@@ -1337,7 +1341,7 @@ fn run_connected_session(
                                 }
                                 feedback = Some("Discovery complete".to_owned());
                             }
-                            (Some("source-preparation"), Some(JobPhase::Succeeded)) => {
+                            (Some("source-preparation"), Some(JobOutcome::Succeeded)) => {
                                 if let (Some(workflow), Some((handle, source_ids))) = (
                                     current_workflow.as_ref(),
                                     sources_view.take_confirm_request(),
@@ -1361,7 +1365,7 @@ fn run_connected_session(
                                     }
                                 }
                             }
-                            (_, Some(JobPhase::Failed)) => {
+                            (_, Some(JobOutcome::Failed)) => {
                                 if sources_view.confirming() {
                                     sources_view.finish_confirm();
                                     feedback = Some(match failed_source_error {
@@ -4383,9 +4387,9 @@ fn tui_mode_headless() -> ExitCode {
     let client = ApiClient::new(UreqTransport::new());
     let client_attachment = match attempt_attach(&runtime_dir, expected_uid, &client) {
         Ok(attachment) => attachment,
-        Err(AttachPhase::NotRunning) => return not_running(),
-        Err(phase) => {
-            eprintln!("nd: {}", attach_phase_message(phase));
+        Err(AttachmentFailure::NotRunning) => return not_running(),
+        Err(status) => {
+            eprintln!("nd: {}", attachment_failure_message(status));
             return ExitCode::FAILURE;
         }
     };

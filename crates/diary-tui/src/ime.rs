@@ -1,6 +1,6 @@
 //! IME state for the Status Line `IME: EN` / `IME: KO` / `IME: ?` indicator.
 //!
-//! P1-M7 prefers a TIS notification push on the main run loop and uses the
+//! The IME indicator prefers a TIS notification push on the main run loop and uses the
 //! bounded 500 ms query tracker when registration or delivery is unavailable.
 //! Both boundaries are fakeable so ViewModel tests never depend on the live
 //! input source.

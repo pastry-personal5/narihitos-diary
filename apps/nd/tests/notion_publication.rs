@@ -57,7 +57,7 @@ impl Scratch {
     fn new() -> Self {
         loop {
             let path = std::env::temp_dir().join(format!(
-                "nd-p1-m9-{}-{}",
+                "nd-local-publication-{}-{}",
                 std::process::id(),
                 SEQUENCE.fetch_add(1, Ordering::Relaxed)
             ));

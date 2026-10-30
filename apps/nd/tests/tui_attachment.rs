@@ -5,7 +5,7 @@
 //! health, and only then proceeds — reaching "terminal unavailable" (there
 //! is no real tty in this test harness) rather than "server not running"
 //! or any unsafe-attachment state. See
-//! `docs/phase-1/milestone-07-tui-manual-workflow-architecture.md`
+//! `docs/ux-tui.md`
 //! "Attachment and HTTP safety".
 
 use std::fs;
@@ -118,7 +118,7 @@ struct Scratch(PathBuf);
 impl Scratch {
     fn new() -> Self {
         let path = std::env::temp_dir().join(format!(
-            "nd-p1-m7-tui-attach-{}-{}",
+            "nd-tui-tui-attach-{}-{}",
             std::process::id(),
             SEQUENCE.fetch_add(1, Ordering::Relaxed)
         ));

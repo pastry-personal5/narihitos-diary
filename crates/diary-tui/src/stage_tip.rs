@@ -1,4 +1,4 @@
-//! The tip-style next-step message shown in Work Status (P1-M16): one short
+//! The tip-style next-step message shown in Work Status is one short
 //! sentence telling an end user what to do to reach the next stage. Pure, so
 //! it is tested for every stage and state without a terminal. The message
 //! only describes controls that already exist; it never decides anything.

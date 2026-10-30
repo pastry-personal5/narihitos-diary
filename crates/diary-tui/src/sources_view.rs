@@ -3,7 +3,7 @@
 //! active resource and the prospective included set are independent
 //! presentation state; neither is synthesized from local data, and both
 //! are reset only by an explicit confirmation or a fresh discovery.
-//! P1-M16 removes the per-note "reviewed" gate: Confirm Source List prepares
+//! Confirm Source List removes the per-note "reviewed" gate: it prepares
 //! the included notes and confirms them in one sequence.
 
 use std::collections::BTreeSet;
@@ -37,7 +37,7 @@ impl SourcesError {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum JobPhase {
+pub enum JobOutcome {
     Running,
     Succeeded,
     Failed,
@@ -60,7 +60,7 @@ pub struct SourcesViewModel {
     /// The prospective included source IDs. Independent of which source is
     /// the active (inspected) resource.
     pub included: BTreeSet<String>,
-    /// Session-only, client-side filter (P1-M16 Hide). A hidden note leaves the
+    /// Session-only, client-side filter (Hide). A hidden note leaves the
     /// list and is forced excluded. Never written anywhere and cleared when the
     /// open workflow changes; the Ayumi note is untouched.
     pub hidden: BTreeSet<String>,
@@ -148,20 +148,20 @@ impl SourcesViewModel {
         }
     }
 
-    /// Polls a pending job by ID. Returns its phase on success; a
+    /// Polls a pending job by ID. Returns its outcome on success; a
     /// transport/typed-problem failure records `last_error` and returns
-    /// `None` rather than guessing the phase.
+    /// `None` rather than guessing the outcome.
     pub fn poll_job<T: Transport>(
         &mut self,
         client: &ApiClient<T>,
         attachment: &Attachment,
         job_id: &str,
-    ) -> Option<JobPhase> {
+    ) -> Option<JobOutcome> {
         match client.job(attachment, job_id) {
             ClientOutcome::Ok(job) => {
                 self.last_error = None;
                 self.job_progress_percent = Some(job.progress_percent);
-                Some(job_phase(&job.status))
+                Some(job_outcome(&job.status))
             }
             ClientOutcome::Problem(problem) => {
                 self.last_error = Some(SourcesError::Problem(problem));
@@ -265,16 +265,16 @@ impl SourcesViewModel {
         }
     }
 
-    pub fn apply_job_status(&mut self, outcome: ClientOutcome<JobDto>) -> Option<JobPhase> {
+    pub fn apply_job_status(&mut self, outcome: ClientOutcome<JobDto>) -> Option<JobOutcome> {
         match outcome {
             ClientOutcome::Ok(job) => {
                 self.last_error = None;
-                let phase = job_phase(&job.status);
-                if phase != JobPhase::Running {
+                let outcome = job_outcome(&job.status);
+                if outcome != JobOutcome::Running {
                     self.job_progress_percent = None;
                     if self.pending_preparation_job.as_deref() == Some(job.id.as_str()) {
                         self.pending_preparation_job = None;
-                        if phase == JobPhase::Succeeded {
+                        if outcome == JobOutcome::Succeeded {
                             self.latest_preparation_handle = job.result_handle.clone();
                         }
                     }
@@ -283,14 +283,14 @@ impl SourcesViewModel {
                     }
                     if self.pending_preview_job.as_deref() == Some(job.id.as_str()) {
                         self.pending_preview_job = None;
-                        if phase == JobPhase::Succeeded {
+                        if outcome == JobOutcome::Succeeded {
                             self.preview_handle = job.result_handle;
                         } else {
                             self.preview_source_id = None;
                         }
                     }
                 }
-                Some(phase)
+                Some(outcome)
             }
             ClientOutcome::Problem(problem) => {
                 self.last_error = Some(SourcesError::Problem(problem));
@@ -707,13 +707,13 @@ impl ConfirmBlock {
     }
 }
 
-/// Maps a server job status to a phase. Anything not terminal (queued,
+/// Maps a server job status to a outcome. Anything not terminal (queued,
 /// running, cancellation-requested) is still running.
-fn job_phase(status: &str) -> JobPhase {
+fn job_outcome(status: &str) -> JobOutcome {
     match status {
-        job_status::COMPLETED => JobPhase::Succeeded,
-        status if job_status::is_terminal(status) => JobPhase::Failed,
-        _ => JobPhase::Running,
+        job_status::COMPLETED => JobOutcome::Succeeded,
+        status if job_status::is_terminal(status) => JobOutcome::Failed,
+        _ => JobOutcome::Running,
     }
 }
 
@@ -897,7 +897,7 @@ mod tests {
             included: BTreeSet::from(["src_1".to_owned()]),
             ..SourcesViewModel::default()
         };
-        let phase = view.apply_job_status(ClientOutcome::Ok(JobDto {
+        let outcome = view.apply_job_status(ClientOutcome::Ok(JobDto {
             id: "job_1".to_owned(),
             kind: "source-preparation".to_owned(),
             status: "completed".to_owned(),
@@ -907,7 +907,7 @@ mod tests {
             error_code: None,
             expires_at_unix_ms: 0,
         }));
-        assert_eq!(phase, Some(JobPhase::Succeeded));
+        assert_eq!(outcome, Some(JobOutcome::Succeeded));
         assert_eq!(view.latest_preparation_handle.as_deref(), Some("prep_1"));
         assert_eq!(view.pending_preparation_job, None);
     }
@@ -942,7 +942,7 @@ mod tests {
             latest_preparation_handle: Some("bulk_handle".to_owned()),
             ..SourcesViewModel::default()
         };
-        let phase = view.apply_job_status(ClientOutcome::Ok(JobDto {
+        let outcome = view.apply_job_status(ClientOutcome::Ok(JobDto {
             id: "preview_job".to_owned(),
             kind: "source-preparation".to_owned(),
             status: "completed".to_owned(),
@@ -952,7 +952,7 @@ mod tests {
             error_code: None,
             expires_at_unix_ms: 0,
         }));
-        assert_eq!(phase, Some(JobPhase::Succeeded));
+        assert_eq!(outcome, Some(JobOutcome::Succeeded));
         assert_eq!(view.pending_preview_job, None);
         assert_eq!(view.preview_handle.as_deref(), Some("preview_handle_1"));
         assert_eq!(view.preview_source_id.as_deref(), Some("src_1"));
@@ -1232,14 +1232,14 @@ mod tests {
     }
 
     #[test]
-    fn poll_job_maps_server_statuses_to_phases() {
+    fn poll_job_maps_server_statuses_to_outcomes() {
         for (status, expected) in [
-            ("completed", JobPhase::Succeeded),
-            ("failed", JobPhase::Failed),
-            ("cancelled", JobPhase::Failed),
-            ("queued", JobPhase::Running),
-            ("running", JobPhase::Running),
-            ("cancellation-requested", JobPhase::Running),
+            ("completed", JobOutcome::Succeeded),
+            ("failed", JobOutcome::Failed),
+            ("cancelled", JobOutcome::Failed),
+            ("queued", JobOutcome::Running),
+            ("running", JobOutcome::Running),
+            ("cancellation-requested", JobOutcome::Running),
         ] {
             let transport = FakeTransport::new();
             transport.push(
@@ -1371,7 +1371,7 @@ mod tests {
         view.toggle_included("src_b");
         view.begin_confirm().unwrap();
         view.pending_preparation_job = Some("job_1".to_owned());
-        let phase = view.apply_job_status(ClientOutcome::Ok(JobDto {
+        let outcome = view.apply_job_status(ClientOutcome::Ok(JobDto {
             id: "job_1".to_owned(),
             kind: "source-preparation".to_owned(),
             status: "completed".to_owned(),
@@ -1381,7 +1381,7 @@ mod tests {
             error_code: None,
             expires_at_unix_ms: 0,
         }));
-        assert_eq!(phase, Some(JobPhase::Succeeded));
+        assert_eq!(outcome, Some(JobOutcome::Succeeded));
         assert!(view.active_detail.is_none());
         let (handle, ids) = view.take_confirm_request().unwrap();
         let workflow = view.confirm_selection(&client, &attachment(), "wf_20261029", 2, &handle);

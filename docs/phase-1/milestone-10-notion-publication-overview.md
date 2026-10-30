@@ -170,7 +170,7 @@ and Markdown parser rather than assuming a new crate is permitted.
   reply, unowned same-day conflicts, stale-state and cancellation voiding, and
   restart adoption without a second write. Later-chunk and receipt-persistence
   loss, queue fairness, and the API/TUI matrix remain open.
-- Service and Control API tests (`apps/nd/tests/p1_m10_notion.rs`, 2026-10-30)
+- Service and Control API tests (`apps/nd/tests/notion_publication.rs`, 2026-10-30)
   prove that remote-state drift voids approval and publication before any
   write; blocked and conflict previews carry no plan and need a new approval; an
   ambiguous write gates only its diary day, rejects duplicate commands, and

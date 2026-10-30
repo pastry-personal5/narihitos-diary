@@ -1,5 +1,5 @@
 //! The right Main Pane: the active resource's content for the current
-//! stage. P1-M7's Start stage shows a fixed instructional message; later
+//! stage. The Start stage shows a fixed instructional message; later
 //! stages render prepared source bodies, the Draft editor, and the entry
 //! review in separate work.
 

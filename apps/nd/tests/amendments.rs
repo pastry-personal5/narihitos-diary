@@ -1,6 +1,6 @@
 #![forbid(unsafe_code)]
 
-//! P1-M11 acceptance over the command layer: amendment of a completed day,
+//! Amendment acceptance over the command layer: amendment of a completed day,
 //! with invented content, fake sources, and a scripted Notion port.
 
 use std::fs;
@@ -63,7 +63,7 @@ impl Scratch {
     fn new() -> Self {
         loop {
             let path = std::env::temp_dir().join(format!(
-                "nd-p1-m11-{}-{}",
+                "nd-amendment-{}-{}",
                 std::process::id(),
                 SEQUENCE.fetch_add(1, Ordering::Relaxed)
             ));

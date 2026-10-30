@@ -44,7 +44,7 @@ verified iCloud file with no extra prompt. Without it, nothing changes.
   evicted placeholder and vanished root are unavailable and never written
   (diary-connectors `new_icloud_*`, `icloud_*`).
 - [x] Byte-identical mirror completes the day with no extra approval; no mirror
-  configured leaves behavior unchanged (`apps/nd/tests/p1_m14_icloud.rs`).
+  configured leaves behavior unchanged (`apps/nd/tests/icloud_publication.rs`).
 - [x] Missing root, placeholder, and different content leave local published and
   the day `Partial`/unaffected; Notion still previews and publishes.
 - [x] Ambiguous mirror write reconciles at startup without a second write.

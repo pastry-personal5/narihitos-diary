@@ -78,13 +78,13 @@
 **Files:**
 - Modify: `crates/diary-control/src/commands.rs` (`with_local_output` neighbor, plan construction ~line 940–1010, `publish_local_guarded` ~line 1092, `reconcile_local_intents` ~line 1522)
 - Modify: `apps/nd/src/main.rs` (~line 276)
-- Test: `apps/nd/tests/p1_m14_icloud.rs` (new, modeled on `p1_m9_local.rs`)
+- Test: `apps/nd/tests/icloud_publication.rs` (new, modeled on `local_publication.rs`)
 
 **Interfaces:**
 - Consumes: Task 1 `finish_mirror_retry`, `DestinationKind::Mirror`; Task 2 `LocalOutput::new_icloud`, `LifecycleConfig.icloud_entries_root`.
 - Produces: `CommandService::with_mirror_output(self, Arc<dyn LocalOutputPort>) -> Self`; `CommandService::publish_mirror_guarded(&self, day: &DiaryDay, expected_revision: u64, commit: impl FnOnce() -> bool) -> Result<Workflow, CommandError>`; `CommandService::reconcile_mirror_intents(&self) -> Result<(), CommandError>`. Mirror destination name is `"icloud"`.
 
-- [ ] **Step 1: Write failing integration tests** in `p1_m14_icloud.rs` using synthetic scratch directories:
+- [ ] **Step 1: Write failing integration tests** in `icloud_publication.rs` using synthetic scratch directories:
   - `mirror_is_byte_identical_and_day_completes_without_extra_approval`.
   - `no_mirror_configured_leaves_plan_and_behavior_unchanged`.
   - `missing_icloud_root_blocks_mirror_but_local_publishes_day_partial`.
@@ -94,7 +94,7 @@
   - `restart_after_ambiguous_mirror_write_reconciles_to_verified` (fake output returns `Absent` after write; reconcile must verify without a second write).
   - `mirror_retry_after_blocked_completes_day` (via `publish_mirror_guarded`).
   - `config_change_between_preview_and_publish_forces_new_preview`.
-- [ ] **Step 2:** Run `cargo test -p nd --test p1_m14_icloud` → FAIL.
+- [ ] **Step 2:** Run `cargo test -p nd --test icloud_publication` → FAIL.
 - [ ] **Step 3:** In plan construction, when a mirror output is set, add a `DestinationPlan::new(DestinationKind::Mirror, "icloud", mirror.target(day), digest, digest, observed)` (same payload digest as local; `Blocked` status plus content-free reason when the preflight fails). Generalize `LocalDestination` use so `publish_local_guarded` executes a second `PublicationCoordinator::execute` for the mirror intent after local is `Verified`, skipping it when its preview progress is `Blocked`/`Conflict`. Add its `DestinationProgress { destination: "icloud", .. }` to the `finish_publication` vector before `"notion"`. `publish_mirror_guarded` re-inspects, requires a verified local receipt (reuse `verify_local_receipt`), runs the coordinator, then calls `finish_mirror_retry`. `reconcile_mirror_intents` mirrors `reconcile_local_intents` filtered on `"icloud"`.
 - [ ] **Step 4:** In `main.rs`, build the mirror with `LocalOutput::new_icloud(root, &home).map_err(|_| "icloud-root-invalid")?` when configured, attach it, and call `reconcile_mirror_intents` after the local reconcile.
 - [ ] **Step 5:** Run the new tests plus `cargo test -p nd` and `-p diary-control` → PASS (existing P1-M9/M10 tests must stay green, which proves the unchanged behavior).

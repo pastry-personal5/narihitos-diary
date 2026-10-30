@@ -1,6 +1,6 @@
 //! Hand-written, incremental SSE frame parser matching the server's exact
 //! wire format (`id: {id}\nevent: {type}\ndata: {json}\n\n`, see
-//! `diary-control::server::sse_bytes`). Parses only what P1-M7 needs and
+//! `diary-control::server::sse_bytes`). Parses only the event fields needed by the TUI and
 //! enforces a bound on event size so no per-event window can grow forever.
 
 use diary_control_contract::EventDto;

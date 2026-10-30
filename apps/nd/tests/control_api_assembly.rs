@@ -1007,7 +1007,7 @@ struct Scratch(PathBuf);
 impl Scratch {
     fn new(label: &str) -> Self {
         let path = std::env::temp_dir().join(format!(
-            "nd-p1-m6-{label}-{}-{}",
+            "nd-control-api-{label}-{}-{}",
             std::process::id(),
             SEQUENCE.fetch_add(1, Ordering::Relaxed)
         ));

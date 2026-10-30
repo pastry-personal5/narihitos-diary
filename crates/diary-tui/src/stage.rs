@@ -1,5 +1,5 @@
 //! Pure mapping from server workflow state to the six canonical user-facing
-//! stages. See `docs/phase-1/milestone-07-tui-manual-workflow-architecture.md`
+//! stages. See `docs/ux-tui.md`
 //! ("Canonical stages in M7") for the table this implements.
 
 use diary_control_contract::WorkflowDto;

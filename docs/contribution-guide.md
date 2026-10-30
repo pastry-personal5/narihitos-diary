@@ -66,8 +66,8 @@ cargo run -p nd -- --help
 cargo run -p nd
 cargo run -p nd -- serve
 cargo test -p nd --test command_shells --quiet
-cargo test -p nd --test p1_m6_process --quiet
-cargo test -p nd --test p1_m7_tui_attach --test p1_m7_worker --quiet
+cargo test -p nd --test control_api_process --quiet
+cargo test -p nd --test tui_attachment --test tui_worker --quiet
 printf '%s\n' '{"protocol_version":1,"request_id":"smoke-1","command":"ping","payload":{}}' | swift run --package-path helpers/apple-bridge apple-bridge
 ```
 

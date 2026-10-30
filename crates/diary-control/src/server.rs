@@ -2841,7 +2841,7 @@ async fn run_assistant_job(
 async fn log_assistant_snapshot(
     state: &AppState,
     kind: &'static str,
-    phase: &'static str,
+    event_status: &'static str,
     day: &DiaryDay,
 ) {
     let Some(log) = state.0.config.diagnostics.clone() else {
@@ -2856,7 +2856,7 @@ async fn log_assistant_snapshot(
         let Ok(workflow) = service.load_workflow(&day) else {
             return;
         };
-        if let Some(snapshot) = AssistantSnapshot::capture(&log, &workflow, kind, phase) {
+        if let Some(snapshot) = AssistantSnapshot::capture(&log, &workflow, kind, event_status) {
             let _ = log.write(
                 DiagnosticLevel::Debug,
                 DiagnosticEvent::AssistantState(snapshot),
@@ -2872,7 +2872,7 @@ async fn log_assistant_snapshot(
 async fn log_publication_snapshot(
     state: &AppState,
     kind: &'static str,
-    phase: &'static str,
+    event_status: &'static str,
     day: &DiaryDay,
 ) {
     let Some(log) = state.0.config.diagnostics.clone() else {
@@ -2889,7 +2889,7 @@ async fn log_publication_snapshot(
         };
         let (receipts, unresolved) = service.publication_counts(&day).unwrap_or((0, 0));
         if let Some(snapshot) =
-            PublicationSnapshot::capture(&log, &workflow, kind, phase, receipts, unresolved)
+            PublicationSnapshot::capture(&log, &workflow, kind, event_status, receipts, unresolved)
         {
             let _ = log.write(
                 DiagnosticLevel::Debug,
