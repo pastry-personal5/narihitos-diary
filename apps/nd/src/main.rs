@@ -2051,12 +2051,14 @@ fn run_connected_session(
             Vec::new()
         };
         if current_stage == Stage::Sources
-            && can_mutate
-            && can_read_sources
-            && !source_job_busy
             && let Some(workflow) = current_workflow.as_ref()
-            && workflow.state == "started"
-            && !auto_discovery_attempted.contains(&workflow.id)
+            && should_auto_discover(
+                workflow,
+                can_mutate,
+                can_read_sources,
+                source_job_busy,
+                &auto_discovery_attempted,
+            )
         {
             auto_discovery_attempted.insert(workflow.id.clone());
             pending_source_job_kind = Some(SourceJobKind::Discovery);
@@ -3683,6 +3685,20 @@ fn run_connected_session(
     }
 }
 
+fn should_auto_discover(
+    workflow: &WorkflowDto,
+    can_mutate: bool,
+    can_read_sources: bool,
+    source_job_busy: bool,
+    attempted: &BTreeSet<String>,
+) -> bool {
+    can_mutate
+        && can_read_sources
+        && !source_job_busy
+        && workflow.state == "started"
+        && !attempted.contains(&workflow.id)
+}
+
 /// Requests the body of a candidate for display, regardless of whether it's
 /// included: activating a source and including it are independent actions
 /// (product-behavior.md, ux-tui.md). Every view is an ad hoc, single-source
@@ -4744,6 +4760,36 @@ mod start_screen_tests {
                     selected: false,
                 },
             ],
+        }
+    }
+
+    #[test]
+    fn automatic_discovery_runs_once_only_for_a_writable_started_workflow() {
+        let mut workflow = composing_workflow();
+        workflow.state = "started".to_owned();
+        let mut attempted = BTreeSet::new();
+        assert!(should_auto_discover(
+            &workflow, true, true, false, &attempted
+        ));
+        attempted.insert(workflow.id.clone());
+        assert!(!should_auto_discover(
+            &workflow, true, true, false, &attempted
+        ));
+        attempted.clear();
+        for (mutate, read, busy) in [
+            (false, true, false),
+            (true, false, false),
+            (true, true, true),
+        ] {
+            assert!(!should_auto_discover(
+                &workflow, mutate, read, busy, &attempted
+            ));
+        }
+        for state in ["discovered", "sources-confirmed", "completed"] {
+            workflow.state = state.to_owned();
+            assert!(!should_auto_discover(
+                &workflow, true, true, false, &attempted
+            ));
         }
     }
 

@@ -59,7 +59,8 @@ example Accept and Reject appear only while a refinement is shown).
   progress in Work Status. If an included note cannot be read, nothing is
   confirmed and the reason is shown. With nothing included the same item reads
   "Continue without notes" and asks for Enter to confirm. Changing the
-  included set later needs a new confirmation.
+  included set later needs a new confirmation. The control shows why it is
+  disabled if more than 64 notes are included; exclude notes to continue.
 - **Refine a note with the assistant:** with the note's text shown and an
   assistant selected, choose "Refine with assistant". Only that note's text
   goes to the selected backend. The suggestion appears under "Suggested

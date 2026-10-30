@@ -12,6 +12,12 @@ daily section. See the [product roadmap](docs/roadmap.md) and
 [product behavior](docs/product-behavior.md) for the full workflow and its
 boundaries.
 
+The Sources stage discovers nearby notes when opened. Its flat menu lets you
+include or exclude notes, optionally refine one, and confirm the list without
+opening every note. Source-list letter shortcuts are available while the
+Resources Sidebar is focused and the input indicator reads `IME: EN`; `?`
+shows the shortcut help.
+
 ## Status
 
 P1-M8 is done and adds optional Codex hosted and Apple on-device assistants for

@@ -1,6 +1,6 @@
 # P1-M16: Simple Sources stage overview
 
-Status: In progress
+Status: Done
 
 This milestone simplifies the TUI Sources stage to a short flat menu: include
 or exclude notes, optionally refine a note with the assistant and accept or
@@ -78,18 +78,18 @@ assistant refinement. No server, Control API, or decided-behavior change.
   `source_ids`; no per-note preview or review).
 - [x] Confirm Source List confirms a source list in which no note's text was
   opened (client/headless test and the existing server harness).
-- [ ] An included note that is unreadable, unavailable, or still downloading
+- [x] An included note that is unreadable, unavailable, or still downloading
   blocks confirmation with a visible reason; nothing is confirmed.
-- [ ] Cloud-only included notes are downloaded by Confirm Source List, and only
+- [x] Cloud-only included notes are downloaded by Confirm Source List, and only
   included ones.
 - [x] With nothing included the control reads "Continue without notes", keeps
   its explicit confirmation, and the existing explicit-empty rule is unchanged.
-- [ ] More than 64 included notes disables Confirm Source List with a visible
+- [x] More than 64 included notes disables Confirm Source List with a visible
   reason; an expired or mismatched handle fails visibly and the next attempt
   prepares again; View and Confirm cannot run at the same time.
 - [x] Changing the included set after confirmation still requires a new
   confirmation before any later output.
-- [ ] Entering Sources starts discovery once for a workflow that allows it;
+- [x] Entering Sources starts discovery once for a workflow that allows it;
   re-entering with current results, a read-only or completed workflow, or after
   a failed discovery does not rediscover automatically; Refresh notes forces it.
 - [x] Refine, Accept, and Reject still work; Accept/Reject appear only while a
@@ -100,7 +100,7 @@ assistant refinement. No server, Control API, or decided-behavior change.
   after items appear or disappear; Refine, Accept, Reject, Edit, and Delete act
   only on the note shown for the focused row, and moving focus closes the shown
   text and suggestion.
-- [ ] Shortcut letters act only with the Resources Sidebar focused in Sources,
+- [x] Shortcut letters act only with the Resources Sidebar focused in Sources,
   no editor or Command Line open, and `IME: EN`; under `IME: KO`, `IME: ?`, or
   another zone or stage, or while the delete confirmation, extra-date field, or
   Help Overlay is open, or with a Ctrl/Alt modifier, they do nothing and are
@@ -108,13 +108,13 @@ assistant refinement. No server, Control API, or decided-behavior change.
 - [x] Each shortcut maps to the same action as its menu item (include, exclude,
   refine, reject, edit, delete-with-confirmation, refresh, add a date, load
   more), respects the same disabled conditions, and is case-insensitive.
-- [ ] Hide closes the hidden note's shown text and suggestion and is refused
+- [x] Hide closes the hidden note's shown text and suggestion and is refused
   while that note has an unsaved edit.
 - [x] Hide removes a note from the list and from the included set (so the
   preparation is invalidated if it was included), `u` restores it, the header
   counts hidden notes, hidden notes are never sent to Confirm Source List, and
   hiding survives Refresh notes but not a restart or a different workflow.
-- [ ] `?` opens the Help Overlay under the same gate; it is modal (other keys
+- [x] `?` opens the Help Overlay under the same gate; it is modal (other keys
   ignored, nothing typed through it), closes on Esc/Enter/`?`, and is reachable
   without a letter from the menu.
 - [x] The Help Overlay text is generated from the shortcut table; a test fails
@@ -131,4 +131,21 @@ assistant refinement. No server, Control API, or decided-behavior change.
   `AGENTS.md` index line, phase doc, changelog).
 - [x] Gate passes: `cargo fmt --all -- --check`,
   `cargo clippy --all-targets --all-features -- -D warnings`,
-  `cargo test --all-features`.
+  `cargo test --all-features`, plus `swift build` and `swift test` in
+  `helpers/apple-bridge`.
+
+## Acceptance evidence
+
+- `sources_view` and `sources_menu` tests cover single-use ordered handles, the
+  64-note limit, an unopened-note confirmation, hidden-note exclusion, and the
+  visible disabled reason. The server preparation loop reads and requests a
+  download only for the submitted included IDs and fails without a handle for
+  an unreadable or still-downloading note. The connected TUI reports the job
+  error code and does not send confirmation after a failed preparation.
+- `source_shortcuts`, `terminal`, `help_overlay`, and `apps/nd` tests cover the
+  IME and modifier gate, modal help content and scrolling, and automatic
+  discovery conditions. The TUI blocks simultaneous View and Confirm jobs and
+  refuses Hide while a source edit is active.
+- Final gate: Rust format, Clippy, and all-feature tests passed; Swift bridge
+  build and tests passed. The Rust fixture tests and SwiftPM ran outside the
+  workspace sandbox because it denies local sockets and SwiftPM sandbox setup.

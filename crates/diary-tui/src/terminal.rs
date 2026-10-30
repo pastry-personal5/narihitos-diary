@@ -168,44 +168,44 @@ pub enum InputPoll {
 pub fn poll_input_event(timeout: Duration) -> InputPoll {
     match crossterm::event::poll(timeout) {
         Ok(true) => match crossterm::event::read() {
-            Ok(Event::Key(key)) if key.kind == KeyEventKind::Press => {
-                let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
-                match key.code {
-                    KeyCode::Char('c') if ctrl => InputPoll::Quit,
-                    KeyCode::Char(c) if ctrl => InputPoll::Ctrl(c),
-                    // Alt/Super chords are never text: ignoring them keeps a
-                    // Meta-prefixed letter from acting as a bare-letter shortcut.
-                    KeyCode::Char(_)
-                        if key
-                            .modifiers
-                            .intersects(KeyModifiers::ALT | KeyModifiers::SUPER) =>
-                    {
-                        InputPoll::Ignored
-                    }
-                    KeyCode::Char(c) => InputPoll::Event(InputEvent::Char(c)),
-                    KeyCode::Enter => InputPoll::Event(InputEvent::Enter),
-                    KeyCode::Backspace => InputPoll::Event(InputEvent::Backspace),
-                    KeyCode::Esc => InputPoll::Event(InputEvent::Esc),
-                    KeyCode::Tab => InputPoll::Event(InputEvent::Tab),
-                    KeyCode::BackTab => InputPoll::Event(InputEvent::BackTab),
-                    KeyCode::Up => InputPoll::Event(InputEvent::Up),
-                    KeyCode::Down => InputPoll::Event(InputEvent::Down),
-                    KeyCode::Left => InputPoll::Event(InputEvent::Left),
-                    KeyCode::Right => InputPoll::Event(InputEvent::Right),
-                    KeyCode::Home => InputPoll::Event(InputEvent::Home),
-                    KeyCode::End => InputPoll::Event(InputEvent::End),
-                    KeyCode::PageUp => InputPoll::Event(InputEvent::PageUp),
-                    KeyCode::PageDown => InputPoll::Event(InputEvent::PageDown),
-                    KeyCode::Delete => InputPoll::Event(InputEvent::Delete),
-                    _ => InputPoll::Ignored,
-                }
-            }
+            Ok(Event::Key(key)) if key.kind == KeyEventKind::Press => classify_key(key),
             Ok(Event::Paste(data)) => InputPoll::Event(InputEvent::Paste(data)),
             Ok(_) => InputPoll::Ignored,
             Err(_) => InputPoll::Quit,
         },
         Ok(false) => InputPoll::TimedOut,
         Err(_) => InputPoll::Quit,
+    }
+}
+
+fn classify_key(key: crossterm::event::KeyEvent) -> InputPoll {
+    if matches!(key.code, KeyCode::Char(_))
+        && key
+            .modifiers
+            .intersects(KeyModifiers::ALT | KeyModifiers::SUPER)
+    {
+        return InputPoll::Ignored;
+    }
+    let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+    match key.code {
+        KeyCode::Char('c') if ctrl => InputPoll::Quit,
+        KeyCode::Char(c) if ctrl => InputPoll::Ctrl(c),
+        KeyCode::Char(c) => InputPoll::Event(InputEvent::Char(c)),
+        KeyCode::Enter => InputPoll::Event(InputEvent::Enter),
+        KeyCode::Backspace => InputPoll::Event(InputEvent::Backspace),
+        KeyCode::Esc => InputPoll::Event(InputEvent::Esc),
+        KeyCode::Tab => InputPoll::Event(InputEvent::Tab),
+        KeyCode::BackTab => InputPoll::Event(InputEvent::BackTab),
+        KeyCode::Up => InputPoll::Event(InputEvent::Up),
+        KeyCode::Down => InputPoll::Event(InputEvent::Down),
+        KeyCode::Left => InputPoll::Event(InputEvent::Left),
+        KeyCode::Right => InputPoll::Event(InputEvent::Right),
+        KeyCode::Home => InputPoll::Event(InputEvent::Home),
+        KeyCode::End => InputPoll::Event(InputEvent::End),
+        KeyCode::PageUp => InputPoll::Event(InputEvent::PageUp),
+        KeyCode::PageDown => InputPoll::Event(InputEvent::PageDown),
+        KeyCode::Delete => InputPoll::Event(InputEvent::Delete),
+        _ => InputPoll::Ignored,
     }
 }
 
@@ -234,4 +234,33 @@ fn install_panic_hook_once() {
             default_hook(info);
         }));
     });
+}
+
+#[cfg(test)]
+mod key_tests {
+    use super::*;
+    use crossterm::event::KeyEvent;
+
+    #[test]
+    fn source_letters_require_plain_or_shift_only_key_events() {
+        for modifier in [
+            KeyModifiers::ALT,
+            KeyModifiers::SUPER,
+            KeyModifiers::ALT | KeyModifiers::CONTROL,
+            KeyModifiers::SUPER | KeyModifiers::CONTROL,
+        ] {
+            assert_eq!(
+                classify_key(KeyEvent::new(KeyCode::Char('i'), modifier)),
+                InputPoll::Ignored
+            );
+        }
+        assert_eq!(
+            classify_key(KeyEvent::new(KeyCode::Char('i'), KeyModifiers::CONTROL)),
+            InputPoll::Ctrl('i')
+        );
+        assert_eq!(
+            classify_key(KeyEvent::new(KeyCode::Char('i'), KeyModifiers::SHIFT)),
+            InputPoll::Event(InputEvent::Char('i'))
+        );
+    }
 }

@@ -1061,6 +1061,22 @@ mod tests {
     }
 
     #[test]
+    fn hide_closes_suggestion_and_excludes_note_from_confirmation() {
+        let mut view = view_with(&["a", "b"]);
+        view.toggle_included("a");
+        view.toggle_included("b");
+        view.active_refine_suggestion = Some(SourceRefineSuggestionDto {
+            source_id: "a".to_owned(),
+            original_body: "before".to_owned(),
+            suggested_body: "after".to_owned(),
+            binding_digest: "digest".to_owned(),
+        });
+        assert!(view.hide("a"));
+        assert!(view.active_refine_suggestion.is_none());
+        assert_eq!(view.begin_confirm(), Ok(vec!["b".to_owned()]));
+    }
+
+    #[test]
     fn show_hidden_restores_notes_excluded() {
         let mut view = view_with(&["a", "b"]);
         view.toggle_included("a");

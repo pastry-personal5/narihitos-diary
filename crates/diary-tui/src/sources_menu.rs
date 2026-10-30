@@ -116,6 +116,11 @@ pub fn label(item: SourcesMenuItem, state: &SourcesMenuState) -> String {
         SourcesMenuItem::ConfirmSourceList if state.included_count == 0 => {
             "Continue without notes".to_owned()
         }
+        SourcesMenuItem::ConfirmSourceList
+            if state.included_count > diary_control_contract::MAX_SELECTED_SOURCES =>
+        {
+            "Confirm Source List (disabled: exclude notes to reach the 64-note limit)".to_owned()
+        }
         SourcesMenuItem::ConfirmSourceList => "Confirm Source List".to_owned(),
         SourcesMenuItem::Refresh => "Refresh notes".to_owned(),
         SourcesMenuItem::AddDate => "Add a date".to_owned(),
@@ -325,6 +330,17 @@ mod tests {
             label(SourcesMenuItem::ToggleInclude, &included),
             "Exclude this note"
         );
+    }
+
+    #[test]
+    fn over_limit_confirmation_explains_why_it_is_disabled() {
+        let state = SourcesMenuState {
+            included_count: diary_control_contract::MAX_SELECTED_SOURCES + 1,
+            ..base()
+        };
+        let text = label(SourcesMenuItem::ConfirmSourceList, &state);
+        assert!(text.contains("disabled"));
+        assert!(text.contains("64-note limit"));
     }
 
     #[test]
