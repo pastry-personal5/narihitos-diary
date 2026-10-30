@@ -12,4 +12,4 @@ pub use apple_bridge::{
 pub use ayumi::{
     AyumiCatalog, AyumiSource, Discovery, ReadOutcome, SourceReadError, SourceWriteError,
 };
-pub use sqlite::SqliteStore;
+pub use sqlite::{MigrationEvent, MigrationObserver, SqliteStore};

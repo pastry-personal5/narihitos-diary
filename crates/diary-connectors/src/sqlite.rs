@@ -1,5 +1,5 @@
 use std::path::{Path, PathBuf};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use diary_core::{
     Approval, ArtifactProvenance, AssistantBackendId, AssistantSelection, CompositionPath,
@@ -15,7 +15,82 @@ use diary_core::{
 };
 use rusqlite::{Connection, OptionalExtension, Transaction, TransactionBehavior, params};
 
-const CURRENT_SCHEMA: i64 = 5;
+/// One forward-only schema step. `version` is the `PRAGMA user_version` the
+/// database holds once `sql` has been applied.
+struct Migration {
+    version: i64,
+    sql: &'static str,
+}
+
+/// Every schema step, oldest first. **Append only**: a migration that has
+/// shipped is never edited, because databases already past it will not run it
+/// again. To change the schema, add `MIGRATION_{n+1}` here with
+/// `version: n + 1`; `CURRENT_SCHEMA` follows from the last entry, and the
+/// `migration_list_is_contiguous_from_one` test rejects gaps or reordering.
+const MIGRATIONS: [Migration; 5] = [
+    Migration {
+        version: 1,
+        sql: MIGRATION_1,
+    },
+    Migration {
+        version: 2,
+        sql: MIGRATION_2,
+    },
+    Migration {
+        version: 3,
+        sql: MIGRATION_3,
+    },
+    Migration {
+        version: 4,
+        sql: MIGRATION_4,
+    },
+    Migration {
+        version: 5,
+        sql: MIGRATION_5,
+    },
+];
+
+const CURRENT_SCHEMA: i64 = MIGRATIONS[MIGRATIONS.len() - 1].version;
+
+/// A content-free report of schema-migration progress: schema versions,
+/// durations, and a fixed `reason` token on failure; never SQL, paths, or
+/// stored data.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum MigrationEvent {
+    /// The database is already at the newest schema; nothing to apply.
+    Current { version: i64 },
+    /// Pending steps were found and are about to run.
+    Started { from: i64, to: i64 },
+    /// One step committed.
+    StepApplied { from: i64, to: i64, elapsed_ms: u64 },
+    /// Every pending step committed and the schema validated.
+    Finished { from: i64, to: i64, elapsed_ms: u64 },
+    /// Migration stopped. `from`/`to` name the step (or, for
+    /// `unsupported-schema`, the stored and newest supported versions).
+    /// `reason` is one of `unsupported-schema`, `step-failed`,
+    /// `migration-gap`, or `schema-validation-failed`.
+    Failed {
+        from: i64,
+        to: i64,
+        elapsed_ms: u64,
+        reason: &'static str,
+    },
+}
+
+/// Receives [`MigrationEvent`]s synchronously while a store opens.
+pub trait MigrationObserver {
+    fn observe(&self, event: MigrationEvent);
+}
+
+struct NoMigrationObserver;
+
+impl MigrationObserver for NoMigrationObserver {
+    fn observe(&self, _event: MigrationEvent) {}
+}
+
+fn elapsed_ms(started: Instant) -> u64 {
+    u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX)
+}
 
 #[derive(Clone, Debug)]
 pub struct SqliteStore {
@@ -24,12 +99,30 @@ pub struct SqliteStore {
 
 impl SqliteStore {
     pub fn open(path: impl AsRef<Path>) -> Result<Self, StoreError> {
+        Self::open_observed(path, &NoMigrationObserver)
+    }
+
+    /// Like [`Self::open`], reporting each migration step to `observer`.
+    pub fn open_observed(
+        path: impl AsRef<Path>,
+        observer: &dyn MigrationObserver,
+    ) -> Result<Self, StoreError> {
         let store = Self {
             path: path.as_ref().to_path_buf(),
         };
+        let started = Instant::now();
         let mut connection = store.connect()?;
-        migrate(&mut connection)?;
-        validate_schema(&connection)?;
+        run_migrations(&mut connection, &MIGRATIONS, observer)?;
+        if let Err(error) = validate_schema(&connection) {
+            let version = user_version(&connection).unwrap_or(CURRENT_SCHEMA);
+            observer.observe(MigrationEvent::Failed {
+                from: version,
+                to: version,
+                elapsed_ms: elapsed_ms(started),
+                reason: "schema-validation-failed",
+            });
+            return Err(error);
+        }
         Ok(store)
     }
 
@@ -549,86 +642,95 @@ impl OperationLog for SqliteStore {
     }
 }
 
-fn migrate(connection: &mut Connection) -> Result<(), StoreError> {
-    let version: i64 = connection
+fn user_version(connection: &Connection) -> Result<i64, StoreError> {
+    connection
         .query_row("PRAGMA user_version", [], |row| row.get(0))
-        .map_err(map_sql_error)?;
-    if version > CURRENT_SCHEMA {
-        return Err(StoreError::UnsupportedSchema(version));
+        .map_err(map_sql_error)
+}
+
+/// Applies every step newer than the stored `user_version`, each in its own
+/// immediate transaction together with its version bump, so a crash or a
+/// failing step leaves the database at the last fully applied version.
+fn run_migrations(
+    connection: &mut Connection,
+    migrations: &[Migration],
+    observer: &dyn MigrationObserver,
+) -> Result<(), StoreError> {
+    let started = Instant::now();
+    let latest = migrations.last().map_or(0, |migration| migration.version);
+    let initial = user_version(connection)?;
+    if initial < 0 || initial > latest {
+        observer.observe(MigrationEvent::Failed {
+            from: initial,
+            to: latest,
+            elapsed_ms: elapsed_ms(started),
+            reason: "unsupported-schema",
+        });
+        return Err(StoreError::UnsupportedSchema(initial));
     }
-    if version < 1 {
-        let transaction = connection
-            .transaction_with_behavior(TransactionBehavior::Immediate)
-            .map_err(map_sql_error)?;
-        transaction
-            .execute_batch(MIGRATION_1)
-            .map_err(map_sql_error)?;
-        transaction
-            .pragma_update(None, "user_version", 1)
-            .map_err(map_sql_error)?;
-        transaction.commit().map_err(map_sql_error)?;
+    if initial == latest {
+        observer.observe(MigrationEvent::Current { version: initial });
+        return Ok(());
     }
-    let version: i64 = connection
-        .query_row("PRAGMA user_version", [], |row| row.get(0))
-        .map_err(map_sql_error)?;
-    if version < 2 {
-        let transaction = connection
-            .transaction_with_behavior(TransactionBehavior::Immediate)
-            .map_err(map_sql_error)?;
-        transaction
-            .execute_batch(MIGRATION_2)
-            .map_err(map_sql_error)?;
-        transaction
-            .pragma_update(None, "user_version", 2)
-            .map_err(map_sql_error)?;
-        transaction.commit().map_err(map_sql_error)?;
+    observer.observe(MigrationEvent::Started {
+        from: initial,
+        to: latest,
+    });
+    for migration in migrations.iter().filter(|m| m.version > initial) {
+        let step_started = Instant::now();
+        match apply_step(connection, migration) {
+            Ok(()) => observer.observe(MigrationEvent::StepApplied {
+                from: migration.version - 1,
+                to: migration.version,
+                elapsed_ms: elapsed_ms(step_started),
+            }),
+            Err((error, reason)) => {
+                observer.observe(MigrationEvent::Failed {
+                    from: migration.version - 1,
+                    to: migration.version,
+                    elapsed_ms: elapsed_ms(step_started),
+                    reason,
+                });
+                return Err(error);
+            }
+        }
     }
-    let version: i64 = connection
-        .query_row("PRAGMA user_version", [], |row| row.get(0))
-        .map_err(map_sql_error)?;
-    if version < 3 {
-        let transaction = connection
-            .transaction_with_behavior(TransactionBehavior::Immediate)
-            .map_err(map_sql_error)?;
-        transaction
-            .execute_batch(MIGRATION_3)
-            .map_err(map_sql_error)?;
-        transaction
-            .pragma_update(None, "user_version", 3)
-            .map_err(map_sql_error)?;
-        transaction.commit().map_err(map_sql_error)?;
-    }
-    let version: i64 = connection
-        .query_row("PRAGMA user_version", [], |row| row.get(0))
-        .map_err(map_sql_error)?;
-    if version < 4 {
-        let transaction = connection
-            .transaction_with_behavior(TransactionBehavior::Immediate)
-            .map_err(map_sql_error)?;
-        transaction
-            .execute_batch(MIGRATION_4)
-            .map_err(map_sql_error)?;
-        transaction
-            .pragma_update(None, "user_version", 4)
-            .map_err(map_sql_error)?;
-        transaction.commit().map_err(map_sql_error)?;
-    }
-    let version: i64 = connection
-        .query_row("PRAGMA user_version", [], |row| row.get(0))
-        .map_err(map_sql_error)?;
-    if version < 5 {
-        let transaction = connection
-            .transaction_with_behavior(TransactionBehavior::Immediate)
-            .map_err(map_sql_error)?;
-        transaction
-            .execute_batch(MIGRATION_5)
-            .map_err(map_sql_error)?;
-        transaction
-            .pragma_update(None, "user_version", 5)
-            .map_err(map_sql_error)?;
-        transaction.commit().map_err(map_sql_error)?;
-    }
+    observer.observe(MigrationEvent::Finished {
+        from: initial,
+        to: latest,
+        elapsed_ms: elapsed_ms(started),
+    });
     Ok(())
+}
+
+/// Runs one step. The stored version is re-read *inside* the immediate
+/// transaction: another process may have applied this step since the caller
+/// looked, and re-running it would fail on its own `CREATE TABLE`.
+fn apply_step(
+    connection: &mut Connection,
+    migration: &Migration,
+) -> Result<(), (StoreError, &'static str)> {
+    let step_failed = |error| (map_sql_error(error), "step-failed");
+    let transaction = connection
+        .transaction_with_behavior(TransactionBehavior::Immediate)
+        .map_err(step_failed)?;
+    let stored = user_version(&transaction).map_err(|error| (error, "step-failed"))?;
+    if stored >= migration.version {
+        return Ok(());
+    }
+    if stored != migration.version - 1 {
+        return Err((
+            StoreError::InvalidRecord("migration steps are not contiguous".to_owned()),
+            "migration-gap",
+        ));
+    }
+    transaction
+        .execute_batch(migration.sql)
+        .map_err(step_failed)?;
+    transaction
+        .pragma_update(None, "user_version", migration.version)
+        .map_err(step_failed)?;
+    transaction.commit().map_err(step_failed)
 }
 
 fn validate_schema(connection: &Connection) -> Result<(), StoreError> {
@@ -3603,6 +3705,207 @@ mod tests {
             .unwrap()
             .query_row("PRAGMA user_version", [], |row| row.get(0))
             .unwrap()
+    }
+
+    #[derive(Default)]
+    struct Recorder(std::sync::Mutex<Vec<MigrationEvent>>);
+
+    impl Recorder {
+        fn events(&self) -> Vec<MigrationEvent> {
+            self.0.lock().unwrap().clone()
+        }
+
+        /// The events with durations zeroed, so sequences compare exactly.
+        fn shapes(&self) -> Vec<MigrationEvent> {
+            self.events()
+                .into_iter()
+                .map(|event| match event {
+                    MigrationEvent::StepApplied { from, to, .. } => MigrationEvent::StepApplied {
+                        from,
+                        to,
+                        elapsed_ms: 0,
+                    },
+                    MigrationEvent::Finished { from, to, .. } => MigrationEvent::Finished {
+                        from,
+                        to,
+                        elapsed_ms: 0,
+                    },
+                    MigrationEvent::Failed {
+                        from, to, reason, ..
+                    } => MigrationEvent::Failed {
+                        from,
+                        to,
+                        elapsed_ms: 0,
+                        reason,
+                    },
+                    other => other,
+                })
+                .collect()
+        }
+    }
+
+    impl MigrationObserver for Recorder {
+        fn observe(&self, event: MigrationEvent) {
+            self.0.lock().unwrap().push(event);
+        }
+    }
+
+    #[test]
+    fn migration_list_is_contiguous_from_one() {
+        for (index, migration) in MIGRATIONS.iter().enumerate() {
+            assert_eq!(migration.version, index as i64 + 1);
+            assert!(!migration.sql.trim().is_empty());
+        }
+        assert_eq!(CURRENT_SCHEMA, MIGRATIONS.len() as i64);
+    }
+
+    #[test]
+    fn migration_events_report_each_step_then_the_current_state() {
+        let scratch = Scratch::new("migration-events");
+        let recorder = Recorder::default();
+        SqliteStore::open_observed(scratch.db(), &recorder).unwrap();
+        let mut expected = vec![MigrationEvent::Started {
+            from: 0,
+            to: CURRENT_SCHEMA,
+        }];
+        for version in 1..=CURRENT_SCHEMA {
+            expected.push(MigrationEvent::StepApplied {
+                from: version - 1,
+                to: version,
+                elapsed_ms: 0,
+            });
+        }
+        expected.push(MigrationEvent::Finished {
+            from: 0,
+            to: CURRENT_SCHEMA,
+            elapsed_ms: 0,
+        });
+        assert_eq!(recorder.shapes(), expected);
+
+        let reopened = Recorder::default();
+        SqliteStore::open_observed(scratch.db(), &reopened).unwrap();
+        assert_eq!(
+            reopened.events(),
+            [MigrationEvent::Current {
+                version: CURRENT_SCHEMA
+            }]
+        );
+    }
+
+    #[test]
+    fn partial_upgrade_runs_only_the_pending_steps() {
+        let scratch = Scratch::new("migration-partial");
+        let connection = Connection::open(scratch.db()).unwrap();
+        connection.execute_batch(MIGRATION_1).unwrap();
+        connection.execute_batch(MIGRATION_2).unwrap();
+        connection.pragma_update(None, "user_version", 2).unwrap();
+        drop(connection);
+        let recorder = Recorder::default();
+        SqliteStore::open_observed(scratch.db(), &recorder).unwrap();
+        assert_eq!(
+            recorder.shapes().first(),
+            Some(&MigrationEvent::Started {
+                from: 2,
+                to: CURRENT_SCHEMA
+            })
+        );
+        assert_eq!(recorder.events().len(), 2 + (CURRENT_SCHEMA - 2) as usize);
+    }
+
+    #[test]
+    fn a_newer_schema_is_refused_untouched_and_reported() {
+        let scratch = Scratch::new("migration-newer");
+        let connection = Connection::open(scratch.db()).unwrap();
+        connection
+            .pragma_update(None, "user_version", CURRENT_SCHEMA + 1)
+            .unwrap();
+        drop(connection);
+        let recorder = Recorder::default();
+        assert_eq!(
+            SqliteStore::open_observed(scratch.db(), &recorder).err(),
+            Some(StoreError::UnsupportedSchema(CURRENT_SCHEMA + 1))
+        );
+        assert_eq!(
+            recorder.shapes(),
+            [MigrationEvent::Failed {
+                from: CURRENT_SCHEMA + 1,
+                to: CURRENT_SCHEMA,
+                elapsed_ms: 0,
+                reason: "unsupported-schema",
+            }]
+        );
+        assert_eq!(schema_version(scratch.db()), CURRENT_SCHEMA + 1);
+    }
+
+    #[test]
+    fn a_failing_step_rolls_back_and_keeps_earlier_steps() {
+        let scratch = Scratch::new("migration-rollback");
+        let mut connection = Connection::open(scratch.db()).unwrap();
+        let migrations = [
+            Migration {
+                version: 1,
+                sql: "CREATE TABLE first (id INTEGER PRIMARY KEY);",
+            },
+            Migration {
+                version: 2,
+                sql: "CREATE TABLE half_done (id INTEGER); THIS IS NOT SQL;",
+            },
+        ];
+        let recorder = Recorder::default();
+        assert!(run_migrations(&mut connection, &migrations, &recorder).is_err());
+        assert_eq!(user_version(&connection).unwrap(), 1);
+        let half_done: bool = connection
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM sqlite_schema WHERE name = 'half_done')",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert!(!half_done, "a failed step must leave no partial schema");
+        assert_eq!(
+            recorder.shapes().last(),
+            Some(&MigrationEvent::Failed {
+                from: 1,
+                to: 2,
+                elapsed_ms: 0,
+                reason: "step-failed",
+            })
+        );
+    }
+
+    #[test]
+    fn a_step_another_process_already_applied_is_skipped_not_rerun() {
+        let scratch = Scratch::new("migration-raced");
+        let mut connection = Connection::open(scratch.db()).unwrap();
+        let migration = Migration {
+            version: 1,
+            sql: "CREATE TABLE once (id INTEGER PRIMARY KEY);",
+        };
+        apply_step(&mut connection, &migration).unwrap();
+        // A second runner that read version 0 before the first committed
+        // reaches the same step; it must see the committed version and stop.
+        apply_step(&mut connection, &migration).unwrap();
+        assert_eq!(user_version(&connection).unwrap(), 1);
+    }
+
+    #[test]
+    fn a_gap_in_the_steps_is_refused_before_any_change() {
+        let scratch = Scratch::new("migration-gap");
+        let mut connection = Connection::open(scratch.db()).unwrap();
+        let migrations = [Migration {
+            version: 2,
+            sql: "CREATE TABLE skipped (id INTEGER);",
+        }];
+        let recorder = Recorder::default();
+        assert!(run_migrations(&mut connection, &migrations, &recorder).is_err());
+        assert_eq!(user_version(&connection).unwrap(), 0);
+        assert!(matches!(
+            recorder.shapes().last(),
+            Some(MigrationEvent::Failed {
+                reason: "migration-gap",
+                ..
+            })
+        ));
     }
 
     fn day(value: &str) -> DiaryDay {

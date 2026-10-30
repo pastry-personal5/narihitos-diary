@@ -778,13 +778,22 @@ impl Workflow {
             .filter(|artifact| !artifact.stale)
             .ok_or(WorkflowError::ReviewedMemoryRequired)?;
         let language = self.language.ok_or(WorkflowError::LanguageRequired)?;
+        // Stored draft text carries inferred-reflection markers, which the
+        // request rejects; the markers are single characters inserted at char
+        // boundaries, so removing them recovers the assistant's plain text.
         let prior_draft = include_prior_draft
             .then(|| self.draft_proposals.last())
             .flatten()
-            .map(|draft| draft.text.clone());
+            .map(|draft| {
+                draft
+                    .text
+                    .chars()
+                    .filter(|c| !matches!(*c, INFERRED_REFLECTION_OPEN | INFERRED_REFLECTION_CLOSE))
+                    .collect::<String>()
+            });
         let request =
             DraftEntryRequest::new(reviewed.text.clone(), prior_draft, language, self.style)
-                .map_err(|_| WorkflowError::AssistantRequestInvalid)?;
+                .map_err(|_| WorkflowError::AssistantDraftRequestInvalid)?;
         Ok((
             request,
             DraftProposalBinding {
@@ -810,7 +819,7 @@ impl Workflow {
         validate_artifact_id(&artifact_id)?;
         let rendered = result
             .rendered_text()
-            .map_err(|_| WorkflowError::AssistantRequestInvalid)?;
+            .map_err(|_| WorkflowError::AssistantDraftResultInvalid)?;
         let fresh = self.draft_binding_matches(&binding);
         let populated_buffer_version = if fresh {
             self.entry.text = rendered.clone();
@@ -865,7 +874,7 @@ impl Workflow {
             || !self.entry.text.is_char_boundary(range.start)
             || !self.entry.text.is_char_boundary(range.end)
         {
-            return Err(WorkflowError::AssistantRequestInvalid);
+            return Err(WorkflowError::AssistantParagraphRangeInvalid);
         }
         let paragraph = &self.entry.text[range.start..range.end];
         let language = self.language.ok_or(WorkflowError::LanguageRequired)?;
@@ -873,8 +882,15 @@ impl Workflow {
             .assistant_selection
             .as_ref()
             .ok_or(WorkflowError::AssistantBackendRequired)?;
-        let request = ParagraphReviewRequest::new(paragraph, language, self.style)
-            .map_err(|_| WorkflowError::AssistantRequestInvalid)?;
+        // A drafted entry buffer still carries inferred-reflection markers,
+        // which the request rejects. The binding keeps buffer coordinates and
+        // the digest of the marked slice; only the text sent drops the markers.
+        let plain: String = paragraph
+            .chars()
+            .filter(|c| !matches!(*c, INFERRED_REFLECTION_OPEN | INFERRED_REFLECTION_CLOSE))
+            .collect();
+        let request = ParagraphReviewRequest::new(plain, language, self.style)
+            .map_err(|_| WorkflowError::AssistantParagraphRequestInvalid)?;
         Ok((
             request,
             ParagraphSuggestionBinding {
@@ -903,7 +919,7 @@ impl Workflow {
         validate_artifact_id(&suggestion_id)?;
         let replacement = result
             .rendered_replacement()
-            .map_err(|_| WorkflowError::AssistantRequestInvalid)?;
+            .map_err(|_| WorkflowError::AssistantParagraphResultInvalid)?;
         let stale = !self.paragraph_binding_matches(&binding);
         self.paragraph_suggestions.push(ParagraphSuggestion {
             id: suggestion_id,
@@ -1943,6 +1959,11 @@ pub enum WorkflowError {
     UnreadableSource,
     AssistantActionsDisabled,
     AssistantRequestInvalid,
+    AssistantDraftRequestInvalid,
+    AssistantDraftResultInvalid,
+    AssistantParagraphRangeInvalid,
+    AssistantParagraphRequestInvalid,
+    AssistantParagraphResultInvalid,
     AssistantBackendRequired,
     ReviewedMemoryRequired,
     AssistantArtifactNotFound,
@@ -1980,6 +2001,21 @@ impl fmt::Display for WorkflowError {
             Self::UnreadableSource => formatter.write_str("source is unreadable"),
             Self::AssistantActionsDisabled => formatter.write_str("assistant actions are disabled"),
             Self::AssistantRequestInvalid => formatter.write_str("assistant request is invalid"),
+            Self::AssistantDraftRequestInvalid => {
+                formatter.write_str("assistant draft request is invalid")
+            }
+            Self::AssistantDraftResultInvalid => {
+                formatter.write_str("assistant draft result is invalid")
+            }
+            Self::AssistantParagraphRangeInvalid => {
+                formatter.write_str("paragraph review range is invalid")
+            }
+            Self::AssistantParagraphRequestInvalid => {
+                formatter.write_str("paragraph review request is invalid")
+            }
+            Self::AssistantParagraphResultInvalid => {
+                formatter.write_str("paragraph review result is invalid")
+            }
             Self::AssistantBackendRequired => formatter.write_str("assistant backend is required"),
             Self::ReviewedMemoryRequired => formatter.write_str("reviewed memory is required"),
             Self::AssistantArtifactNotFound => {
@@ -2238,6 +2274,78 @@ mod tests {
             Some(&InvalidationReason::SelectionChanged)
         );
         assert!(!workflow.assistant_actions_available());
+    }
+
+    #[test]
+    fn reflection_markers_never_reach_draft_or_paragraph_requests() {
+        let mut workflow = composing_workflow();
+        let backend_id = crate::AssistantBackendId::parse("fake-one").unwrap();
+        workflow
+            .set_assistant_selection(
+                workflow.revision(),
+                Some(AssistantSelection::new(
+                    backend_id.clone(),
+                    CompositionPath::Hosted,
+                )),
+                time(5),
+            )
+            .unwrap();
+        let source_digest = workflow.selection_digest().unwrap().clone();
+        let provenance = ArtifactProvenance {
+            backend_id,
+            composition_path: CompositionPath::Hosted,
+        };
+        let extraction = MemoryExtractionResult::new(vec![
+            crate::MemoryCandidate::new("remembered", vec![1], 1).unwrap(),
+        ])
+        .unwrap();
+        workflow
+            .commit_memory_extraction(
+                "memory-set-1".to_owned(),
+                provenance.clone(),
+                &source_digest,
+                &extraction,
+                time(6),
+            )
+            .unwrap();
+        workflow
+            .replace_reviewed_memory(
+                workflow.revision(),
+                "reviewed-1".to_owned(),
+                "memory-set-1",
+                "human reviewed".to_owned(),
+                time(7),
+            )
+            .unwrap();
+
+        let (_, binding) = workflow.draft_entry_request(false).unwrap();
+        let draft =
+            DraftEntryResult::new("A quiet walk.", vec![ReflectionRange { start: 2, end: 7 }])
+                .unwrap();
+        workflow
+            .commit_draft_proposal("draft-1".to_owned(), provenance, binding, &draft, time(8))
+            .unwrap();
+        assert!(
+            workflow.draft_proposals()[0]
+                .text
+                .contains(INFERRED_REFLECTION_OPEN)
+        );
+
+        let (request, _) = workflow.draft_entry_request(true).unwrap();
+        assert_eq!(request.prior_draft(), Some("A quiet walk."));
+
+        // The populated buffer is the marked text; a paragraph review over it
+        // sends plain text but keeps buffer coordinates in its binding.
+        let end = workflow.entry().text.len();
+        assert!(workflow.entry().text.contains(INFERRED_REFLECTION_CLOSE));
+        let range = ReflectionRange { start: 0, end };
+        let (paragraph, binding) = workflow.paragraph_review_request(range).unwrap();
+        assert_eq!(paragraph.paragraph(), "A quiet walk.");
+        assert_eq!(binding.range, range);
+        assert_eq!(
+            workflow.paragraph_review_request(ReflectionRange { start: 3, end: 3 }),
+            Err(WorkflowError::AssistantParagraphRangeInvalid)
+        );
     }
 
     #[test]

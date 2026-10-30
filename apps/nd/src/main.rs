@@ -10,12 +10,13 @@ use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use diary_connectors::{
-    AppleBridgeClient, AppleFoundationAssistant, AyumiCatalog, AyumiSource, SqliteStore,
+    AppleBridgeClient, AppleFoundationAssistant, AyumiCatalog, AyumiSource, MigrationEvent,
+    MigrationObserver, SqliteStore,
 };
 use diary_control::{
     CodexAssistant, CommandService, DiagnosticEvent, DiagnosticLevel, DiagnosticLog,
     LifecycleConfig, LifecycleError, LogClock, RuntimeAdvertisement, ServerConfig, ServerLock,
-    bind_loopback, load_runtime_attachment, random_id, serve,
+    bind_loopback, load_or_create_tag_key, load_runtime_attachment, random_id, serve,
 };
 use diary_control_contract::{
     CONTRACT_VERSION, CapabilitiesDto, JOB_NOT_FOUND, PreferencesDto,
@@ -99,6 +100,82 @@ fn serve_mode() -> ExitCode {
     }
 }
 
+/// Writes private-state migration progress to the diagnostic log. Logging is
+/// best effort here: a failed write must never abort or roll back a migration.
+struct MigrationLog(Arc<DiagnosticLog>);
+
+impl MigrationObserver for MigrationLog {
+    fn observe(&self, event: MigrationEvent) {
+        let version = |value: i64| u32::try_from(value).unwrap_or(u32::MAX);
+        let (level, record) = match event {
+            MigrationEvent::Current { version: current } => (
+                DiagnosticLevel::Debug,
+                DiagnosticEvent::Migration {
+                    event: "current",
+                    from: version(current),
+                    to: version(current),
+                    duration_ms: 0,
+                    reason: None,
+                },
+            ),
+            MigrationEvent::Started { from, to } => (
+                DiagnosticLevel::Debug,
+                DiagnosticEvent::Migration {
+                    event: "started",
+                    from: version(from),
+                    to: version(to),
+                    duration_ms: 0,
+                    reason: None,
+                },
+            ),
+            MigrationEvent::StepApplied {
+                from,
+                to,
+                elapsed_ms,
+            } => (
+                DiagnosticLevel::Debug,
+                DiagnosticEvent::Migration {
+                    event: "step",
+                    from: version(from),
+                    to: version(to),
+                    duration_ms: elapsed_ms,
+                    reason: None,
+                },
+            ),
+            MigrationEvent::Finished {
+                from,
+                to,
+                elapsed_ms,
+            } => (
+                DiagnosticLevel::Info,
+                DiagnosticEvent::Migration {
+                    event: "finished",
+                    from: version(from),
+                    to: version(to),
+                    duration_ms: elapsed_ms,
+                    reason: None,
+                },
+            ),
+            MigrationEvent::Failed {
+                from,
+                to,
+                elapsed_ms,
+                reason,
+            } => (
+                DiagnosticLevel::Error,
+                DiagnosticEvent::Migration {
+                    event: "failed",
+                    from: version(from),
+                    to: version(to),
+                    duration_ms: elapsed_ms,
+                    reason: Some(reason),
+                },
+            ),
+        };
+        let _ = self.0.write(level, record);
+    }
+}
+
 async fn run_server() -> Result<(), &'static str> {
     let lifecycle = LifecycleConfig::load().map_err(configuration_error)?;
     lifecycle
@@ -114,6 +191,11 @@ async fn run_server() -> Result<(), &'static str> {
         .ok()
         .and_then(|value| DiagnosticLevel::parse(&value))
         .unwrap_or(DiagnosticLevel::Info);
+    let tag_key = load_or_create_tag_key(
+        &lifecycle.application_support.join("diagnostic-tag-key"),
+        lifecycle.expected_uid,
+    )
+    .map_err(|_| "diagnostic-tag-key-failed")?;
     let log = Arc::new(
         DiagnosticLog::open_with_min_level(
             &lifecycle.log_dir,
@@ -121,7 +203,8 @@ async fn run_server() -> Result<(), &'static str> {
             clock.clone(),
             log_level,
         )
-        .map_err(|_| "diagnostic-init-failed")?,
+        .map_err(|error| error.startup_code())?
+        .with_tag_key(tag_key),
     );
     log.write(
         DiagnosticLevel::Info,
@@ -131,6 +214,19 @@ async fn run_server() -> Result<(), &'static str> {
         },
     )
     .map_err(|_| "diagnostic-write-failed")?;
+    // What startup validation made of the retained log segments. Records this
+    // build does not recognize (e.g. after a downgrade) are tolerated, so they
+    // are a warning-level fact rather than a startup failure.
+    let report = log.validation_report();
+    log.write(
+        if report.unrecognized > 0 {
+            DiagnosticLevel::Warn
+        } else {
+            DiagnosticLevel::Debug
+        },
+        DiagnosticEvent::Validation(report),
+    )
+    .map_err(|_| "diagnostic-write-failed")?;
 
     lifecycle
         .prepare_database()
@@ -138,8 +234,10 @@ async fn run_server() -> Result<(), &'static str> {
     lifecycle
         .validate_database_files()
         .map_err(|_| "database-permission-failed")?;
-    let store =
-        Arc::new(SqliteStore::open(&lifecycle.database_path).map_err(|_| "database-open-failed")?);
+    let store = Arc::new(
+        SqliteStore::open_observed(&lifecycle.database_path, &MigrationLog(log.clone()))
+            .map_err(|_| "database-open-failed")?,
+    );
     lifecycle
         .validate_database_files()
         .map_err(|_| "database-permission-failed")?;

@@ -47,7 +47,10 @@ The interview decisions and remaining page-compatibility check are mapped in the
 
 P1-M6 writes versioned, content-free server records beneath the Git-ignored
 `.local/logs/control-api/` directory. Codex and Claude Code may inspect only
-that log directory for diagnosis; do not change its permissions and do not
+that log directory for diagnosis; do not change its permissions, do not run
+commands with it as the working directory (an instrumented binary then drops
+a stray `default.profraw` there, and startup refuses the unrecognized entry
+with `diagnostic-unrecognized-entry`), and do not
 read the separate Application Support runtime directory or its control token.
 Keep inspection bounded, for example:
 
@@ -55,6 +58,12 @@ Keep inspection bounded, for example:
 tail -n 200 .local/logs/control-api/control-api.log
 rg 'level=(WARN|ERROR)' .local/logs/control-api/
 ```
+
+Failed-job `reason` tokens name the exact failed check, and Debug-level
+`component=assistant event=snapshot` records describe workflow state with flags,
+counts, and keyed correlation tags (details in the architecture doc). The tag
+key file `diagnostic-tag-key` is in the Application Support directory; do not
+read it.
 
 Records use `ndlog-v1` with typed ASCII fields. Treat diary text, source
 metadata or paths, credentials, request data, and arbitrary errors in a record

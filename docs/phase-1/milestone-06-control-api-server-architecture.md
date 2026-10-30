@@ -237,7 +237,7 @@ at most 64 ASCII bytes, and contain only letters, digits, `.`, `_`, `:`, or
 numeric duration, status, and capacity values, but the logging API does not
 accept free-form messages, unknown keys, or `Display`/`Debug` objects. In
 particular, never log diary/source text, front matter, dates or source
-references, private paths, filenames, request targets or query strings,
+references (the one exception is a keyed correlation tag, below), private paths, filenames, request targets or query strings,
 headers, bodies, tokens, credentials, runtime-file contents, model/provider
 payloads, platform error descriptions, or arbitrary error chains. Route
 diagnostics use a predefined route-template code and stable outcome code rather
@@ -245,11 +245,57 @@ than the raw URL or error. Reject every value that cannot satisfy the grammar;
 never escape private input into a line. The same sanitization applies to the
 limited warning/error records mirrored to standard error.
 
+Failed jobs log the exact failed check as `reason`: `CommandError::
+diagnostic_code()` gives every `WorkflowError` its own token (for example
+`reviewed-memory-required`), while the HTTP `code()` keeps folding the long tail
+into `workflow-conflict`. At Debug level each assistant job also writes
+`component=assistant event=snapshot` when it starts and when it fails, with only
+closed tokens, `0`/`1` flags, counts, and two keyed tags: `kind`, `phase`
+(`start` or `failed`), `state`, `revision`, `selected`, `selection_digest`,
+`language`, `reviewed_memory` (`absent`, `current`, or `stale`), `memory_sets`,
+`drafts`, `draft_ranges` (reflection ranges in the latest draft),
+`entry_markers` (reflection-marker characters in the entry buffer), `sources`,
+`snapshots`, `workflow`, and `backend`. A tag is the first
+four bytes (8 hex digits) of HMAC-SHA256 over a domain label and the resource's
+identifier (`workflow` over the day, `backend` over the backend alias). The 32-byte key is random, lives in
+`<application support>/diagnostic-tag-key` (mode 0600, created on first start,
+never under the log directory), and persists across restarts, so one resource
+keeps one tag. A bare SHA-256 would not do: the inputs are few and guessable,
+so anyone reading the log could recover them by trying candidates. Tags are
+correlation handles only; do not publish or compare them across installs.
+
+**Log compatibility contract.** The writer is strict: it emits only the closed
+vocabulary of the records above. The startup reader is tolerant, because it
+re-validates every retained segment, which an older or newer build may have
+written, and a rejected record would stop the server from ever starting again.
+It always rejects corruption: an over-long line, a malformed header, a key or
+value outside the token charset (so free text can never be accepted), duplicate
+keys, and, for a record it knows, a missing required key or a value of the
+wrong type. It accepts and counts as `unrecognized` a newer `ndlog-vN` version,
+an unknown component, event, or level, unknown extra keys, and values outside a
+known vocabulary; it accepts and counts as `legacy` a known record that lacks
+optional keys. Key order is not significant. So adding a record, an optional
+key, or a vocabulary value is compatible; changing a key's type, or removing or
+newly requiring a key, needs a new `ndlog` version. A new optional key goes in
+the record's `KeySpec` table in `diagnostics.rs`, after the required keys.
+
+At startup the server writes `component=diagnostics event=validated` with the
+counts `segments`, `records`, `legacy`, and `unrecognized` (Debug, or Warn when
+`unrecognized` is nonzero, which is expected after a downgrade). Private-state
+schema migration writes `component=store` records: `migration-current` (already
+up to date), `migration-started`, `migration-step`, `migration-finished`, and
+`migration-failed`, each with `from`, `to`, and `duration_ms`, and a closed
+`reason` on failure (`unsupported-schema`, `step-failed`, `migration-gap`,
+`schema-validation-failed`). Failures log at Error, completion at Info, the rest
+at Debug. Migrations are append-only and table-driven; each commits atomically
+with its version bump after re-reading the stored version under the write lock,
+and a database newer than the build is refused untouched.
+
 Keep an active `control-api.log`; atomically close and rename it at a UTC-day
 change in either direction or before it would exceed 8 MiB. On startup,
 validate complete records and truncate only an incomplete trailing record back
-to the last LF before appending; a malformed complete record or unsafe closed
-segment fails initialization rather than being silently reinterpreted. Rotated
+to the last LF before appending; a corrupt complete record (see the compatibility
+contract) or unsafe closed segment fails initialization rather than being silently reinterpreted. Rotated
 names contain only the rotation Unix timestamp plus a collision sequence and
 are created with `create_new`, so restart or clock rollback cannot overwrite a
 segment. Run

@@ -57,3 +57,6 @@ check:
 	cargo test --all-features --quiet
 	swift build --package-path helpers/apple-bridge
 	swift test --package-path helpers/apple-bridge
+
+tail-debug-log:
+	tail -f .local/logs/control-api/control-api.log

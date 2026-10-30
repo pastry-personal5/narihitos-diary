@@ -30,7 +30,7 @@ use tokio::net::TcpListener;
 use tokio::sync::{Semaphore, mpsc, oneshot};
 
 use crate::commands::{CommandError, CommandService};
-use crate::diagnostics::{DiagnosticEvent, DiagnosticLevel, DiagnosticLog};
+use crate::diagnostics::{AssistantSnapshot, DiagnosticEvent, DiagnosticLevel, DiagnosticLog};
 use crate::lifecycle::random_id;
 
 const JOB_EXPIRY_MS: i64 = 10 * 60 * 1000;
@@ -1960,7 +1960,7 @@ async fn run_discovery_job(
                 Some(100),
             );
         }
-        Ok(Err(error)) => fail_job(&state, &job_id, error.code()),
+        Ok(Err(error)) => fail_job(&state, &job_id, error.diagnostic_code()),
         Err(_) => fail_job(&state, &job_id, "internal-failure"),
     }
 }
@@ -1987,6 +1987,18 @@ enum AssistantJob {
     },
 }
 
+impl AssistantJob {
+    /// The `Job.kind` token, shared with the job's own lifecycle records.
+    const fn kind(&self) -> &'static str {
+        match self {
+            Self::Extract { .. } => "assistant-memory-extraction",
+            Self::Draft { .. } => "assistant-draft",
+            Self::Paragraph { .. } => "assistant-paragraph-review",
+            Self::Refine { .. } => "assistant-source-refine",
+        }
+    }
+}
+
 async fn run_assistant_job(
     state: AppState,
     job_id: String,
@@ -2004,6 +2016,9 @@ async fn run_assistant_job(
         fail_job(&state, &job_id, "internal-failure");
         return;
     };
+    let kind = operation.kind();
+    log_assistant_snapshot(&state, kind, "start", &day).await;
+    let snapshot_day = day.clone();
     let service = state.0.config.commands.clone();
     let registry = Arc::clone(&state.0.config.assistant_registry);
     let commit_for_worker = Arc::clone(&commit_state);
@@ -2112,9 +2127,43 @@ async fn run_assistant_job(
                 Some(100),
             );
         }
-        Ok(Err(error)) => fail_job(&state, &job_id, error.code()),
+        Ok(Err(error)) => {
+            log_assistant_snapshot(&state, kind, "failed", &snapshot_day).await;
+            fail_job(&state, &job_id, error.diagnostic_code());
+        }
         Err(_) => fail_job(&state, &job_id, "internal-failure"),
     }
+}
+
+/// Best-effort Debug-level snapshot of the workflow an assistant job runs
+/// against. Reads on a blocking thread because the store is synchronous
+/// SQLite.
+async fn log_assistant_snapshot(
+    state: &AppState,
+    kind: &'static str,
+    phase: &'static str,
+    day: &DiaryDay,
+) {
+    let Some(log) = state.0.config.diagnostics.clone() else {
+        return;
+    };
+    if !log.enabled(DiagnosticLevel::Debug) {
+        return;
+    }
+    let service = state.0.config.commands.clone();
+    let day = day.clone();
+    let _ = tokio::task::spawn_blocking(move || {
+        let Ok(workflow) = service.load_workflow(&day) else {
+            return;
+        };
+        if let Some(snapshot) = AssistantSnapshot::capture(&log, &workflow, kind, phase) {
+            let _ = log.write(
+                DiagnosticLevel::Debug,
+                DiagnosticEvent::AssistantState(snapshot),
+            );
+        }
+    })
+    .await;
 }
 
 fn assistant_job_state(state: &AppState, id: &str) -> Option<(Arc<AtomicU8>, Arc<AtomicBool>)> {
@@ -2211,7 +2260,7 @@ async fn run_prepare_job(
                 Some(100),
             );
         }
-        Ok(Ok(Err(error))) => fail_job(&state, &job_id, error.code()),
+        Ok(Ok(Err(error))) => fail_job(&state, &job_id, error.diagnostic_code()),
         // The blocking task panicked or was aborted: not a timeout.
         Ok(Err(_)) => fail_job(&state, &job_id, "internal-failure"),
         Err(_) => fail_job(&state, &job_id, "job-timeout"),

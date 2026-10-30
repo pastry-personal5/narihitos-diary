@@ -4,6 +4,11 @@ use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
+use diary_core::Workflow;
+use diary_core::workflow::{INFERRED_REFLECTION_CLOSE, INFERRED_REFLECTION_OPEN};
+
+use crate::diagnostic_tags::{DiagnosticTag, DiagnosticTagger};
+
 const ACTIVE_NAME: &str = "control-api.log";
 const MAX_RECORD_BYTES: usize = 1024;
 const SEGMENT_BYTES: u64 = 8 * 1024 * 1024;
@@ -89,13 +94,142 @@ pub enum DiagnosticEvent {
     /// to diagnose a `preparation-expired`/`preparation-binding-changed`
     /// rejection. Never the handle value itself, workflow day, or source IDs.
     Preparation { event: &'static str },
+    /// A content-free picture of a workflow at an assistant job's start or
+    /// failure, so a rejection such as `reviewed-memory-required` can be
+    /// matched to the state that caused it. Only closed tokens, booleans,
+    /// counts, and keyed [`DiagnosticTag`]s — never the day, a source, a
+    /// backend alias, or any text.
+    AssistantState(AssistantSnapshot),
+    /// Private-state schema migration progress at startup: `current`,
+    /// `started`, `step`, `finished`, or `failed`. `from`/`to` are schema
+    /// versions; `reason` is set only on `failed`, and only to a compiled-in
+    /// token (never SQL text, a path, or stored data).
+    /// Startup's tally of the retained segments it validated; counts only.
+    Validation(ValidationReport),
+    Migration {
+        event: &'static str,
+        from: u32,
+        to: u32,
+        duration_ms: u64,
+        reason: Option<&'static str>,
+    },
 }
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct AssistantSnapshot {
+    /// One of the four `assistant-*` job kinds.
+    pub kind: &'static str,
+    /// `start` or `failed`.
+    pub phase: &'static str,
+    pub workflow: DiagnosticTag,
+    /// `None` when no assistant is selected.
+    pub backend: Option<DiagnosticTag>,
+    /// `WorkflowState::as_str`.
+    pub state: &'static str,
+    pub revision: u64,
+    pub selected: bool,
+    pub selection_digest: bool,
+    /// `none`, `en-US`, or `ko-KR`.
+    pub language: &'static str,
+    /// `absent`, `current`, or `stale`.
+    pub reviewed_memory: &'static str,
+    pub memory_sets: u64,
+    pub drafts: u64,
+    /// Reflection ranges in the latest draft: nonzero means its stored text
+    /// carries markers.
+    pub draft_ranges: u64,
+    /// Reflection-marker characters in the entry buffer: nonzero means a
+    /// paragraph review target can contain markers.
+    pub entry_markers: u64,
+    pub sources: u64,
+    pub snapshots: u64,
+}
+
+impl AssistantSnapshot {
+    /// Summarizes `workflow` for `kind`/`phase`. `None` when `log` has no tag
+    /// key, because an untagged snapshot could not be correlated.
+    #[must_use]
+    pub fn capture(
+        log: &DiagnosticLog,
+        workflow: &Workflow,
+        kind: &'static str,
+        phase: &'static str,
+    ) -> Option<Self> {
+        let selection = workflow.assistant_selection();
+        Some(Self {
+            kind,
+            phase,
+            workflow: log.tag("workflow", workflow.day().as_str().as_bytes())?,
+            backend: match selection {
+                Some(selection) => {
+                    Some(log.tag("backend", selection.backend_id.as_str().as_bytes())?)
+                }
+                None => None,
+            },
+            state: workflow.state().as_str(),
+            revision: workflow.revision(),
+            selected: selection.is_some(),
+            selection_digest: workflow.selection_digest().is_some(),
+            language: workflow
+                .language()
+                .map_or("none", |language| language.as_str()),
+            reviewed_memory: match workflow.reviewed_memory_artifact() {
+                None => "absent",
+                Some(artifact) if artifact.stale => "stale",
+                Some(_) => "current",
+            },
+            memory_sets: workflow.memory_candidate_sets().len() as u64,
+            drafts: workflow.draft_proposals().len() as u64,
+            draft_ranges: workflow
+                .draft_proposals()
+                .last()
+                .map_or(0, |draft| draft.reflection_ranges.len() as u64),
+            entry_markers: workflow
+                .entry()
+                .text
+                .chars()
+                .filter(|c| matches!(*c, INFERRED_REFLECTION_OPEN | INFERRED_REFLECTION_CLOSE))
+                .count() as u64,
+            sources: workflow.candidates().len() as u64,
+            snapshots: workflow.snapshots().len() as u64,
+        })
+    }
+}
+
+const ASSISTANT_KINDS: [&str; 4] = [
+    "assistant-memory-extraction",
+    "assistant-draft",
+    "assistant-paragraph-review",
+    "assistant-source-refine",
+];
+const WORKFLOW_STATES: [&str; 10] = [
+    "started",
+    "discovered",
+    "sources-confirmed",
+    "composing",
+    "entry-confirmed",
+    "output-planned",
+    "approved",
+    "publishing",
+    "completed",
+    "partial",
+];
+/// The closed `reason` vocabulary of a `migration-failed` record, mirrored
+/// from the store's `MigrationEvent::Failed`.
+const MIGRATION_FAILURE_REASONS: [&str; 4] = [
+    "unsupported-schema",
+    "step-failed",
+    "migration-gap",
+    "schema-validation-failed",
+];
 
 pub struct DiagnosticLog {
     root: PathBuf,
     expected_uid: u32,
     clock: Arc<dyn LogClock>,
     min_level: DiagnosticLevel,
+    tagger: Option<DiagnosticTagger>,
+    report: ValidationReport,
     state: Mutex<State>,
 }
 
@@ -129,11 +263,12 @@ impl DiagnosticLog {
     ) -> Result<Self, DiagnosticError> {
         let root = root.as_ref().to_path_buf();
         ensure_private_directory(&root, expected_uid)?;
-        validate_directory_entries(&root, expected_uid)?;
+        let mut report = ValidationReport::default();
+        scan_directory_entries(&root, expected_uid, &mut report)?;
         maintain(&root, expected_uid, clock.now_unix_ms())?;
         let active = root.join(ACTIVE_NAME);
         let mut file = open_private_regular(&active, expected_uid)?;
-        let (bytes, last_timestamp) = repair_and_validate_active(&mut file)?;
+        let (bytes, last_timestamp) = repair_and_validate_active(&mut file, &mut report)?;
         let now = clock.now_unix_ms();
         let day = if bytes == 0 {
             now / DAY_MS
@@ -147,6 +282,8 @@ impl DiagnosticLog {
             expected_uid,
             clock,
             min_level,
+            tagger: None,
+            report,
             state: Mutex::new(State {
                 file,
                 bytes,
@@ -155,6 +292,36 @@ impl DiagnosticLog {
                 sequence: 0,
             }),
         })
+    }
+
+    /// Enables [`Self::tag`] with the persistent private key.
+    #[must_use]
+    pub fn with_tag_key(mut self, key: [u8; 32]) -> Self {
+        self.tagger = Some(DiagnosticTagger::new(key));
+        self
+    }
+
+    /// What startup found while validating the retained segments: how many
+    /// were scanned, and how many records were `legacy` (older shape) or
+    /// `unrecognized` (newer or unknown to this build). A nonzero
+    /// `unrecognized` after a downgrade is expected and harmless.
+    #[must_use]
+    pub const fn validation_report(&self) -> ValidationReport {
+        self.report
+    }
+
+    /// A keyed correlation tag for `value`, or `None` when no key was
+    /// installed (tags are then simply omitted, never faked).
+    #[must_use]
+    pub fn tag(&self, domain: &'static str, value: &[u8]) -> Option<DiagnosticTag> {
+        self.tagger.as_ref().map(|tagger| tagger.tag(domain, value))
+    }
+
+    /// Whether a record at `level` would be written, letting callers skip the
+    /// work of building one.
+    #[must_use]
+    pub fn enabled(&self, level: DiagnosticLevel) -> bool {
+        level >= self.min_level
     }
 
     pub fn write(
@@ -281,6 +448,51 @@ fn encode(
             }
             ("job", event, fields)
         }
+        DiagnosticEvent::Validation(report) => (
+            "diagnostics",
+            "validated",
+            vec![
+                ("legacy", report.legacy.to_string()),
+                ("records", report.records.to_string()),
+                ("segments", report.segments.to_string()),
+                ("unrecognized", report.unrecognized.to_string()),
+            ],
+        ),
+        DiagnosticEvent::Migration {
+            event,
+            from,
+            to,
+            duration_ms,
+            reason,
+        } => {
+            if !matches!(
+                event,
+                "current" | "started" | "step" | "finished" | "failed"
+            ) || reason.is_some() != (event == "failed")
+                || reason.is_some_and(|reason| !MIGRATION_FAILURE_REASONS.contains(&reason))
+            {
+                return Err(DiagnosticError::InvalidRecord);
+            }
+            let mut fields = vec![
+                ("duration_ms", duration_ms.to_string()),
+                ("from", from.to_string()),
+            ];
+            if let Some(reason) = reason {
+                fields.push(("reason", reason.to_owned()));
+            }
+            fields.push(("to", to.to_string()));
+            (
+                "store",
+                match event {
+                    "current" => "migration-current",
+                    "started" => "migration-started",
+                    "step" => "migration-step",
+                    "finished" => "migration-finished",
+                    _ => "migration-failed",
+                },
+                fields,
+            )
+        }
         DiagnosticEvent::Preparation { event } => {
             if !matches!(
                 event,
@@ -289,6 +501,44 @@ fn encode(
                 return Err(DiagnosticError::InvalidRecord);
             }
             ("preparation", event, Vec::new())
+        }
+        DiagnosticEvent::AssistantState(snapshot) => {
+            if !ASSISTANT_KINDS.contains(&snapshot.kind)
+                || !matches!(snapshot.phase, "start" | "failed")
+                || !WORKFLOW_STATES.contains(&snapshot.state)
+                || !matches!(snapshot.language, "none" | "en-US" | "ko-KR")
+                || !matches!(snapshot.reviewed_memory, "absent" | "current" | "stale")
+            {
+                return Err(DiagnosticError::InvalidRecord);
+            }
+            let flag = |value: bool| u8::from(value).to_string();
+            (
+                "assistant",
+                "snapshot",
+                vec![
+                    (
+                        "backend",
+                        snapshot
+                            .backend
+                            .map_or_else(|| "none".to_owned(), |tag| tag.as_str().to_owned()),
+                    ),
+                    ("draft_ranges", snapshot.draft_ranges.to_string()),
+                    ("drafts", snapshot.drafts.to_string()),
+                    ("entry_markers", snapshot.entry_markers.to_string()),
+                    ("kind", snapshot.kind.to_owned()),
+                    ("language", snapshot.language.to_owned()),
+                    ("memory_sets", snapshot.memory_sets.to_string()),
+                    ("phase", snapshot.phase.to_owned()),
+                    ("reviewed_memory", snapshot.reviewed_memory.to_owned()),
+                    ("revision", snapshot.revision.to_string()),
+                    ("selected", flag(snapshot.selected)),
+                    ("selection_digest", flag(snapshot.selection_digest)),
+                    ("snapshots", snapshot.snapshots.to_string()),
+                    ("sources", snapshot.sources.to_string()),
+                    ("state", snapshot.state.to_owned()),
+                    ("workflow", snapshot.workflow.as_str().to_owned()),
+                ],
+            )
         }
     };
     for token in [component, event_code] {
@@ -375,6 +625,14 @@ fn open_private_regular(path: &Path, expected_uid: u32) -> Result<File, Diagnost
 }
 
 fn validate_directory_entries(root: &Path, expected_uid: u32) -> Result<(), DiagnosticError> {
+    scan_directory_entries(root, expected_uid, &mut ValidationReport::default())
+}
+
+fn scan_directory_entries(
+    root: &Path,
+    expected_uid: u32,
+    report: &mut ValidationReport,
+) -> Result<(), DiagnosticError> {
     for entry in fs::read_dir(root).map_err(|_| DiagnosticError::Io)? {
         let entry = entry.map_err(|_| DiagnosticError::Io)?;
         let name = entry.file_name();
@@ -392,13 +650,17 @@ fn validate_directory_entries(root: &Path, expected_uid: u32) -> Result<(), Diag
             return Err(DiagnosticError::UnsafePath);
         }
         if name != ACTIVE_NAME {
-            let _ = validate_closed_segment(&entry.path())?;
+            let _ = scan_closed_segment(&entry.path(), report)?;
         }
     }
     Ok(())
 }
 
 fn validate_closed_segment(path: &Path) -> Result<u64, DiagnosticError> {
+    scan_closed_segment(path, &mut ValidationReport::default())
+}
+
+fn scan_closed_segment(path: &Path, report: &mut ValidationReport) -> Result<u64, DiagnosticError> {
     let mut file = File::open(path).map_err(|_| DiagnosticError::Io)?;
     let mut bytes = Vec::new();
     Read::by_ref(&mut file)
@@ -409,14 +671,20 @@ fn validate_closed_segment(path: &Path) -> Result<u64, DiagnosticError> {
         return Err(DiagnosticError::InvalidRecord);
     }
     let text = std::str::from_utf8(&bytes).map_err(|_| DiagnosticError::InvalidRecord)?;
+    report.segments += 1;
     let mut last_timestamp = 0;
     for line in text.lines() {
-        last_timestamp = last_timestamp.max(validate_line(line)?);
+        let info = validate_line(line)?;
+        report.note(info.class);
+        last_timestamp = last_timestamp.max(info.timestamp);
     }
     Ok(last_timestamp)
 }
 
-fn repair_and_validate_active(file: &mut File) -> Result<(u64, u64), DiagnosticError> {
+fn repair_and_validate_active(
+    file: &mut File,
+    report: &mut ValidationReport,
+) -> Result<(u64, u64), DiagnosticError> {
     file.seek(SeekFrom::Start(0))
         .map_err(|_| DiagnosticError::Io)?;
     let mut bytes = Vec::new();
@@ -438,109 +706,312 @@ fn repair_and_validate_active(file: &mut File) -> Result<(u64, u64), DiagnosticE
         file.set_len(0).map_err(|_| DiagnosticError::Io)?;
     }
     let text = std::str::from_utf8(&bytes).map_err(|_| DiagnosticError::InvalidRecord)?;
+    report.segments += 1;
     let mut last = 0;
     for line in text.lines() {
-        last = validate_line(line)?;
+        let info = validate_line(line)?;
+        report.note(info.class);
+        last = info.timestamp;
     }
     Ok((bytes.len() as u64, last))
 }
 
-fn validate_line(line: &str) -> Result<u64, DiagnosticError> {
+/// How a record that passed validation relates to what this build writes.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum RecordClass {
+    /// Matches a record this build writes.
+    Current,
+    /// A known record that predates one or more of its optional keys.
+    Legacy,
+    /// Well-formed but not fully understood by this build: a newer `ndlog`
+    /// version, an unknown component or event, an unknown key, or a value
+    /// outside a vocabulary this build knows.
+    Unrecognized,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct LineInfo {
+    timestamp: u64,
+    class: RecordClass,
+}
+
+/// Counts gathered while startup validates every retained segment; see
+/// [`DiagnosticLog::validation_report`].
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct ValidationReport {
+    pub segments: u64,
+    pub records: u64,
+    pub legacy: u64,
+    pub unrecognized: u64,
+}
+
+impl ValidationReport {
+    fn note(&mut self, class: RecordClass) {
+        self.records += 1;
+        match class {
+            RecordClass::Current => {}
+            RecordClass::Legacy => self.legacy += 1,
+            RecordClass::Unrecognized => self.unrecognized += 1,
+        }
+    }
+}
+
+/// What a key's value must look like. Types are part of the format contract
+/// (changing one needs a new `ndlog` version); vocabularies are not, so a
+/// value outside a [`ValueKind::Vocab`] is tolerated and counted as
+/// unrecognized rather than rejected.
+#[derive(Clone, Copy)]
+enum ValueKind {
+    Number,
+    Flag,
+    Tag,
+    TagOrNone,
+    Token,
+    Vocab(fn(&str) -> bool),
+}
+
+enum ValueCheck {
+    Valid,
+    Unknown,
+    Invalid,
+}
+
+impl ValueKind {
+    fn check(self, value: &str) -> ValueCheck {
+        let valid = match self {
+            Self::Number => value.parse::<u64>().is_ok(),
+            Self::Flag => matches!(value, "0" | "1"),
+            Self::Tag => valid_tag(value),
+            Self::TagOrNone => value == "none" || valid_tag(value),
+            Self::Token => true,
+            Self::Vocab(known) => {
+                return if known(value) {
+                    ValueCheck::Valid
+                } else {
+                    ValueCheck::Unknown
+                };
+            }
+        };
+        if valid {
+            ValueCheck::Valid
+        } else {
+            ValueCheck::Invalid
+        }
+    }
+}
+
+struct KeySpec {
+    name: &'static str,
+    kind: ValueKind,
+    required: bool,
+}
+
+const fn required(name: &'static str, kind: ValueKind) -> KeySpec {
+    KeySpec {
+        name,
+        kind,
+        required: true,
+    }
+}
+
+const fn optional(name: &'static str, kind: ValueKind) -> KeySpec {
+    KeySpec {
+        name,
+        kind,
+        required: false,
+    }
+}
+
+fn vocab_job_kind(value: &str) -> bool {
+    matches!(value, "discovery" | "source-preparation") || ASSISTANT_KINDS.contains(&value)
+}
+
+fn vocab_assistant_kind(value: &str) -> bool {
+    ASSISTANT_KINDS.contains(&value)
+}
+
+fn vocab_phase(value: &str) -> bool {
+    matches!(value, "start" | "failed")
+}
+
+fn vocab_state(value: &str) -> bool {
+    WORKFLOW_STATES.contains(&value)
+}
+
+fn vocab_language(value: &str) -> bool {
+    matches!(value, "none" | "en-US" | "ko-KR")
+}
+
+fn vocab_reviewed_memory(value: &str) -> bool {
+    matches!(value, "absent" | "current" | "stale")
+}
+
+fn vocab_migration_reason(value: &str) -> bool {
+    MIGRATION_FAILURE_REASONS.contains(&value)
+}
+
+const HTTP_SPEC: &[KeySpec] = &[
+    required("duration_ms", ValueKind::Number),
+    required("outcome", ValueKind::Vocab(valid_http_outcome)),
+    required("route", ValueKind::Vocab(valid_http_route)),
+    required("status", ValueKind::Number),
+];
+const CAPACITY_SPEC: &[KeySpec] = &[
+    required("current", ValueKind::Number),
+    required("limit", ValueKind::Number),
+];
+const JOB_SPEC: &[KeySpec] = &[
+    required("kind", ValueKind::Vocab(vocab_job_kind)),
+    optional("reason", ValueKind::Token),
+];
+const SNAPSHOT_SPEC: &[KeySpec] = &[
+    required("backend", ValueKind::TagOrNone),
+    required("drafts", ValueKind::Number),
+    required("kind", ValueKind::Vocab(vocab_assistant_kind)),
+    required("language", ValueKind::Vocab(vocab_language)),
+    required("memory_sets", ValueKind::Number),
+    required("phase", ValueKind::Vocab(vocab_phase)),
+    required("reviewed_memory", ValueKind::Vocab(vocab_reviewed_memory)),
+    required("revision", ValueKind::Number),
+    required("selected", ValueKind::Flag),
+    required("selection_digest", ValueKind::Flag),
+    required("snapshots", ValueKind::Number),
+    required("sources", ValueKind::Number),
+    required("state", ValueKind::Vocab(vocab_state)),
+    required("workflow", ValueKind::Tag),
+    // Added after the record first shipped; older segments omit them.
+    optional("draft_ranges", ValueKind::Number),
+    optional("entry_markers", ValueKind::Number),
+];
+const MIGRATION_SPEC: &[KeySpec] = &[
+    required("duration_ms", ValueKind::Number),
+    required("from", ValueKind::Number),
+    required("to", ValueKind::Number),
+    optional("reason", ValueKind::Vocab(vocab_migration_reason)),
+];
+const VALIDATION_SPEC: &[KeySpec] = &[
+    required("legacy", ValueKind::Number),
+    required("records", ValueKind::Number),
+    required("segments", ValueKind::Number),
+    required("unrecognized", ValueKind::Number),
+];
+
+/// The keys of every record this build writes, by `(component, event)`.
+fn record_spec(component: &str, event: &str) -> Option<&'static [KeySpec]> {
+    match (component, event) {
+        ("server", "startup" | "ready" | "shutdown")
+        | ("preparation", "issued" | "consumed" | "expired" | "binding-mismatch") => Some(&[]),
+        ("http", "request") => Some(HTTP_SPEC),
+        ("jobs" | "events" | "requests" | "diagnostics", "saturated" | "maintenance") => {
+            Some(CAPACITY_SPEC)
+        }
+        ("job", "accepted" | "running" | "completed" | "failed" | "cancelled") => Some(JOB_SPEC),
+        ("assistant", "snapshot") => Some(SNAPSHOT_SPEC),
+        (
+            "store",
+            "migration-current" | "migration-started" | "migration-step" | "migration-finished"
+            | "migration-failed",
+        ) => Some(MIGRATION_SPEC),
+        ("diagnostics", "validated") => Some(VALIDATION_SPEC),
+        _ => None,
+    }
+}
+
+/// Validates one stored record. The writer ([`encode`]) is strict and only
+/// emits the closed vocabulary above; this reader runs at every startup over
+/// segments that an older or newer build may have written, so it is tolerant:
+///
+/// * Always rejected (corruption): over-long lines, a malformed header, a
+///   non-token key or value, duplicate keys, and, for a record this build
+///   knows, a missing required key or a value of the wrong type.
+/// * Tolerated and counted as `unrecognized`: a newer `ndlog` version, an
+///   unknown component, event, or level, unknown extra keys, and values
+///   outside a known vocabulary. Key order is not significant.
+/// * Tolerated and counted as `legacy`: a known record missing optional keys.
+///
+/// Token charset and size limits still hold for everything accepted, so the
+/// no-free-text guarantee does not depend on this reader recognizing a record.
+fn validate_line(line: &str) -> Result<LineInfo, DiagnosticError> {
     if line.len() + 1 > MAX_RECORD_BYTES {
         return Err(DiagnosticError::InvalidRecord);
     }
     let fields: Vec<_> = line.split(' ').collect();
-    if fields.len() < 5 || fields[0] != "ndlog-v1" {
+    if fields.len() < 5 {
         return Err(DiagnosticError::InvalidRecord);
     }
+    let version = fields[0]
+        .strip_prefix("ndlog-v")
+        .filter(|digits| (1..=4).contains(&digits.len()))
+        .filter(|digits| digits.bytes().all(|byte| byte.is_ascii_digit()))
+        .and_then(|digits| digits.parse::<u32>().ok())
+        .filter(|version| *version >= 1)
+        .ok_or(DiagnosticError::InvalidRecord)?;
     let timestamp = fields[1]
         .strip_prefix("ts_unix_ms=")
         .and_then(|value| value.parse().ok())
         .ok_or(DiagnosticError::InvalidRecord)?;
-    if !matches!(
-        fields[2],
-        "level=TRACE" | "level=DEBUG" | "level=INFO" | "level=WARN" | "level=ERROR"
-    ) {
-        return Err(DiagnosticError::InvalidRecord);
-    }
-    for field in fields.iter().skip(3) {
-        let (key, value) = field
-            .split_once('=')
-            .ok_or(DiagnosticError::InvalidRecord)?;
-        validate_token(key)?;
-        validate_token(value)?;
-    }
+    let level = fields[2]
+        .strip_prefix("level=")
+        .ok_or(DiagnosticError::InvalidRecord)?;
     let component = fields[3]
         .strip_prefix("component=")
         .ok_or(DiagnosticError::InvalidRecord)?;
     let event = fields[4]
         .strip_prefix("event=")
         .ok_or(DiagnosticError::InvalidRecord)?;
-    match (component, event) {
-        ("server", "startup" | "ready" | "shutdown") if fields.len() == 5 => {}
-        ("http", "request") if fields.len() == 9 => {
-            fields[5]
-                .strip_prefix("duration_ms=")
-                .and_then(|value| value.parse::<u64>().ok())
-                .ok_or(DiagnosticError::InvalidRecord)?;
-            let outcome = fields[6]
-                .strip_prefix("outcome=")
-                .filter(|value| valid_http_outcome(value))
-                .ok_or(DiagnosticError::InvalidRecord)?;
-            let route = fields[7]
-                .strip_prefix("route=")
-                .filter(|value| valid_http_route(value))
-                .ok_or(DiagnosticError::InvalidRecord)?;
-            fields[8]
-                .strip_prefix("status=")
-                .and_then(|value| value.parse::<u16>().ok())
-                .filter(|status| (100..=599).contains(status))
-                .ok_or(DiagnosticError::InvalidRecord)?;
-            let _ = (outcome, route);
-        }
-        ("jobs" | "events" | "requests" | "diagnostics", "saturated" | "maintenance")
-            if fields.len() == 7 =>
+    for value in [level, component, event] {
+        validate_token(value)?;
+    }
+    let mut pairs: Vec<(&str, &str)> = Vec::with_capacity(fields.len() - 5);
+    for field in &fields[5..] {
+        let (key, value) = field
+            .split_once('=')
+            .ok_or(DiagnosticError::InvalidRecord)?;
+        validate_token(key)?;
+        validate_token(value)?;
+        if matches!(key, "ts_unix_ms" | "level" | "component" | "event")
+            || pairs.iter().any(|(seen, _)| *seen == key)
         {
-            fields[5]
-                .strip_prefix("current=")
-                .and_then(|value| value.parse::<u64>().ok())
-                .ok_or(DiagnosticError::InvalidRecord)?;
-            fields[6]
-                .strip_prefix("limit=")
-                .and_then(|value| value.parse::<u64>().ok())
-                .ok_or(DiagnosticError::InvalidRecord)?;
+            return Err(DiagnosticError::InvalidRecord);
         }
-        ("job", "accepted" | "running" | "completed" | "failed" | "cancelled")
-            if matches!(fields.len(), 6 | 7) =>
-        {
-            fields[5]
-                .strip_prefix("kind=")
-                .filter(|value| {
-                    matches!(
-                        *value,
-                        "discovery"
-                            | "source-preparation"
-                            | "assistant-memory-extraction"
-                            | "assistant-draft"
-                            | "assistant-paragraph-review"
-                            | "assistant-source-refine"
-                    )
-                })
-                .ok_or(DiagnosticError::InvalidRecord)?;
-            if let Some(field) = fields.get(6) {
-                if event != "failed" {
-                    return Err(DiagnosticError::InvalidRecord);
+        pairs.push((key, value));
+    }
+
+    let mut unrecognized =
+        version != 1 || !matches!(level, "TRACE" | "DEBUG" | "INFO" | "WARN" | "ERROR");
+    let mut legacy = false;
+    if version == 1 {
+        match record_spec(component, event) {
+            None => unrecognized = true,
+            Some(spec) => {
+                for key in spec {
+                    match pairs.iter().find(|(name, _)| *name == key.name) {
+                        Some((_, value)) => match key.kind.check(value) {
+                            ValueCheck::Valid => {}
+                            ValueCheck::Unknown => unrecognized = true,
+                            ValueCheck::Invalid => return Err(DiagnosticError::InvalidRecord),
+                        },
+                        None if key.required => return Err(DiagnosticError::InvalidRecord),
+                        None => legacy = true,
+                    }
                 }
-                field
-                    .strip_prefix("reason=")
-                    .ok_or(DiagnosticError::InvalidRecord)?;
+                if pairs
+                    .iter()
+                    .any(|(name, _)| !spec.iter().any(|key| key.name == *name))
+                {
+                    unrecognized = true;
+                }
             }
         }
-        ("preparation", "issued" | "consumed" | "expired" | "binding-mismatch")
-            if fields.len() == 5 => {}
-        _ => return Err(DiagnosticError::InvalidRecord),
     }
-    Ok(timestamp)
+    let class = if unrecognized {
+        RecordClass::Unrecognized
+    } else if legacy {
+        RecordClass::Legacy
+    } else {
+        RecordClass::Current
+    };
+    Ok(LineInfo { timestamp, class })
 }
 
 fn valid_http_route(route: &str) -> bool {
@@ -565,6 +1036,13 @@ fn valid_http_route(route: &str) -> bool {
             | "events"
             | "unknown"
     )
+}
+
+fn valid_tag(value: &str) -> bool {
+    value.len() == 8
+        && value
+            .bytes()
+            .all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f'))
 }
 
 fn valid_http_outcome(outcome: &str) -> bool {
@@ -663,6 +1141,22 @@ pub enum DiagnosticError {
     InvalidRecord,
     Capacity,
     Io,
+}
+
+impl DiagnosticError {
+    /// The startup failure token for this error. Opening the log has several
+    /// distinct ways to fail; a single catch-all token hid which one (for
+    /// example a stray file in the log directory) from whoever read it.
+    #[must_use]
+    pub const fn startup_code(self) -> &'static str {
+        match self {
+            Self::UnsafePath => "diagnostic-path-unsafe",
+            Self::UnrecognizedEntry => "diagnostic-unrecognized-entry",
+            Self::InvalidRecord => "diagnostic-record-invalid",
+            Self::Capacity => "diagnostic-capacity-exceeded",
+            Self::Io => "diagnostic-io-failed",
+        }
+    }
 }
 
 #[cfg(test)]
@@ -880,8 +1374,9 @@ mod tests {
     /// records; the *next* startup re-validates the active segment it left
     /// behind. If that validation doesn't recognize its own `job`/
     /// `preparation` records, the server can never start again after a
-    /// single debug-level run — exactly the `diagnostic-init-failed`
-    /// failure this guards against.
+    /// single debug-level run — exactly the startup failure (then reported as
+    /// `diagnostic-init-failed`, now `diagnostic-record-invalid`) this guards
+    /// against.
     #[test]
     fn job_and_preparation_records_survive_a_reopen() {
         let scratch = Scratch::new("job-reopen");
@@ -957,24 +1452,167 @@ mod tests {
         ));
     }
 
+    fn class_of(line: &str) -> Result<RecordClass, DiagnosticError> {
+        validate_line(line).map(|info| info.class)
+    }
+
+    const HTTP_LINE: &str = "ndlog-v1 ts_unix_ms=1 level=INFO component=http event=request duration_ms=2 outcome=ok route=health status=200";
+    const SNAPSHOT_LINE: &str = "ndlog-v1 ts_unix_ms=2 level=DEBUG component=assistant event=snapshot backend=none drafts=1 kind=assistant-draft language=en-US memory_sets=0 phase=start reviewed_memory=absent revision=1 selected=0 selection_digest=0 snapshots=0 sources=0 state=composing workflow=ba279216";
+
     #[test]
-    fn record_validation_rejects_unknown_or_reordered_fields() {
-        assert!(validate_line(
-            "ndlog-v1 ts_unix_ms=1 level=INFO component=http event=request duration_ms=2 outcome=ok route=health status=200"
-        )
-        .is_ok());
+    fn reader_tolerates_what_a_different_build_may_have_written() {
+        assert_eq!(class_of(HTTP_LINE), Ok(RecordClass::Current));
+        // Key order is not significant.
         assert_eq!(
-            validate_line(
-                "ndlog-v1 ts_unix_ms=1 level=INFO component=http event=request outcome=ok duration_ms=2 route=health status=200"
+            class_of(
+                "ndlog-v1 ts_unix_ms=1 level=INFO component=http event=request status=200 route=health outcome=ok duration_ms=2"
             ),
-            Err(DiagnosticError::InvalidRecord)
+            Ok(RecordClass::Current)
         );
+        // A newer build's extra key, event, component, vocabulary value, level,
+        // or whole format version is accepted and only counted.
+        for line in [
+            format!("{HTTP_LINE} cache=hit"),
+            HTTP_LINE.replace("route=health", "route=a-new-route"),
+            HTTP_LINE.replace("event=request", "event=a-new-event"),
+            HTTP_LINE.replace("component=http", "component=a-new-component"),
+            HTTP_LINE.replace("level=INFO", "level=NOTICE"),
+            HTTP_LINE.replace("ndlog-v1", "ndlog-v2"),
+            "ndlog-v7 ts_unix_ms=9 level=INFO component=x event=y anything=goes".to_owned(),
+        ] {
+            assert_eq!(
+                class_of(&line),
+                Ok(RecordClass::Unrecognized),
+                "rejected {line}"
+            );
+        }
+        // A server record gaining a key is still readable.
         assert_eq!(
-            validate_line(
+            class_of(
                 "ndlog-v1 ts_unix_ms=1 level=INFO component=server event=startup private=value"
             ),
-            Err(DiagnosticError::InvalidRecord)
+            Ok(RecordClass::Unrecognized)
         );
+    }
+
+    #[test]
+    fn every_open_failure_has_its_own_startup_token() {
+        let codes = [
+            DiagnosticError::UnsafePath,
+            DiagnosticError::UnrecognizedEntry,
+            DiagnosticError::InvalidRecord,
+            DiagnosticError::Capacity,
+            DiagnosticError::Io,
+        ]
+        .map(DiagnosticError::startup_code);
+        for (index, code) in codes.iter().enumerate() {
+            assert!(code.starts_with("diagnostic-"));
+            assert!(validate_token(code).is_ok());
+            assert!(!codes[..index].contains(code), "duplicate token {code}");
+        }
+    }
+
+    #[test]
+    fn reader_still_rejects_corruption() {
+        for (why, line) in [
+            ("missing required key", HTTP_LINE.replace(" status=200", "")),
+            ("wrong type", HTTP_LINE.replace("status=200", "status=ok")),
+            (
+                "negative number",
+                HTTP_LINE.replace("status=200", "status=-1"),
+            ),
+            ("duplicate key", format!("{HTTP_LINE} status=201")),
+            ("header key reused", format!("{HTTP_LINE} level=ERROR")),
+            ("no equals sign", format!("{HTTP_LINE} stray")),
+            (
+                "free text value",
+                format!("{HTTP_LINE} note=/Users/me/diary"),
+            ),
+            ("non-ascii value", format!("{HTTP_LINE} note=caf\u{e9}")),
+            (
+                "oversize token",
+                format!("{HTTP_LINE} note={}", "a".repeat(65)),
+            ),
+            (
+                "oversize record",
+                format!("{HTTP_LINE} {}", "k=v ".repeat(300)),
+            ),
+            ("version zero", HTTP_LINE.replace("ndlog-v1", "ndlog-v0")),
+            (
+                "non-numeric version",
+                HTTP_LINE.replace("ndlog-v1", "ndlog-vx"),
+            ),
+            ("unversioned", HTTP_LINE.replace("ndlog-v1", "log")),
+            (
+                "bad timestamp",
+                HTTP_LINE.replace("ts_unix_ms=1", "ts_unix_ms=soon"),
+            ),
+            ("short", "ndlog-v1 ts_unix_ms=1".to_owned()),
+            (
+                "bad flag",
+                SNAPSHOT_LINE.replace("selected=0", "selected=2"),
+            ),
+        ] {
+            assert_eq!(
+                validate_line(&line),
+                Err(DiagnosticError::InvalidRecord),
+                "accepted ({why}) {line}"
+            );
+        }
+    }
+
+    #[test]
+    fn startup_reports_what_it_validated_and_what_it_did_not_recognize() {
+        let scratch = Scratch::new("validation-report");
+        let uid = fs::metadata(scratch.path()).unwrap().uid();
+        let root = scratch.path().join("logs");
+        fs::create_dir(&root).unwrap();
+        fs::set_permissions(&root, fs::Permissions::from_mode(0o700)).unwrap();
+        // The snapshot is a legacy shape (no draft_ranges / entry_markers).
+        let lines = [
+            HTTP_LINE.to_owned(),
+            SNAPSHOT_LINE.to_owned(),
+            format!("{HTTP_LINE} cache=hit"),
+        ];
+        let rotated = root.join("control-api.1.0.log");
+        fs::write(&rotated, format!("{}\n", lines.join("\n"))).unwrap();
+        fs::write(root.join(ACTIVE_NAME), format!("{HTTP_LINE}\n")).unwrap();
+        for path in [&rotated, &root.join(ACTIVE_NAME)] {
+            fs::set_permissions(path, fs::Permissions::from_mode(0o600)).unwrap();
+        }
+
+        let log = DiagnosticLog::open_with_min_level(
+            &root,
+            uid,
+            Arc::new(FixedClock::new(5)),
+            DiagnosticLevel::Debug,
+        )
+        .unwrap();
+        let report = log.validation_report();
+        assert_eq!(
+            report,
+            ValidationReport {
+                segments: 2,
+                records: 4,
+                legacy: 1,
+                unrecognized: 1,
+            }
+        );
+        log.write(DiagnosticLevel::Debug, DiagnosticEvent::Validation(report))
+            .unwrap();
+        let text = fs::read_to_string(root.join(ACTIVE_NAME)).unwrap();
+        assert!(text.contains(
+            "component=diagnostics event=validated legacy=1 records=4 segments=2 unrecognized=1"
+        ));
+        drop(log);
+        // The summary record written above is itself valid on the next start.
+        DiagnosticLog::open_with_min_level(
+            &root,
+            uid,
+            Arc::new(FixedClock::new(6)),
+            DiagnosticLevel::Debug,
+        )
+        .unwrap();
     }
 
     #[test]
@@ -1170,6 +1808,208 @@ mod tests {
         let result = maintain_with_policy(&root, uid, 2, 1, DIRECTORY_BYTES);
         fs::set_permissions(&root, fs::Permissions::from_mode(0o700)).unwrap();
         assert_eq!(result, Err(DiagnosticError::Io));
+    }
+
+    #[test]
+    fn assistant_snapshot_is_content_free_tagged_and_survives_reopen() {
+        use diary_core::{
+            AssistantBackendId, AssistantSelection, CompositionPath, DiaryDay, Preferences,
+            Timestamp,
+        };
+
+        let scratch = Scratch::new("assistant-snapshot");
+        let uid = fs::metadata(scratch.path()).unwrap().uid();
+        let root = scratch.path().join("logs");
+        let log = DiagnosticLog::open_with_min_level(
+            &root,
+            uid,
+            Arc::new(FixedClock::new(1)),
+            DiagnosticLevel::Debug,
+        )
+        .unwrap()
+        .with_tag_key([9; 32]);
+        let mut workflow = Workflow::new(
+            DiaryDay::parse("2026-10-30").unwrap(),
+            Timestamp(0),
+            &Preferences::default(),
+        );
+        let bare = AssistantSnapshot::capture(&log, &workflow, "assistant-draft", "start").unwrap();
+        assert!(bare.backend.is_none());
+        assert!(!bare.selected);
+        assert_eq!(bare.reviewed_memory, "absent");
+        workflow
+            .discover(workflow.revision(), Vec::new(), Timestamp(1))
+            .unwrap();
+        workflow
+            .confirm_sources(workflow.revision(), Vec::new(), true, Timestamp(2))
+            .unwrap();
+        workflow
+            .set_assistant_selection(
+                workflow.revision(),
+                Some(AssistantSelection::new(
+                    AssistantBackendId::parse("work-profile").unwrap(),
+                    CompositionPath::Hosted,
+                )),
+                Timestamp(3),
+            )
+            .unwrap();
+        let selected =
+            AssistantSnapshot::capture(&log, &workflow, "assistant-draft", "failed").unwrap();
+        assert!(selected.selected);
+        assert_eq!(selected.workflow, bare.workflow);
+        log.write(
+            DiagnosticLevel::Debug,
+            DiagnosticEvent::AssistantState(bare),
+        )
+        .unwrap();
+        log.write(
+            DiagnosticLevel::Debug,
+            DiagnosticEvent::AssistantState(selected),
+        )
+        .unwrap();
+        drop(log);
+
+        let text = fs::read_to_string(root.join(ACTIVE_NAME)).unwrap();
+        for private in ["2026-10-30", "work-profile"] {
+            assert!(!text.contains(private), "{private} leaked");
+        }
+        assert!(text.contains("component=assistant event=snapshot"));
+        assert!(text.contains("backend=none"));
+        assert!(text.contains("reviewed_memory=absent"));
+        assert!(text.contains("selected=1"));
+        // Reopening re-validates every record, including the new shape.
+        DiagnosticLog::open(&root, uid, Arc::new(FixedClock::new(2))).unwrap();
+    }
+
+    /// Segments written before `draft_ranges`/`entry_markers` existed stay on
+    /// disk and are re-validated at every startup; rejecting them was
+    /// the startup failure then reported as `diagnostic-init-failed`.
+    #[test]
+    fn legacy_snapshot_records_without_late_keys_still_validate() {
+        assert_eq!(class_of(SNAPSHOT_LINE), Ok(RecordClass::Legacy));
+        assert_eq!(validate_line(SNAPSHOT_LINE).unwrap().timestamp, 2);
+
+        let current = SNAPSHOT_LINE.replace("drafts=1", "draft_ranges=0 drafts=1 entry_markers=0");
+        assert_eq!(class_of(&current), Ok(RecordClass::Current));
+
+        // A half-migrated shape is just another legacy shape.
+        let partial = SNAPSHOT_LINE.replace("drafts=1", "draft_ranges=0 drafts=1");
+        assert_eq!(class_of(&partial), Ok(RecordClass::Legacy));
+
+        // But a missing required key is corruption, not history.
+        let broken = SNAPSHOT_LINE.replace("revision=1 ", "");
+        assert_eq!(class_of(&broken), Err(DiagnosticError::InvalidRecord));
+    }
+
+    #[test]
+    fn migration_records_are_closed_vocabulary_and_survive_a_reopen() {
+        let scratch = Scratch::new("migration-records");
+        let uid = fs::metadata(scratch.path()).unwrap().uid();
+        let root = scratch.path().join("logs");
+        let log = DiagnosticLog::open_with_min_level(
+            &root,
+            uid,
+            Arc::new(FixedClock::new(1)),
+            DiagnosticLevel::Debug,
+        )
+        .unwrap();
+        for (event, reason) in [
+            ("current", None),
+            ("started", None),
+            ("step", None),
+            ("finished", None),
+            ("failed", Some("step-failed")),
+        ] {
+            log.write(
+                DiagnosticLevel::Debug,
+                DiagnosticEvent::Migration {
+                    event,
+                    from: 3,
+                    to: 4,
+                    duration_ms: 7,
+                    reason,
+                },
+            )
+            .unwrap();
+        }
+        for bad in [
+            ("step", Some("step-failed")),
+            ("failed", None),
+            ("failed", Some("free text")),
+            ("failed", Some("disk /Users/me is full")),
+            ("rolled-back", None),
+        ] {
+            assert_eq!(
+                log.write(
+                    DiagnosticLevel::Debug,
+                    DiagnosticEvent::Migration {
+                        event: bad.0,
+                        from: 1,
+                        to: 2,
+                        duration_ms: 0,
+                        reason: bad.1,
+                    },
+                ),
+                Err(DiagnosticError::InvalidRecord),
+                "accepted {bad:?}"
+            );
+        }
+        let text = fs::read_to_string(root.join(ACTIVE_NAME)).unwrap();
+        assert!(text.contains("component=store event=migration-step duration_ms=7 from=3 to=4"));
+        assert!(text.contains(
+            "component=store event=migration-failed duration_ms=7 from=3 reason=step-failed to=4"
+        ));
+        drop(log);
+
+        // Every record just written must pass the next startup's validation.
+        DiagnosticLog::open_with_min_level(
+            &root,
+            uid,
+            Arc::new(FixedClock::new(2)),
+            DiagnosticLevel::Debug,
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn assistant_snapshot_needs_a_tag_key_and_rejects_open_vocabulary() {
+        use diary_core::{DiaryDay, Preferences, Timestamp};
+
+        let scratch = Scratch::new("assistant-snapshot-reject");
+        let uid = fs::metadata(scratch.path()).unwrap().uid();
+        let log = DiagnosticLog::open_with_min_level(
+            scratch.path().join("logs"),
+            uid,
+            Arc::new(FixedClock::new(1)),
+            DiagnosticLevel::Debug,
+        )
+        .unwrap();
+        let workflow = Workflow::new(
+            DiaryDay::parse("2026-10-30").unwrap(),
+            Timestamp(0),
+            &Preferences::default(),
+        );
+        assert!(AssistantSnapshot::capture(&log, &workflow, "assistant-draft", "start").is_none());
+        let log = log.with_tag_key([1; 32]);
+        let mut snapshot =
+            AssistantSnapshot::capture(&log, &workflow, "assistant-draft", "start").unwrap();
+        snapshot.kind = "discovery";
+        assert!(
+            log.write(
+                DiagnosticLevel::Debug,
+                DiagnosticEvent::AssistantState(snapshot)
+            )
+            .is_err()
+        );
+        snapshot.kind = "assistant-draft";
+        snapshot.state = "2026-10-30";
+        assert!(
+            log.write(
+                DiagnosticLevel::Debug,
+                DiagnosticEvent::AssistantState(snapshot)
+            )
+            .is_err()
+        );
     }
 
     struct Scratch(PathBuf);

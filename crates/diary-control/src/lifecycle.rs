@@ -677,6 +677,49 @@ fn validated_absolute_path(value: String) -> Result<PathBuf, LifecycleError> {
     Ok(path)
 }
 
+/// Loads the persistent 32-byte key behind diagnostic correlation tags,
+/// creating it (random, mode 0600) on first use. The key stays beside the
+/// Application Support state, never under the agent-readable log directory,
+/// so a tag in the log cannot be reversed to the value it stands for.
+pub fn load_or_create_tag_key(path: &Path, expected_uid: u32) -> Result<[u8; 32], LifecycleError> {
+    let mut file = open_private_regular(path, expected_uid)?;
+    let mut raw = String::new();
+    Read::by_ref(&mut file)
+        .take(65)
+        .read_to_string(&mut raw)
+        .map_err(|_| LifecycleError::Io)?;
+    if raw.is_empty() {
+        let mut key = [0_u8; 32];
+        getrandom::fill(&mut key).map_err(|_| LifecycleError::Random)?;
+        let mut hex = String::with_capacity(64);
+        for byte in key {
+            use std::fmt::Write as _;
+            write!(&mut hex, "{byte:02x}").map_err(|_| LifecycleError::Random)?;
+        }
+        file.write_all(hex.as_bytes())
+            .and_then(|()| file.sync_all())
+            .map_err(|_| LifecycleError::Io)?;
+        return Ok(key);
+    }
+    if raw.len() != 64
+        || !raw
+            .bytes()
+            .all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f'))
+    {
+        return Err(LifecycleError::UnsafePath);
+    }
+    let mut key = [0_u8; 32];
+    let (pairs, _) = raw.as_bytes().as_chunks::<2>();
+    for (slot, pair) in key.iter_mut().zip(pairs) {
+        *slot = u8::from_str_radix(
+            std::str::from_utf8(pair).map_err(|_| LifecycleError::Io)?,
+            16,
+        )
+        .map_err(|_| LifecycleError::UnsafePath)?;
+    }
+    Ok(key)
+}
+
 fn ensure_private_directory(path: &Path, expected_uid: u32) -> Result<(), LifecycleError> {
     if !path.exists() {
         fs::create_dir(path).map_err(|_| LifecycleError::Io)?;
@@ -766,6 +809,26 @@ mod tests {
     use super::*;
 
     static SCRATCH_SEQUENCE: AtomicU64 = AtomicU64::new(0);
+
+    #[test]
+    fn tag_key_is_created_private_and_stable_across_loads() {
+        let scratch = std::env::temp_dir().join(format!(
+            "nd-tag-key-{}-{}",
+            std::process::id(),
+            SCRATCH_SEQUENCE.fetch_add(1, Ordering::Relaxed)
+        ));
+        fs::create_dir(&scratch).unwrap();
+        fs::set_permissions(&scratch, fs::Permissions::from_mode(0o700)).unwrap();
+        let uid = fs::metadata(&scratch).unwrap().uid();
+        let path = scratch.join("diagnostic-tag-key");
+        let first = load_or_create_tag_key(&path, uid).unwrap();
+        assert_ne!(first, [0; 32]);
+        assert_eq!(fs::metadata(&path).unwrap().mode() & 0o777, 0o600);
+        assert_eq!(load_or_create_tag_key(&path, uid).unwrap(), first);
+        fs::write(&path, "not-a-key").unwrap();
+        assert!(load_or_create_tag_key(&path, uid).is_err());
+        fs::remove_dir_all(&scratch).unwrap();
+    }
 
     #[test]
     fn strict_config_bounds_server_fallback_and_detects_notion_placeholders() {

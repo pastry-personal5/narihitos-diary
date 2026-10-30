@@ -868,6 +868,50 @@ impl SourceWriter for UnavailableSourceWriter {
     }
 }
 
+pub(crate) const fn workflow_diagnostic_code(error: &WorkflowError) -> &'static str {
+    match error {
+        WorkflowError::StaleRevision { .. } => "workflow-stale-revision",
+        WorkflowError::StaleBuffer { .. } => "workflow-stale-buffer",
+        WorkflowError::WrongState => "wrong-state",
+        WorkflowError::EmptySelectionNeedsConfirmation => "empty-selection-needs-confirmation",
+        WorkflowError::UnknownSource => "workflow-unknown-source",
+        WorkflowError::DuplicateSource => "workflow-duplicate-source",
+        WorkflowError::InvalidSourceNoteName => "workflow-invalid-source-note-name",
+        WorkflowError::NeedsDownload => "workflow-needs-download",
+        WorkflowError::PermissionDeniedSource => "workflow-source-permission-denied",
+        WorkflowError::UnreadableSource => "workflow-unreadable-source",
+        WorkflowError::AssistantActionsDisabled => "assistant-action-disabled-empty-selection",
+        WorkflowError::AssistantRequestInvalid => "assistant-request-invalid",
+        WorkflowError::AssistantDraftRequestInvalid => "assistant-draft-request-invalid",
+        WorkflowError::AssistantDraftResultInvalid => "assistant-draft-result-invalid",
+        WorkflowError::AssistantParagraphRangeInvalid => "assistant-paragraph-range-invalid",
+        WorkflowError::AssistantParagraphRequestInvalid => "assistant-paragraph-request-invalid",
+        WorkflowError::AssistantParagraphResultInvalid => "assistant-paragraph-result-invalid",
+        WorkflowError::AssistantBackendRequired => "assistant-backend-required",
+        WorkflowError::ReviewedMemoryRequired => "reviewed-memory-required",
+        WorkflowError::AssistantArtifactNotFound => "assistant-artifact-not-found",
+        WorkflowError::AssistantBindingStale => "assistant-binding-stale",
+        WorkflowError::AssistantSuggestionAlreadyResolved => {
+            "assistant-suggestion-already-resolved"
+        }
+        WorkflowError::LanguageRequired => "language-required",
+        WorkflowError::BlankEntry => "blank-entry",
+        WorkflowError::UnresolvedInferenceMarker => "assistant-unresolved-reflection-marker",
+        WorkflowError::EntryNotConfirmed => "entry-not-confirmed",
+        WorkflowError::MissingPlan => "workflow-missing-plan",
+        WorkflowError::PlanBindingMismatch => "workflow-plan-binding-mismatch",
+        WorkflowError::UnknownDestination => "workflow-unknown-destination",
+        WorkflowError::LocalMustBeVerified => "workflow-local-must-be-verified",
+        WorkflowError::RetryNeedsPreview => "workflow-retry-needs-preview",
+        WorkflowError::MissingApproval => "workflow-missing-approval",
+        WorkflowError::VerifiedDestinationRegressed => "workflow-verified-destination-regressed",
+        WorkflowError::DestinationOutsideExecutionScope => {
+            "workflow-destination-outside-execution-scope"
+        }
+        WorkflowError::InvalidPersistedState => "workflow-invalid-persisted-state",
+    }
+}
+
 fn ensure_revision(workflow: &Workflow, expected: u64) -> Result<(), CommandError> {
     if workflow.revision() == expected {
         Ok(())
@@ -903,6 +947,18 @@ pub enum CommandError {
 }
 
 impl CommandError {
+    /// The log-only counterpart of [`Self::code`]. The wire code folds many
+    /// workflow errors into `workflow-conflict`; the diagnostic log needs the
+    /// exact failed check, and the matches below stay wildcard-free so a new
+    /// `WorkflowError` cannot ship without a token.
+    #[must_use]
+    pub const fn diagnostic_code(&self) -> &'static str {
+        match self {
+            Self::Workflow(error) => workflow_diagnostic_code(error),
+            other => other.code(),
+        }
+    }
+
     #[must_use]
     pub const fn code(&self) -> &'static str {
         match self {
@@ -955,5 +1011,79 @@ impl CommandError {
             Self::DeleteNotConfirmed => "source-delete-not-confirmed",
             Self::Store(_) => "state-unavailable",
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeSet;
+
+    use super::*;
+
+    #[test]
+    fn every_workflow_error_has_its_own_diagnostic_token() {
+        let errors = [
+            WorkflowError::StaleRevision {
+                expected: 1,
+                actual: 2,
+            },
+            WorkflowError::StaleBuffer {
+                expected: 1,
+                actual: 2,
+            },
+            WorkflowError::WrongState,
+            WorkflowError::EmptySelectionNeedsConfirmation,
+            WorkflowError::UnknownSource,
+            WorkflowError::DuplicateSource,
+            WorkflowError::InvalidSourceNoteName,
+            WorkflowError::NeedsDownload,
+            WorkflowError::PermissionDeniedSource,
+            WorkflowError::UnreadableSource,
+            WorkflowError::AssistantActionsDisabled,
+            WorkflowError::AssistantRequestInvalid,
+            WorkflowError::AssistantDraftRequestInvalid,
+            WorkflowError::AssistantDraftResultInvalid,
+            WorkflowError::AssistantParagraphRangeInvalid,
+            WorkflowError::AssistantParagraphRequestInvalid,
+            WorkflowError::AssistantParagraphResultInvalid,
+            WorkflowError::AssistantBackendRequired,
+            WorkflowError::ReviewedMemoryRequired,
+            WorkflowError::AssistantArtifactNotFound,
+            WorkflowError::AssistantBindingStale,
+            WorkflowError::AssistantSuggestionAlreadyResolved,
+            WorkflowError::LanguageRequired,
+            WorkflowError::BlankEntry,
+            WorkflowError::UnresolvedInferenceMarker,
+            WorkflowError::EntryNotConfirmed,
+            WorkflowError::MissingPlan,
+            WorkflowError::PlanBindingMismatch,
+            WorkflowError::UnknownDestination,
+            WorkflowError::LocalMustBeVerified,
+            WorkflowError::RetryNeedsPreview,
+            WorkflowError::MissingApproval,
+            WorkflowError::VerifiedDestinationRegressed,
+            WorkflowError::DestinationOutsideExecutionScope,
+            WorkflowError::InvalidPersistedState,
+        ];
+        let tokens: BTreeSet<_> = errors.iter().map(workflow_diagnostic_code).collect();
+        assert_eq!(tokens.len(), errors.len());
+        assert!(!tokens.contains("workflow-conflict"));
+        assert!(tokens.iter().all(|token| {
+            token.len() <= 64
+                && token
+                    .bytes()
+                    .all(|byte| byte.is_ascii_lowercase() || byte == b'-')
+        }));
+    }
+
+    #[test]
+    fn wire_code_is_unchanged_while_the_log_code_names_the_check() {
+        let error = CommandError::Workflow(WorkflowError::ReviewedMemoryRequired);
+        assert_eq!(error.code(), "workflow-conflict");
+        assert_eq!(error.diagnostic_code(), "reviewed-memory-required");
+        assert_eq!(
+            CommandError::NotFound.diagnostic_code(),
+            CommandError::NotFound.code()
+        );
     }
 }
