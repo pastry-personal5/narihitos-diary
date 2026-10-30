@@ -41,6 +41,11 @@ bypass review.
   in the source set.
 - Request downloads only for selected cloud-only notes. Keep unavailable and
   unreadable states distinct from an empty note.
+- List each Ayumi source by its Mac-local creation time as
+  `YYYY-MM-DD HH:MM:SS` without the `.md` extension. Ayumi file and directory
+  names are UTC, so the TUI converts them; the real file name appears in the
+  source detail. The Resources Sidebar is 16 columns wider than a quarter of
+  the body to fit that label.
 - Start a new workflow on today's date in the Mac's local time zone, and list
   unfinished drafts first. The person can discard a draft at any time.
 - Offer the multiline Draft editor for manual editing at all times after source confirmation,

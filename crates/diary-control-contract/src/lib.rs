@@ -676,6 +676,8 @@ dto!(
     pub struct SourceCandidateDto {
         pub id: String,
         pub source_note_name: String,
+        /// Local `YYYY-MM-DD HH:MM:SS` derived from the note's UTC file name.
+        pub local_time: Option<String>,
         pub directory_day: Option<String>,
         pub header_day: Option<String>,
         pub warning_code: Option<String>,
@@ -695,6 +697,8 @@ dto!(
     pub struct SourceDetailDto {
         pub id: String,
         pub source_note_name: String,
+        /// Local `YYYY-MM-DD HH:MM:SS` derived from the note's UTC file name.
+        pub local_time: Option<String>,
         pub body: String,
         pub content_digest: String,
         pub directory_day: Option<String>,

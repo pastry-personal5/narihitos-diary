@@ -7,6 +7,7 @@ mod commands;
 mod diagnostic_tags;
 mod diagnostics;
 mod lifecycle;
+mod local_time;
 mod server;
 
 pub use codex_assistant::{

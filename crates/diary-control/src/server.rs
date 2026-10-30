@@ -862,6 +862,7 @@ async fn source_detail(
         .find(|candidate| opaque_source_id(&candidate.source) == source_id)
         .ok_or_else(|| ApiError::new(StatusCode::NOT_FOUND, "source-not-found"))?;
     let source_note_name = candidate.source_note_name.clone();
+    let local_time = crate::local_time::local_time(&source_note_name);
     let (snapshot, evidence) = if let Some(handle) = prepared_handle {
         validate_string(handle)?;
         let selected = prepared_source(&state, handle, &id, &source_id)?;
@@ -884,6 +885,7 @@ async fn source_detail(
     let body = serde_json::to_vec(&SourceDetailDto {
         id: source_id,
         source_note_name,
+        local_time,
         body: snapshot.body.clone(),
         content_digest: snapshot.stamp.content_digest.as_str().to_owned(),
         directory_day: evidence.directory_day.map(|day| day.as_str().to_owned()),
@@ -3218,6 +3220,7 @@ fn candidate_dtos(workflow: &Workflow) -> Vec<SourceCandidateDto> {
         .map(|candidate| SourceCandidateDto {
             id: opaque_source_id(&candidate.source),
             source_note_name: candidate.source_note_name.clone(),
+            local_time: crate::local_time::local_time(&candidate.source_note_name),
             directory_day: candidate
                 .date_evidence
                 .directory_day

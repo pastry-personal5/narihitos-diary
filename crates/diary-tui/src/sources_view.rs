@@ -497,7 +497,7 @@ impl SourcesViewModel {
                 .candidates
                 .iter()
                 .map(|candidate| ResourceRow {
-                    label: candidate.source_note_name.clone(),
+                    label: source_label(candidate),
                     state: source_state(candidate, self.included.contains(&candidate.id)),
                     indent: 0,
                 })
@@ -526,6 +526,20 @@ fn job_phase(status: &str) -> JobPhase {
         status if job_status::is_terminal(status) => JobPhase::Failed,
         _ => JobPhase::Running,
     }
+}
+
+/// Pseudo-ISO local time (`YYYY-MM-DD HH:MM:SS`) when known; otherwise the
+/// file name without its directory or `.md` extension.
+#[must_use]
+pub fn source_label(candidate: &SourceCandidateDto) -> String {
+    candidate.local_time.clone().unwrap_or_else(|| {
+        let name = candidate
+            .source_note_name
+            .rsplit('/')
+            .next()
+            .unwrap_or(&candidate.source_note_name);
+        name.strip_suffix(".md").unwrap_or(name).to_owned()
+    })
 }
 
 fn source_state(candidate: &SourceCandidateDto, included: bool) -> String {
@@ -599,6 +613,7 @@ mod tests {
         SourceCandidateDto {
             id: id.to_owned(),
             source_note_name: name.to_owned(),
+            local_time: None,
             directory_day: Some("2026-10-29".to_owned()),
             header_day: Some("2026-10-29".to_owned()),
             warning_code: None,
@@ -773,6 +788,7 @@ mod tests {
             detail: diary_control_contract::SourceDetailDto {
                 id: "src_1".to_owned(),
                 source_note_name: "2026-10-28 note".to_owned(),
+                local_time: None,
                 body: "synthetic body".to_owned(),
                 content_digest: "digest".to_owned(),
                 directory_day: Some("2026-10-28".to_owned()),
@@ -803,6 +819,7 @@ mod tests {
             detail: diary_control_contract::SourceDetailDto {
                 id: "src_1".to_owned(),
                 source_note_name: "2026-10-28 note".to_owned(),
+                local_time: None,
                 body: "synthetic body".to_owned(),
                 content_digest: "digest".to_owned(),
                 directory_day: Some("2026-10-28".to_owned()),
@@ -822,6 +839,7 @@ mod tests {
             active_detail: Some(diary_control_contract::SourceDetailDto {
                 id: "src_1".to_owned(),
                 source_note_name: "src_1".to_owned(),
+                local_time: None,
                 body: "body".to_owned(),
                 content_digest: "digest".to_owned(),
                 directory_day: None,
@@ -1011,5 +1029,13 @@ mod tests {
         })
         .to_string()
         .into_bytes()
+    }
+
+    #[test]
+    fn source_label_prefers_local_time_and_omits_the_extension() {
+        let mut row = candidate("src_1", "2026/10/29/2026-10-29_15-30-00-123.md");
+        assert_eq!(source_label(&row), "2026-10-29_15-30-00-123");
+        row.local_time = Some("2026-10-30 00:30:00".to_owned());
+        assert_eq!(source_label(&row), "2026-10-30 00:30:00");
     }
 }

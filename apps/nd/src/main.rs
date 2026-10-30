@@ -3455,8 +3455,10 @@ fn compose_screen_body(
 ) -> String {
     if let Some(source) = source {
         return format!(
-            "Read-only confirmed source: {}\n\n{}\n\nSelect Draft in Resources to return; its cursor and buffer are preserved.",
-            source.source_note_name, source.body
+            "Read-only confirmed source: {}\nFile: {}\n\n{}\n\nSelect Draft in Resources to return; its cursor and buffer are preserved.",
+            source.local_time.as_deref().unwrap_or("unknown time"),
+            source.source_note_name,
+            source.body
         );
     }
     let marker = |index| {
@@ -3996,7 +3998,9 @@ fn sources_screen_body(
         }
     };
     let active = sources.candidates.get(focus.resource_index);
-    let active_name = active.map_or("none", |candidate| candidate.source_note_name.as_str());
+    let active_label =
+        active.map_or_else(|| "none".to_owned(), diary_tui::sources_view::source_label);
+    let active_file = active.map_or("none", |candidate| candidate.source_note_name.as_str());
     let directory_day = active
         .and_then(|candidate| candidate.directory_day.as_deref())
         .map_or_else(|| "unknown".to_owned(), |day| format_diary_day(day, 16));
@@ -4028,7 +4032,7 @@ fn sources_screen_body(
         |percent| format!("{progress} · {percent}%"),
     );
     let mut body = format!(
-        "Active candidate: {active_name}\nDirectory date: {directory_day}\nHeader date: {header_day}\nAvailability: {availability}\nWarning: {warning}\nIncluded/reviewed: {}/{}\nWork: {progress}\n\n{} Discover three-day window\n{} Extra date: {extra_day}\n{} Discover extra date\n{} Include/exclude active candidate\n{} Prepare included sources\n{} Inspect active prepared source\n{} Refine inspected source with assistant\n{} Approve refinement\n{} Reject refinement\n{} Edit inspected source (Ctrl-S saves)\n{} Delete inspected source and linked audio\n{} Confirm reviewed source set\n{} Continue without notes\n{} Load more candidates{}\n{} Back to Start",
+        "Active candidate: {active_label}\nFile: {active_file}\nDirectory date: {directory_day}\nHeader date: {header_day}\nAvailability: {availability}\nWarning: {warning}\nIncluded/reviewed: {}/{}\nWork: {progress}\n\n{} Discover three-day window\n{} Extra date: {extra_day}\n{} Discover extra date\n{} Include/exclude active candidate\n{} Prepare included sources\n{} Inspect active prepared source\n{} Refine inspected source with assistant\n{} Approve refinement\n{} Reject refinement\n{} Edit inspected source (Ctrl-S saves)\n{} Delete inspected source and linked audio\n{} Confirm reviewed source set\n{} Continue without notes\n{} Load more candidates{}\n{} Back to Start",
         sources.included.len(),
         sources.reviewed.len(),
         marker(0),
@@ -4183,6 +4187,7 @@ mod start_screen_tests {
             detail: diary_control_contract::SourceDetailDto {
                 id: id.to_owned(),
                 source_note_name: "note".to_owned(),
+                local_time: None,
                 body: "synthetic body".to_owned(),
                 content_digest: "digest".to_owned(),
                 directory_day: None,
@@ -4223,6 +4228,7 @@ mod start_screen_tests {
                 diary_control_contract::SourceCandidateDto {
                     id: "src_1".to_owned(),
                     source_note_name: "first".to_owned(),
+                    local_time: None,
                     directory_day: None,
                     header_day: None,
                     warning_code: None,
@@ -4232,6 +4238,7 @@ mod start_screen_tests {
                 diary_control_contract::SourceCandidateDto {
                     id: "src_2".to_owned(),
                     source_note_name: "second".to_owned(),
+                    local_time: None,
                     directory_day: None,
                     header_day: None,
                     warning_code: None,
@@ -4264,6 +4271,7 @@ mod start_screen_tests {
                 .map(|id| diary_control_contract::SourceCandidateDto {
                     id: id.to_owned(),
                     source_note_name: id.to_owned(),
+                    local_time: None,
                     directory_day: None,
                     header_day: None,
                     warning_code: None,
@@ -4324,6 +4332,7 @@ mod start_screen_tests {
             candidates: vec![diary_control_contract::SourceCandidateDto {
                 id: "src_1".to_owned(),
                 source_note_name: "2026/10/29/note.md".to_owned(),
+                local_time: None,
                 directory_day: Some("2026-10-29".to_owned()),
                 header_day: Some("2026-10-28".to_owned()),
                 warning_code: Some("source-warning".to_owned()),
@@ -4337,6 +4346,7 @@ mod start_screen_tests {
             detail: diary_control_contract::SourceDetailDto {
                 id: "src_1".to_owned(),
                 source_note_name: "2026/10/29/note.md".to_owned(),
+                local_time: None,
                 body: "synthetic source text".to_owned(),
                 content_digest: "digest".to_owned(),
                 directory_day: Some("2026-10-29".to_owned()),
@@ -4390,6 +4400,7 @@ mod start_screen_tests {
                 diary_control_contract::SourceCandidateDto {
                     id: "selected".to_owned(),
                     source_note_name: "selected.md".to_owned(),
+                    local_time: None,
                     directory_day: Some("2026-10-29".to_owned()),
                     header_day: Some("2026-10-29".to_owned()),
                     warning_code: None,
@@ -4399,6 +4410,7 @@ mod start_screen_tests {
                 diary_control_contract::SourceCandidateDto {
                     id: "excluded".to_owned(),
                     source_note_name: "excluded.md".to_owned(),
+                    local_time: None,
                     directory_day: Some("2026-10-29".to_owned()),
                     header_day: Some("2026-10-29".to_owned()),
                     warning_code: None,

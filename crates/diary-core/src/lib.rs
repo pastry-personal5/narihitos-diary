@@ -13,6 +13,7 @@ pub mod local_markdown;
 pub mod ports;
 pub mod prompt_asset;
 pub mod publication;
+pub mod source_time;
 pub mod types;
 pub mod workflow;
 

@@ -13,6 +13,8 @@ pub const MIN_COLUMNS: u16 = 80;
 pub const MIN_ROWS: u16 = 30;
 pub const WIDE_COLUMNS: u16 = 120;
 pub const MEDIUM_COLUMNS: u16 = 100;
+/// Extra Resources Sidebar columns so a `YYYY-MM-DD HH:MM:SS` source label fits.
+pub const RESOURCES_EXTRA_WIDTH: u16 = 16;
 
 pub struct TerminalTooSmallWidget;
 
@@ -84,9 +86,10 @@ pub fn adaptive_areas(area: Rect, focus: FocusZone) -> AdaptiveAreas {
 
     let (band, workflow_sidebar, resources_sidebar, main_pane, overlay) =
         if area.width >= WIDE_COLUMNS {
+            let resources_width = body.width / 4 + RESOURCES_EXTRA_WIDTH;
             let [workflow, resources, main] = Layout::horizontal([
                 Constraint::Length(MINIMUM_WORKFLOW_SIDEBAR_WIDTH),
-                Constraint::Percentage(25),
+                Constraint::Length(resources_width),
                 Constraint::Min(0),
             ])
             .areas(body);
@@ -99,7 +102,7 @@ pub fn adaptive_areas(area: Rect, focus: FocusZone) -> AdaptiveAreas {
             .areas(body);
             let overlay = (focus == FocusZone::Resources).then_some(SidebarOverlay {
                 kind: SidebarKind::Resources,
-                area: right_overlay(main, 44),
+                area: right_overlay(main, 44 + RESOURCES_EXTRA_WIDTH),
             });
             (WidthBand::Medium, Some(workflow), None, main, overlay)
         } else {
@@ -110,7 +113,7 @@ pub fn adaptive_areas(area: Rect, focus: FocusZone) -> AdaptiveAreas {
                 }),
                 FocusZone::Resources => Some(SidebarOverlay {
                     kind: SidebarKind::Resources,
-                    area: right_overlay(body, 44),
+                    area: right_overlay(body, 44 + RESOURCES_EXTRA_WIDTH),
                 }),
                 FocusZone::Main => None,
             };

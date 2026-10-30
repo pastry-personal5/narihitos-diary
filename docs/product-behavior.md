@@ -25,8 +25,9 @@ stage, and activating one displays its content in the right Main Pane.
    Mac's local time zone, and unfinished drafts are listed first. Choosing a day
    that already has a completed entry offers to amend it.
 2. **Sources:** Discover Ayumi Markdown notes only in the diary day's directory
-   and the adjacent date directories; an explicitly chosen extra date can be
-   loaded separately. Review proposed notes. Both the directory date and a
+   and the adjacent date directories; an explicitly chosen extra date is a
+   Mac-local calendar day (Ayumi names are UTC, so notes whose local creation
+   date is that day are loaded, even from the neighbouring UTC directory). Review proposed notes. Both the directory date and a
    valid offset-aware `created_at` date can suggest a note for the chosen day.
    Show disagreements and warnings; the person decides which readable notes to
    include. Activating a source note in the Resources Sidebar shows its readable text in

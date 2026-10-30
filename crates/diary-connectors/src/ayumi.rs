@@ -588,8 +588,11 @@ impl AyumiSource {
                 let mut days = vec![shift_day(&day, -1), day.clone(), shift_day(&day, 1)];
                 self.catalog.discover_days(&mut days, &mut probe)
             }
+            // The requested day is Mac-local while directories are UTC, so
+            // scan the neighbours; the caller keeps notes on the local day.
             CatalogRequest::ExplicitDate(day) => {
-                self.catalog.discover_days(&mut vec![day], &mut probe)
+                let mut days = vec![shift_day(&day, -1), day.clone(), shift_day(&day, 1)];
+                self.catalog.discover_days(&mut days, &mut probe)
             }
         }
     }

@@ -20,6 +20,16 @@ use crate::lifecycle::random_id;
 mod amendment;
 pub use amendment::{AmendmentNotionPreview, AmendmentPreview, AmendmentSeeded, local_body};
 
+/// An explicitly requested day is the Mac-local calendar day, while Ayumi
+/// files are dated in UTC. A note whose name carries no readable UTC time
+/// falls back to its directory date.
+fn on_local_day(candidate: &diary_core::SourceCandidate, requested: &DiaryDay) -> bool {
+    match crate::local_time::local_note_day(&candidate.source_note_name) {
+        Some(day) => &day == requested,
+        None => candidate.date_evidence.directory_day.as_ref() == Some(requested),
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct LocalPreview {
     pub workflow: Workflow,
@@ -178,13 +188,19 @@ impl CommandService {
         self.ensure_clear(day)?;
         let mut workflow = self.load_workflow(day)?;
         ensure_revision(&workflow, expected_revision)?;
+        let requested = explicit_date.clone();
         let request = explicit_date
             .map(CatalogRequest::ExplicitDate)
             .unwrap_or_else(|| CatalogRequest::Automatic(day.clone()));
-        let discovery = self
+        let mut discovery = self
             .catalog
             .discover(request)
             .map_err(CommandError::Source)?;
+        if let Some(requested) = &requested {
+            discovery
+                .candidates
+                .retain(|candidate| on_local_day(candidate, requested));
+        }
         if discovery.candidates.len() > diary_control_contract::MAX_CANDIDATES {
             return Err(CommandError::LimitExceeded);
         }
