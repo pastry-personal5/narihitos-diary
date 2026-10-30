@@ -272,6 +272,19 @@ Plan: [overview](milestone-15-utility-sidebar-overview.md),
 Notes: TUI-only; no Control API change. Planned to run before P1-M13 so release
 qualification covers the final layout.
 
+### P1-M16: Simple Sources stage
+
+Status: Planned
+
+Goal: Reduce the TUI Sources stage to include/exclude, optional assistant
+refinement (accept or reject), and one Confirm Source List action.
+
+Plan: [overview](milestone-16-simple-sources-overview.md),
+[architecture plan](milestone-16-simple-sources-architecture.md).
+
+Notes: TUI-only; no Control API change unless step 1 finds one is required
+(then owner decision). Planned to run before P1-M13.
+
 ### P1-M13: Release qualification
 
 Status: Planned

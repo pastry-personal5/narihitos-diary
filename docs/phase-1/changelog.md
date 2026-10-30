@@ -6,6 +6,18 @@ This changelog records owner decisions and material plan changes for Phase 1.
 
 ## Entries
 
+- 2026-10-30 — P1-M16 planned — Owner asked to simplify the TUI Sources stage:
+  include or exclude, optional assistant refinement with accept or reject, no
+  mandatory review of each note, and a Confirm Source List action. Accept keeps
+  writing the real Ayumi note (decided behavior unchanged). Edit and Delete stay
+  in the TUI as items in a flat menu. Discovery starts automatically on entering
+  Sources. Planned before P1-M13. TUI-only unless step 1 finds a server need.
+  Owner then added source-list letter shortcuts (decision: letters only while
+  `IME: EN`, narrowing the no-bare-letter rule to that one list; no letter for
+  Accept refinement or Confirm Source List, which write or confirm). Added
+  `v` view, `h`/`u` session-only hide/show (client-side, forced excluded, resets
+  on restart or workflow change), and `?` for a modal Help Overlay generated
+  from the shortcut table.
 - 2026-10-30 — P1-M15 planned — Owner asked for a fourth TUI column, a
   multi-purpose right sidebar, named the Utility Sidebar, with the assistant
   picker as its Assistant Widget, moved out of Compose/Resources and including a "None (manual only)"

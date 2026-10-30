@@ -36,6 +36,16 @@ least 50 wide); from 120 through 150 the Utility Sidebar opens as a focused
 overlay, and below 120 it overlays alongside Resources. Tab order follows screen
 order. See [the P1-M15 plan](phase-1/milestone-15-utility-sidebar-architecture.md).
 
+**Planned (P1-M16):** a narrow exception to the no-bare-letter rule below: the
+Sources-stage source list accepts single-letter shortcuts only while the IME
+indicator reads `IME: EN` (never Accept refinement or Confirm Source List). `?` opens a large modal Help
+Overlay of those shortcuts, and `h`/`u` hide and show notes for the session.
+The Sources stage becomes a flat menu: include or exclude
+a note, optionally refine it with the assistant (accept or reject), edit or
+delete it, and Confirm Source List. Reading each note is optional, and discovery
+starts when the stage is entered. See
+[the P1-M16 plan](phase-1/milestone-16-simple-sources-architecture.md).
+
 ## Approved behavior to represent
 
 - Show directory and header dates together when choosing source notes, visibly
