@@ -667,6 +667,29 @@ impl<T: Transport> ApiClient<T> {
         )
     }
 
+    /// Previews a Notion section that already exists as `append` or
+    /// `overwrite`.
+    pub fn preview_notion_existing(
+        &self,
+        attachment: &Attachment,
+        workflow_id: &str,
+        revision: u64,
+        existing_mode: &str,
+    ) -> ClientOutcome<NotionPreviewDto> {
+        let body = serde_json::to_vec(&LocalPreviewRequest {
+            existing_mode: Some(existing_mode.to_owned()),
+        })
+        .unwrap_or_else(|_| b"{}".to_vec());
+        self.send_json(
+            "POST",
+            &format!("/v1/workflows/{workflow_id}/notion-previews"),
+            Some(body),
+            Some(workflow_etag(revision)),
+            MAX_RESPONSE_BYTES,
+            attachment,
+        )
+    }
+
     pub fn preview_notion(
         &self,
         attachment: &Attachment,

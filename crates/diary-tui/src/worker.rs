@@ -166,6 +166,13 @@ pub enum Intent {
         workflow_id: String,
         revision: u64,
     },
+    /// Previews a Notion section that already exists, as `append` or
+    /// `overwrite`.
+    PreviewNotionExisting {
+        workflow_id: String,
+        revision: u64,
+        existing_mode: String,
+    },
     ApproveNotion {
         workflow_id: String,
         revision: u64,
@@ -631,6 +638,16 @@ impl Worker {
                 attachment,
                 &workflow_id,
                 revision,
+            ))),
+            Intent::PreviewNotionExisting {
+                workflow_id,
+                revision,
+                existing_mode,
+            } => WorkerResult::NotionPreviewed(Box::new(client.preview_notion_existing(
+                attachment,
+                &workflow_id,
+                revision,
+                &existing_mode,
             ))),
             Intent::ApproveNotion {
                 workflow_id,

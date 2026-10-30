@@ -23,11 +23,11 @@ pub use digest::Digest;
 pub use local_markdown::{append_to_existing, backup_file_name, render_local_markdown};
 pub use ports::{
     Clock, Destination, DraftAssistant, IntentTerminal, LocalOutputError, LocalOutputPort,
-    LocalOutputState, LocalReplaceOutcome, NotionBlockPreview, NotionOutputPort, NotionPreflight,
-    NotionPreflightStatus, NotionReplacePreflight, NotionReplaceRequest, NotionRequest,
-    OperationLog, SourceCatalog, SourceCheckpointError, SourceReader, SourceWriteError,
-    SourceWriter, StartOutcome, StoreError, WorkflowStore, revalidate_workflow_sources,
-    start_default_workflow,
+    LocalOutputState, LocalReplaceOutcome, NotionBlockPreview, NotionExistingSection,
+    NotionExtendRequest, NotionOutputPort, NotionPreflight, NotionPreflightStatus,
+    NotionReplacePreflight, NotionReplaceRequest, NotionRequest, OperationLog, SourceCatalog,
+    SourceCheckpointError, SourceReader, SourceWriteError, SourceWriter, StartOutcome, StoreError,
+    WorkflowStore, revalidate_workflow_sources, start_default_workflow,
 };
 pub use publication::{PublicationCoordinator, PublicationError, PublicationResult};
 pub use types::*;

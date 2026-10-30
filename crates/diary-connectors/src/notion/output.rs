@@ -5,8 +5,8 @@ use super::*;
 /// Production Notion adapter. Its Debug representation never contains the
 /// bearer token or page identity.
 pub struct NotionClient {
-    remote: Arc<dyn NotionRemote>,
-    root_page_id: String,
+    pub(super) remote: Arc<dyn NotionRemote>,
+    pub(super) root_page_id: String,
 }
 
 impl std::fmt::Debug for NotionClient {
@@ -46,7 +46,7 @@ impl NotionClient {
         }
     }
 
-    fn resolve_path(
+    pub(super) fn resolve_path(
         &self,
         plan: &NotionPlan,
         cancelled: &AtomicBool,
@@ -455,6 +455,25 @@ impl NotionOutputPort for NotionClient {
         }
     }
 
+    fn observe_existing(&self, day: &DiaryDay) -> Result<Option<NotionExistingSection>, String> {
+        self.observe_section(day)
+    }
+
+    fn preflight_extend(
+        &self,
+        request: &NotionExtendRequest,
+    ) -> Result<NotionReplacePreflight, String> {
+        self.preflight_extension(request)
+    }
+
+    fn extend_section(
+        &self,
+        request: &NotionExtendRequest,
+        cancelled: &AtomicBool,
+    ) -> WriteOutcome {
+        self.extend(request, cancelled)
+    }
+
     fn reconcile_replace(&self, request: &NotionReplaceRequest) -> InspectionOutcome {
         let plan = match Self::replace_plan(request) {
             Ok(plan) => plan,
@@ -621,16 +640,16 @@ impl NotionClient {
     }
 }
 
-struct ResolvedPath {
+pub(super) struct ResolvedPath {
     year: Option<NotionPage>,
-    month: Option<NotionPage>,
+    pub(super) month: Option<NotionPage>,
 }
 
 fn map_hierarchy_error(_: HierarchyError) -> RemoteError {
     RemoteError::Blocked(SetupReason::HierarchyAmbiguous)
 }
 
-fn remote_reason(error: RemoteError) -> String {
+pub(super) fn remote_reason(error: RemoteError) -> String {
     match error {
         RemoteError::Blocked(reason) => reason.as_str().to_owned(),
         RemoteError::Ambiguous => "notion-write-ambiguous".to_owned(),
@@ -639,7 +658,7 @@ fn remote_reason(error: RemoteError) -> String {
     }
 }
 
-fn flatten_preview(blocks: &[NotionBlock]) -> Vec<NotionBlockPreview> {
+pub(super) fn flatten_preview(blocks: &[NotionBlock]) -> Vec<NotionBlockPreview> {
     fn append(output: &mut Vec<NotionBlockPreview>, blocks: &[NotionBlock], depth: u8) {
         for block in blocks {
             output.push(NotionBlockPreview {

@@ -178,9 +178,11 @@ pub fn preview_screen_body(
         marker(1),
         marker(2)
     );
-    let local_verified =
-        preview.is_some_and(|preview| preview.workflow.local_status.as_deref() == Some("verified"));
-    if notion.is_none() && crate::existing_entry_view::offered(local_verified, preview) {
+    let local_verified = notion
+        .map(|notion| &notion.workflow)
+        .or(preview.map(|preview| &preview.workflow))
+        .is_some_and(|workflow| workflow.local_status.as_deref() == Some("verified"));
+    if crate::existing_entry_view::offered(local_verified, preview, notion) {
         text.push_str(&format!(
             "{} Append to the existing entry\n{} Overwrite the existing entry\n",
             marker(crate::existing_entry_view::APPEND_CONTROL),
@@ -215,7 +217,29 @@ pub fn preview_screen_body(
         if let Some(reason) = &notion.reason {
             text.push_str(&format!("Reason: {reason}\n"));
         }
+        if let Some(mode) = &notion.existing_mode {
+            text.push_str(&format!(
+                "{}\n",
+                crate::existing_entry_view::mode_line(mode)
+            ));
+        }
         text.push('\n');
+        if !notion.current_blocks.is_empty() {
+            let label = match notion.existing_mode.as_deref() {
+                Some("append") => "will be appended to",
+                _ => "will be replaced",
+            };
+            text.push_str(&format!("Existing section ({label}):\n"));
+            for block in &notion.current_blocks {
+                text.push_str(&format!(
+                    "{}{}: {}\n",
+                    "  ".repeat(usize::from(block.depth)),
+                    block.kind,
+                    block.text
+                ));
+            }
+            text.push_str("\nPlanned:\n");
+        }
         for block in &notion.blocks {
             text.push_str(&format!(
                 "{}{}: {}\n",

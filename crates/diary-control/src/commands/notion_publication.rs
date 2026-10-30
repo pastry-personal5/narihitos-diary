@@ -9,6 +9,17 @@ impl CommandService {
         day: &DiaryDay,
         expected_revision: u64,
     ) -> Result<NotionPreview, CommandError> {
+        self.preview_notion_with(day, expected_revision, ExistingEntryMode::Refuse)
+    }
+
+    /// As [`Self::preview_notion`]; a chosen `mode` plans an Append or an
+    /// Overwrite for a canonical same-day section instead of a conflict.
+    pub fn preview_notion_with(
+        &self,
+        day: &DiaryDay,
+        expected_revision: u64,
+        mode: ExistingEntryMode,
+    ) -> Result<NotionPreview, CommandError> {
         self.ensure_clear(day)?;
         let notion = self
             .notion_output
@@ -33,11 +44,26 @@ impl CommandService {
                     payload_digest: Digest::of_bytes(b"notion-unavailable"),
                     plan_digest: None,
                     blocks: Vec::new(),
+                    current_blocks: Vec::new(),
+                    mode: ExistingEntryMode::Refuse,
                     status: DestinationStatus::Blocked,
                     reason: Some(reason),
                 });
             }
         };
+        if mode.chosen()
+            && preflight.status == NotionPreflightStatus::Conflict
+            && preflight.reason.as_deref() == Some("notion-same-day-conflict")
+        {
+            return self.preview_notion_existing(
+                notion.as_ref(),
+                day,
+                expected_revision,
+                workflow,
+                preflight,
+                mode,
+            );
+        }
         let status = match preflight.status {
             NotionPreflightStatus::Ready => DestinationStatus::Pending,
             NotionPreflightStatus::Blocked => DestinationStatus::Blocked,
@@ -57,6 +83,8 @@ impl CommandService {
                 payload_digest: preflight.payload_digest,
                 plan_digest: None,
                 blocks: preflight.blocks,
+                current_blocks: Vec::new(),
+                mode: ExistingEntryMode::Refuse,
                 status,
                 reason: preflight.reason,
             });
@@ -95,6 +123,8 @@ impl CommandService {
             payload_digest: preflight.payload_digest,
             plan_digest: Some(plan.plan_digest),
             blocks: preflight.blocks,
+            current_blocks: Vec::new(),
+            mode: ExistingEntryMode::Refuse,
             status,
             reason: None,
         })
@@ -125,11 +155,15 @@ impl CommandService {
             .iter()
             .find(|target| target.destination == "notion")
             .ok_or(CommandError::Workflow(WorkflowError::MissingPlan))?;
-        let preflight = notion
-            .preflight(day, &workflow.entry().text)
-            .map_err(|reason| notion_preflight_error(&reason))?;
-        if let Some(reason) = notion_binding_refusal(&preflight, target, true) {
-            return Err(CommandError::NotionBindingChanged(reason));
+        if existing_entry::replacing_guard(target).is_some() {
+            self.bind_existing_notion(notion.as_ref(), &workflow, target)?;
+        } else {
+            let preflight = notion
+                .preflight(day, &workflow.entry().text)
+                .map_err(|reason| notion_preflight_error(&reason))?;
+            if let Some(reason) = notion_binding_refusal(&preflight, target, true) {
+                return Err(CommandError::NotionBindingChanged(reason));
+            }
         }
         workflow
             .approve_blocked_retry(expected_revision, "notion", digest, self.clock.now())
@@ -179,12 +213,17 @@ impl CommandService {
             expected_state_digest: target.inspected_state_digest.clone(),
         };
         // Revalidate the approved binding immediately before the first effect.
-        let preflight = notion
-            .preflight(day, &workflow.entry().text)
-            .map_err(|_| CommandError::NotionUnavailable)?;
-        if let Some(reason) = notion_binding_refusal(&preflight, target, true) {
-            return Err(CommandError::NotionBindingChanged(reason));
-        }
+        let existing = if existing_entry::replacing_guard(target).is_some() {
+            Some(self.bind_existing_notion(notion.as_ref(), &workflow, target)?)
+        } else {
+            let preflight = notion
+                .preflight(day, &workflow.entry().text)
+                .map_err(|_| CommandError::NotionUnavailable)?;
+            if let Some(reason) = notion_binding_refusal(&preflight, target, true) {
+                return Err(CommandError::NotionBindingChanged(reason));
+            }
+            None
+        };
         if workflow.state() == diary_core::WorkflowState::Partial {
             workflow
                 .begin_pending_retry(
@@ -212,10 +251,24 @@ impl CommandService {
             self.clock.now(),
         )
         .map_err(|_| CommandError::NotionUnavailable)?;
-        let mut destination = NotionDestination {
-            output: notion.as_ref(),
-            request: &request,
-            cancelled,
+        let mut destination = match &existing {
+            None => existing_entry::NotionPublishTarget::Plain(NotionDestination {
+                output: notion.as_ref(),
+                request: &request,
+                cancelled,
+            }),
+            Some(existing_entry::ExistingNotion::Replace(replace)) => {
+                existing_entry::NotionPublishTarget::replacing(notion.as_ref(), replace, cancelled)
+            }
+            Some(existing_entry::ExistingNotion::Extend(extend)) => {
+                existing_entry::NotionPublishTarget::Extend(
+                    existing_entry::ExtendNotionDestination {
+                        output: notion.as_ref(),
+                        request: extend,
+                        cancelled,
+                    },
+                )
+            }
         };
         let result = PublicationCoordinator::execute(
             self.store.as_ref(),

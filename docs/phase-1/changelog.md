@@ -15,6 +15,15 @@ This changelog records owner decisions and material plan changes for Phase 1.
   so the text before the first `#` is still the month page ID. A day stuck this
   way recovers on the next server start, when recovery re-inspects Notion and
   saves the receipt. No schema change.
+- 2026-10-30 — P1-M21 planned and implemented — A differing local file, iCloud
+  file, or Notion section was a dead-end conflict. Preview now offers Append
+  (existing content kept, then a dated `---` separator and the new text) and
+  Overwrite (file backed up beside it first; Notion's trash is its safety net,
+  with a second Enter in the TUI) at every connector, bound to the content the
+  person previewed. The iCloud mirror always ends byte-identical to the final
+  local file. `verify_local_receipt` now compares the file with the receipt's
+  own digest. The preview routes take an optional `existing_mode` and the
+  contract version becomes 8; no schema change.
 - 2026-10-30 — P1-M20 planned — New Notion daily sections were appended at the
   bottom of the month page. They are now inserted in ascending date order (after
   the greatest earlier dated section, or before the smallest later one); sections

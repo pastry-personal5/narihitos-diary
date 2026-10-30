@@ -1329,7 +1329,11 @@ pub fn run_connected_session(
                 4
             }
             Stage::Preview => {
-                3 + if existing_entry_offered(current_workflow.as_ref(), local_preview.as_ref()) {
+                3 + if existing_entry_offered(
+                    current_workflow.as_ref(),
+                    local_preview.as_ref(),
+                    notion_preview.as_ref(),
+                ) {
                     crate::existing_entry_view::EXTRA_CONTROLS
                 } else {
                     0
@@ -1966,11 +1970,7 @@ pub fn run_connected_session(
                     && let Some(workflow) = &current_workflow
                 {
                     local_action_pending = worker
-                        .try_send(Intent::PreviewExisting {
-                            workflow_id: workflow.id.clone(),
-                            revision: workflow.revision,
-                            existing_mode: "overwrite".to_owned(),
-                        })
+                        .try_send(existing_preview_intent(workflow, "overwrite"))
                         .is_ok();
                 }
             }
@@ -2664,15 +2664,12 @@ pub fn run_connected_session(
                                 if existing_entry_offered(
                                     current_workflow.as_ref(),
                                     local_preview.as_ref(),
+                                    notion_preview.as_ref(),
                                 ) =>
                             {
                                 if crate::existing_entry_view::mode_for(index) == Some("append") {
                                     local_action_pending = worker
-                                        .try_send(Intent::PreviewExisting {
-                                            workflow_id: workflow.id.clone(),
-                                            revision: workflow.revision,
-                                            existing_mode: "append".to_owned(),
-                                        })
+                                        .try_send(existing_preview_intent(workflow, "append"))
                                         .is_ok();
                                 } else {
                                     overwrite_confirmation = true;
@@ -2994,7 +2991,27 @@ mod tests;
 fn existing_entry_offered(
     workflow: Option<&WorkflowDto>,
     preview: Option<&LocalPreviewDto>,
+    notion: Option<&NotionPreviewDto>,
 ) -> bool {
     let local_verified = workflow.is_some_and(|w| w.local_status.as_deref() == Some("verified"));
-    crate::existing_entry_view::offered(local_verified, preview)
+    crate::existing_entry_view::offered(local_verified, preview, notion)
+}
+
+/// The preview a chosen mode asks for: the local file and iCloud mirror
+/// until the local file is verified, then the Notion section.
+fn existing_preview_intent(workflow: &WorkflowDto, mode: &str) -> Intent {
+    let existing_mode = mode.to_owned();
+    if workflow.local_status.as_deref() == Some("verified") {
+        Intent::PreviewNotionExisting {
+            workflow_id: workflow.id.clone(),
+            revision: workflow.revision,
+            existing_mode,
+        }
+    } else {
+        Intent::PreviewExisting {
+            workflow_id: workflow.id.clone(),
+            revision: workflow.revision,
+            existing_mode,
+        }
+    }
 }

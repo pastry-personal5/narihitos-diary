@@ -387,7 +387,9 @@ front matter with diary day and language plus the confirmed Markdown body. It
 creates a temporary file in the destination directory, flushes it, and uses a
 no-clobber finalization strategy. Same-path identical content resumes; different
 content is a conflict and is never overwritten automatically; only an
-approved amendment replaces the app's own receipted file. The local file
+approved amendment, or an explicitly chosen and previewed Append or Overwrite
+(see [Append and Overwrite](#append-and-overwrite-of-an-existing-entry)),
+replaces a file. The local file
 is the durable source of truth for retrying later destinations.
 
 The optional iCloud mirror (`DestinationKind::Mirror`, destination `icloud`,
@@ -475,6 +477,49 @@ target day already has an unfinished workflow, nothing is carried over and the
 person opens that workflow instead. These rules cover content the app did not
 write. An unmodified destination that matches the app's own receipt is an
 amendment, not a conflict.
+
+### Append and Overwrite of an existing entry
+
+P1-M21 lets the person resolve a differing destination without losing either
+side. The choice is a request field on the two preview routes
+(`output-previews` for the local file and iCloud mirror, `notion-previews` for
+Notion), `existing_mode` of `append` or `overwrite`; without it a differing
+destination is the conflict described above. Reread, discard, and save under a
+different day are unchanged. The choice is made in the phase where the
+conflict shows and changes nothing until that exact plan is approved.
+
+No mode is stored and there is no schema change. A plan target built to
+replace existing content sets its intended-state digest to a replacement marker
+derived from the existing and planned digests, so a plan that merely met a
+conflict can never replace anything, even on a retry. The planned local bytes
+are re-derived from the plan: the plain rendering (Overwrite), the file itself
+once it holds the planned bytes, or the existing file plus the Append block
+built from the plan's creation time. Existing content is bound by the
+observed-state digest, so any change since the preview voids the plan.
+
+- **Local and iCloud.** Append is the existing bytes, a newline if missing, a
+  blank line, `---`, a blank line, `*Appended YYYY-MM-DD HH:MM*`, a blank line,
+  and the new body. Overwrite first copies the file to
+  `<name>.md.bak-<12 hex of its digest>`, reads the copy back, then replaces it
+  atomically through the digest-guarded `replace`; a failed backup blocks the
+  write. The mirror always receives the final local bytes, so a differing
+  mirror file is backed up and replaced the same way. Because the file may no
+  longer equal a plain rendering, `verify_local_receipt` compares it with the
+  receipt's own payload digest.
+- **Notion.** The adapter exposes `observe_existing` (the single canonical
+  same-day section with its block IDs and digest), `preflight_extend`, and
+  `extend_section`; Overwrite reuses the amendment `replace_section` with a
+  request built from the observed section instead of a receipt. Append inserts
+  a literal `---` paragraph (the projection has no divider block), an italic
+  `Appended` paragraph, and the new body after the section's last block,
+  resuming safely because every step reads the section back. The receipt
+  records the digest of the whole resulting section so a later amendment still
+  recognizes it.
+- **Recovery.** An interrupted file replace cannot leave a partial file
+  (atomic rename). An interrupted Notion Append resumes without duplicates; an
+  interrupted Overwrite leaves duplicate content rather than lost content, and
+  a repeat Overwrite after a new preview clears it. A crash before the file
+  replace resolves as a conflict that needs a new preview.
 
 ### Amendments
 

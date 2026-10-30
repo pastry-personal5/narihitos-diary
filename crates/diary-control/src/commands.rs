@@ -57,6 +57,9 @@ pub struct NotionPreview {
     pub payload_digest: Digest,
     pub plan_digest: Option<Digest>,
     pub blocks: Vec<NotionBlockPreview>,
+    /// The existing section a chosen Append or Overwrite acts on.
+    pub current_blocks: Vec<NotionBlockPreview>,
+    pub mode: ExistingEntryMode,
     pub status: DestinationStatus,
     pub reason: Option<String>,
 }

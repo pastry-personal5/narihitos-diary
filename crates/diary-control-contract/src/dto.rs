@@ -61,6 +61,12 @@ pub struct NotionPreviewDto {
     pub payload_digest: String,
     pub plan_digest: Option<String>,
     pub blocks: Vec<NotionBlockDto>,
+    /// The existing section a chosen Append or Overwrite acts on.
+    #[serde(default)]
+    pub current_blocks: Vec<NotionBlockDto>,
+    /// `append` or `overwrite` when this plan acts on an existing section.
+    #[serde(default)]
+    pub existing_mode: Option<String>,
     pub status: String,
     pub reason: Option<String>,
 }

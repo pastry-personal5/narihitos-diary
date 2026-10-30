@@ -54,7 +54,7 @@ fn versioned(receipt_id: &str, version: u32) -> String {
 
 /// As [`versioned`], for a Notion receipt: the attempt keeps it unique across
 /// the other days of the same month, which share the month page ID.
-fn versioned_for_attempt(receipt_id: &str, attempt_id: &str, version: u32) -> String {
+pub(super) fn versioned_for_attempt(receipt_id: &str, attempt_id: &str, version: u32) -> String {
     format!("{}#{attempt_id}#v{version}", base_receipt_id(receipt_id))
 }
 
@@ -117,11 +117,11 @@ impl Destination for AmendLocalDestination<'_> {
     }
 }
 
-struct AmendNotionDestination<'a> {
-    output: &'a dyn NotionOutputPort,
-    request: &'a NotionReplaceRequest,
-    cancelled: &'a AtomicBool,
-    version: u32,
+pub(super) struct AmendNotionDestination<'a> {
+    pub(super) output: &'a dyn NotionOutputPort,
+    pub(super) request: &'a NotionReplaceRequest,
+    pub(super) cancelled: &'a AtomicBool,
+    pub(super) version: u32,
 }
 
 impl Destination for AmendNotionDestination<'_> {

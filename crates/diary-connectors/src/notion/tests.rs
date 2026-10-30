@@ -1662,3 +1662,206 @@ fn a_lost_reply_mid_page_is_adopted_without_a_second_insert() {
     assert_eq!(remote.0.lock().unwrap().append_anchors.len(), 1);
     assert_eq!(headings(&remote).len(), 3);
 }
+
+fn extend_request(
+    client: &NotionClient,
+    value: &str,
+    markdown: &str,
+    resolved: bool,
+) -> NotionExtendRequest {
+    let existing = client.observe_existing(&day(value)).unwrap().unwrap();
+    let mut request = NotionExtendRequest {
+        day: day(value),
+        markdown: markdown.into(),
+        appended_at: "2026-10-30 21:14".into(),
+        expected_target_identity: ROOT.into(),
+        expected_result_digest: None,
+        owned_month_id: existing.month_id,
+        owned_block_ids: existing.block_ids,
+        owned_section_digest: existing.section_digest,
+    };
+    if resolved {
+        request.expected_result_digest = Some(
+            client
+                .preflight_extend(&request)
+                .unwrap()
+                .preflight
+                .payload_digest,
+        );
+    }
+    request
+}
+
+#[test]
+fn an_existing_canonical_section_is_observed_and_anything_else_is_not_offered() {
+    let remote = seeded_month(&["2026-10-27", "2026-10-28"]);
+    let client = NotionClient::scripted(remote.clone(), ROOT);
+    let section = client
+        .observe_existing(&day("2026-10-28"))
+        .unwrap()
+        .unwrap();
+    assert_eq!(section.month_id, "month");
+    assert_eq!(section.block_ids, vec!["h-2026-10-28", "b-2026-10-28"]);
+    assert_eq!(section.blocks.len(), 2);
+    assert_eq!(client.observe_existing(&day("2026-10-29")), Ok(None));
+    // A heading that is not the canonical form is a plain conflict.
+    remote
+        .append_blocks(
+            "month",
+            &[text_block(BlockKind::Heading2, "2026-10-29".into())],
+            &Placement::End,
+            &AtomicBool::new(false),
+        )
+        .unwrap();
+    assert_eq!(
+        client.observe_existing(&day("2026-10-29")),
+        Err("notion-same-day-conflict".to_owned())
+    );
+}
+
+#[test]
+fn append_adds_a_separator_dated_line_and_body_after_the_last_block_of_the_section() {
+    let remote = seeded_month(&["2026-10-27", "2026-10-28", "2026-10-29"]);
+    let client = NotionClient::scripted(remote.clone(), ROOT);
+    let request = extend_request(&client, "2026-10-28", "More.", true);
+    let WriteOutcome::Verified {
+        receipt_id,
+        returned_ids,
+    } = client.extend_section(&request, &AtomicBool::new(false))
+    else {
+        panic!("an untouched section must be extended");
+    };
+    assert_eq!(receipt_id, "month");
+    assert_eq!(returned_ids.len(), 5);
+    assert_eq!(
+        remote.month_texts("month"),
+        vec![
+            "2026-10-27 (TUE)",
+            "body 2026-10-27",
+            "2026-10-28 (WED)",
+            "body 2026-10-28",
+            "---",
+            "Appended 2026-10-30 21:14",
+            "More.",
+            "2026-10-29 (THU)",
+            "body 2026-10-29",
+        ]
+    );
+    // The dated line is italic; the rule is a literal paragraph.
+    let state = remote.0.lock().unwrap();
+    let dated = &state.blocks["month"][5].block;
+    assert!(dated.rich_text.iter().all(|item| item.annotations.italic));
+    drop(state);
+    // A replay is a no-op: nothing is inserted twice.
+    let appends = remote.0.lock().unwrap().append_anchors.len();
+    assert!(matches!(
+        client.extend_section(&request, &AtomicBool::new(false)),
+        WriteOutcome::Verified { .. }
+    ));
+    assert_eq!(remote.0.lock().unwrap().append_anchors.len(), appends);
+}
+
+#[test]
+fn the_previewed_result_digest_matches_the_section_after_the_append() {
+    let remote = seeded_month(&["2026-10-28"]);
+    let client = NotionClient::scripted(remote, ROOT);
+    let request = extend_request(&client, "2026-10-28", "More.", true);
+    assert!(matches!(
+        client.extend_section(&request, &AtomicBool::new(false)),
+        WriteOutcome::Verified { .. }
+    ));
+    let after = client
+        .observe_existing(&day("2026-10-28"))
+        .unwrap()
+        .unwrap();
+    assert_eq!(Some(after.section_digest), request.expected_result_digest);
+}
+
+#[test]
+fn append_refuses_a_section_edited_since_the_preview_and_writes_nothing() {
+    let remote = seeded_month(&["2026-10-28", "2026-10-29"]);
+    let client = NotionClient::scripted(remote.clone(), ROOT);
+    let request = extend_request(&client, "2026-10-28", "More.", true);
+    // Someone edits the section after the preview.
+    remote
+        .append_blocks(
+            "month",
+            &[para("added by hand")],
+            &Placement::After("b-2026-10-28".into()),
+            &AtomicBool::new(false),
+        )
+        .unwrap();
+    let before = remote.0.lock().unwrap().append_anchors.len();
+    assert_eq!(
+        client.extend_section(&request, &AtomicBool::new(false)),
+        WriteOutcome::Conflict
+    );
+    assert_eq!(remote.0.lock().unwrap().append_anchors.len(), before);
+    let preflight = client.preflight_extend(&request).unwrap();
+    assert_eq!(preflight.preflight.status, NotionPreflightStatus::Conflict);
+}
+
+#[test]
+fn a_long_append_chunks_and_an_interrupted_one_resumes_without_duplicates() {
+    let remote = seeded_month(&["2026-10-28", "2026-10-29"]);
+    let client = NotionClient::scripted(remote.clone(), ROOT);
+    let request = extend_request(&client, "2026-10-28", &long_markdown(), true);
+    let base = remote.0.lock().unwrap().append_anchors.len();
+    // The first chunk lands but its reply is lost.
+    remote.lose_append_reply_on_call(base + 1, true);
+    assert_eq!(
+        client.extend_section(&request, &AtomicBool::new(false)),
+        WriteOutcome::AmbiguousWrite
+    );
+    assert!(matches!(
+        client.extend_section(&request, &AtomicBool::new(false)),
+        WriteOutcome::Verified { .. }
+    ));
+    let texts = remote.month_texts("month");
+    // heading + body + rule + dated line + 120 paragraphs, then the next day.
+    assert_eq!(texts.len(), 2 + 2 + 120 + 2);
+    assert_eq!(texts[4], "paragraph 0");
+    assert_eq!(texts[123], "paragraph 119");
+    assert_eq!(texts[124], "2026-10-29 (THU)");
+}
+
+#[test]
+fn overwrite_replaces_a_section_the_app_did_not_write_and_keeps_its_neighbors() {
+    let remote = seeded_month(&["2026-10-27", "2026-10-28", "2026-10-29"]);
+    let client = NotionClient::scripted(remote.clone(), ROOT);
+    let existing = client
+        .observe_existing(&day("2026-10-28"))
+        .unwrap()
+        .unwrap();
+    let new = render_notion(&day("2026-10-28"), "Fresh.").unwrap();
+    let request = NotionReplaceRequest {
+        day: day("2026-10-28"),
+        markdown: "Fresh.".into(),
+        expected_target_identity: ROOT.into(),
+        expected_payload_digest: Digest::parse(new.payload_digest).unwrap(),
+        owned_month_id: existing.month_id,
+        owned_block_ids: existing.block_ids.clone(),
+        owned_payload_digest: existing.section_digest,
+    };
+    let preview = client.preflight_replace(&request).unwrap();
+    assert_eq!(preview.preflight.status, NotionPreflightStatus::Ready);
+    assert_eq!(preview.current_blocks.len(), 2);
+    let WriteOutcome::Verified { returned_ids, .. } =
+        client.replace_section(&request, &AtomicBool::new(false))
+    else {
+        panic!("an untouched foreign section must be replaced");
+    };
+    assert_eq!(returned_ids[0], existing.block_ids[0], "heading is kept");
+    assert_eq!(
+        remote.month_texts("month"),
+        vec![
+            "2026-10-27 (TUE)",
+            "body 2026-10-27",
+            "2026-10-28 (WED)",
+            "Fresh.",
+            "2026-10-29 (THU)",
+            "body 2026-10-29",
+        ]
+    );
+    assert_eq!(remote.0.lock().unwrap().trashed, vec!["b-2026-10-28"]);
+}

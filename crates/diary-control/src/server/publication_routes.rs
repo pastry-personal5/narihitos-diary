@@ -4,6 +4,22 @@ use super::*;
 
 use crate::ExistingEntryMode;
 
+/// Reads the optional preview body: no body, or no mode, refuses to touch
+/// existing content.
+fn existing_mode_from(body: &Bytes) -> Result<ExistingEntryMode, ApiError> {
+    let request: LocalPreviewRequest = if body.is_empty() {
+        LocalPreviewRequest::default()
+    } else {
+        serde_json::from_slice(body)
+            .map_err(|_| ApiError::new(StatusCode::BAD_REQUEST, "invalid-request"))?
+    };
+    match request.existing_mode.as_deref() {
+        None => Ok(ExistingEntryMode::Refuse),
+        Some(value) => ExistingEntryMode::parse(value)
+            .ok_or_else(|| ApiError::new(StatusCode::BAD_REQUEST, "invalid-existing-mode")),
+    }
+}
+
 pub(super) async fn preview_local_output(
     State(state): State<AppState>,
     Path(id): Path<String>,
@@ -12,17 +28,7 @@ pub(super) async fn preview_local_output(
 ) -> Result<Json<LocalPreviewDto>, ApiError> {
     let day = day_from_id(&id)?;
     let revision = workflow_precondition(&headers)?;
-    let request: LocalPreviewRequest = if body.is_empty() {
-        LocalPreviewRequest::default()
-    } else {
-        serde_json::from_slice(&body)
-            .map_err(|_| ApiError::new(StatusCode::BAD_REQUEST, "invalid-request"))?
-    };
-    let mode = match request.existing_mode.as_deref() {
-        None => ExistingEntryMode::Refuse,
-        Some(value) => ExistingEntryMode::parse(value)
-            .ok_or_else(|| ApiError::new(StatusCode::BAD_REQUEST, "invalid-existing-mode"))?,
-    };
+    let mode = existing_mode_from(&body)?;
     let service = state.0.config.commands.clone();
     let preview = blocking(move || service.preview_local_with(&day, revision, mode)).await?;
     let plan = preview
@@ -240,11 +246,13 @@ pub(super) async fn preview_notion_output(
     State(state): State<AppState>,
     Path(id): Path<String>,
     headers: HeaderMap,
+    body: Bytes,
 ) -> Result<Json<NotionPreviewDto>, ApiError> {
     let day = day_from_id(&id)?;
     let revision = workflow_precondition(&headers)?;
+    let mode = existing_mode_from(&body)?;
     let service = state.0.config.commands.clone();
-    let preview = blocking(move || service.preview_notion(&day, revision)).await?;
+    let preview = blocking(move || service.preview_notion_with(&day, revision, mode)).await?;
     log_debug(
         &state,
         DiagnosticEvent::NotionPreview {
@@ -282,6 +290,17 @@ pub(super) async fn preview_notion_output(
                 depth: block.depth,
             })
             .collect(),
+        current_blocks: preview
+            .current_blocks
+            .into_iter()
+            .map(|block| NotionBlockDto {
+                kind: block.kind,
+                text: block.text,
+                depth: block.depth,
+            })
+            .collect(),
+        existing_mode: (preview.mode != ExistingEntryMode::Refuse)
+            .then(|| preview.mode.as_str().to_owned()),
         status: preview.status.as_str().to_owned(),
         reason: preview.reason,
     };

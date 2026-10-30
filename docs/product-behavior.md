@@ -121,8 +121,18 @@ mirror can be retried alone. Without the setting nothing changes. See the
   on-device; manual editing always remains available.
 - A different local file at the target path is never overwritten automatically.
   Conflicting same-day Notion content stops publication for resolution. A
-  conflict shows both versions and offers only reread, discard the entry, or
-  save under a different diary day.
+  conflict shows both versions and offers reread, discard the entry, or save
+  under a different diary day. When a diary entry already exists at the local
+  file, the iCloud mirror, or a Notion section, Preview also offers **Append**
+  and **Overwrite** (P1-M21). Append keeps the existing content and adds a
+  `---` separator, an `*Appended YYYY-MM-DD HH:MM*` line (Mac-local time fixed
+  when the plan is built), and the new text. Overwrite copies a file to
+  `<name>.md.bak-<digest>` beside it first, or replaces a Notion section's body
+  (Notion's trash is its safety net), and asks for a second Enter. Each is a
+  per-publication choice that is previewed exactly and applies only while the
+  content is still what was previewed; a duplicate or non-canonical Notion
+  heading stays a plain conflict. The iCloud mirror always ends byte-identical
+  to the final local file.
 - A completed entry can be amended: the editor opens with the saved text
   (including your own hand edits to the file, flagged), and approving the
   replacement plan replaces only content the app itself wrote. Anything else

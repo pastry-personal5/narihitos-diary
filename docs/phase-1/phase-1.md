@@ -335,6 +335,19 @@ Plan: [overview](milestone-20-notion-ascending-order-overview.md).
 Notes: Owner-approved 2026-10-30; raises the contract to version 7 with the
 Notion preview's `placement` field.
 
+### P1-M21: Append and Overwrite an existing entry
+
+Status: In progress
+
+Goal: When a diary entry already exists at the local file, the iCloud mirror, or
+a Notion section, let Preview offer Append and Overwrite as explicit, previewed
+choices.
+
+Plan: [overview](milestone-21-append-overwrite-existing-entry-overview.md).
+
+Notes: Owner-approved 2026-10-30; narrows "never overwrite" to "never overwrite
+without an explicit, confirmed choice"; raises the contract to version 8.
+
 ### P1-M13: Release qualification
 
 Status: Planned

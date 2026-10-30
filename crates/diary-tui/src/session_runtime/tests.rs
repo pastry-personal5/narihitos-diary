@@ -473,6 +473,8 @@ fn notion_preview_shows_where_the_day_goes_on_the_month_page() {
         payload_digest: "digest".into(),
         plan_digest: Some("plan".into()),
         blocks: Vec::new(),
+        current_blocks: Vec::new(),
+        existing_mode: None,
         status: "pending".into(),
         reason: None,
     };
@@ -576,19 +578,62 @@ fn preview_with(local: &str, icloud: Option<&str>, mode: Option<&str>) -> LocalP
 #[test]
 fn append_and_overwrite_are_offered_only_for_an_existing_entry() {
     use crate::existing_entry_view::{mode_for, offered};
-    assert!(!offered(false, None));
-    assert!(!offered(false, Some(&preview_with("pending", None, None))));
-    assert!(offered(false, Some(&preview_with("conflict", None, None))));
-    assert!(offered(
+    assert!(!offered(false, None, None));
+    assert!(!offered(
         false,
-        Some(&preview_with("pending", Some("conflict"), None))
+        Some(&preview_with("pending", None, None)),
+        None
     ));
     assert!(offered(
         false,
-        Some(&preview_with("pending", None, Some("append")))
+        Some(&preview_with("conflict", None, None)),
+        None
+    ));
+    assert!(offered(
+        false,
+        Some(&preview_with("pending", Some("conflict"), None)),
+        None
+    ));
+    assert!(offered(
+        false,
+        Some(&preview_with("pending", None, Some("append"))),
+        None
     ));
     // Once the local file is verified the Notion phase owns the screen.
-    assert!(!offered(true, Some(&preview_with("conflict", None, None))));
+    let local = preview_with("conflict", None, None);
+    assert!(!offered(true, Some(&local), None));
+    let notion = |status: &str, reason: Option<&str>, mode: Option<&str>| NotionPreviewDto {
+        workflow: composing_workflow(),
+        path: vec!["Notion root".into(), "2026".into(), "2026-10".into()],
+        year_exists: true,
+        month_exists: true,
+        placement: "end".into(),
+        renderer_version: 1,
+        api_version: "2026-03-11".into(),
+        payload_digest: "digest".into(),
+        plan_digest: None,
+        blocks: Vec::new(),
+        current_blocks: Vec::new(),
+        existing_mode: mode.map(str::to_owned),
+        status: status.into(),
+        reason: reason.map(str::to_owned),
+    };
+    assert!(offered(
+        true,
+        None,
+        Some(&notion("conflict", Some("notion-same-day-conflict"), None))
+    ));
+    assert!(!offered(
+        true,
+        None,
+        Some(&notion("conflict", Some("notion-section-not-owned"), None))
+    ));
+    assert!(!offered(true, None, Some(&notion("pending", None, None))));
+    assert!(offered(
+        true,
+        None,
+        Some(&notion("pending", None, Some("append")))
+    ));
     assert_eq!(mode_for(3), Some("append"));
     assert_eq!(mode_for(4), Some("overwrite"));
     assert_eq!(mode_for(2), None);

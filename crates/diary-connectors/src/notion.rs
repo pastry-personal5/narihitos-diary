@@ -10,9 +10,9 @@ use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
 use diary_core::{
-    DiaryDay, Digest, InspectionOutcome, NotionBlockPreview, NotionOutputPort, NotionPreflight,
-    NotionPreflightStatus, NotionReplacePreflight, NotionReplaceRequest, NotionRequest,
-    WriteOutcome,
+    DiaryDay, Digest, InspectionOutcome, NotionBlockPreview, NotionExistingSection,
+    NotionExtendRequest, NotionOutputPort, NotionPreflight, NotionPreflightStatus,
+    NotionReplacePreflight, NotionReplaceRequest, NotionRequest, WriteOutcome,
 };
 use pulldown_cmark::{CodeBlockKind, Event, HeadingLevel, Options, Parser, Tag, TagEnd};
 use serde::{Deserialize, Serialize};
@@ -89,6 +89,7 @@ enum RemoteError {
     Invalid,
 }
 
+mod existing;
 mod output;
 pub use output::NotionClient;
 

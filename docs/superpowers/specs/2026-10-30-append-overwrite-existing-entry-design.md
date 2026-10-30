@@ -1,6 +1,6 @@
 # Append and Overwrite existing entry design
 
-Status: Approved for implementation (P1-M21, owner 2026-10-30).
+Status: Implemented (P1-M21).
 
 Adds Append and Overwrite as explicit Preview resolutions when a destination already holds content the app did not write, narrowing the "never overwrite" rule to "never overwrite without an explicit, confirmed choice".
 

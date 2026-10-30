@@ -139,6 +139,16 @@ conflict shows the existing and planned text. Reread with Preview,
 discard the workflow from Start, or choose another day in Preview; carried
 text must be confirmed again.
 
+When a file already exists for the day, Preview also offers **Append to the
+existing entry** and **Overwrite the existing entry**. Append keeps what is
+there and adds a `---` line, `*Appended 2026-10-30 21:14*`, and your new text
+below it. Overwrite replaces the file after saving a copy beside it as
+`<date>.md.bak-<digest>` and asks you to press Enter a second time. Either way
+Preview shows the exact result, and nothing is written until you approve; if the
+file changes in between, the plan is refused and you preview again. The same two
+controls appear for a Notion section that already exists, in the Notion
+preview. The iCloud copy always ends identical to the final local file.
+
 If `paths.icloud_entries_root` is set, the same approval also saves an
 identical copy to that iCloud Drive folder, which must already exist under
 `~/Library/Mobile Documents/`. Preview shows an `iCloud mirror` line, and

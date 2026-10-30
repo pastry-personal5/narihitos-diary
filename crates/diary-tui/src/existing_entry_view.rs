@@ -1,6 +1,6 @@
 //! When Preview offers Append and Overwrite for an entry that already exists.
 
-use diary_control_contract::LocalPreviewDto;
+use diary_control_contract::{LocalPreviewDto, NotionPreviewDto};
 
 /// Control indices after the three standing Preview controls.
 pub const APPEND_CONTROL: usize = 3;
@@ -8,17 +8,30 @@ pub const OVERWRITE_CONTROL: usize = 4;
 /// Controls the commands add to Preview when they are offered.
 pub const EXTRA_CONTROLS: usize = 2;
 
-/// Append and Overwrite appear only while the local preview shows an entry
-/// that already exists (a local or iCloud conflict) or after one was chosen,
-/// so the person can switch. They end once the local file is verified.
+/// Append and Overwrite appear only while the preview of the current phase
+/// shows an entry that already exists, or after one was chosen so the person
+/// can switch. Before the local file is verified that is the local preview (a
+/// local or iCloud conflict); afterwards it is the Notion preview (a
+/// same-day section conflict).
 #[must_use]
-pub fn offered(local_verified: bool, preview: Option<&LocalPreviewDto>) -> bool {
-    !local_verified
-        && preview.is_some_and(|preview| {
+pub fn offered(
+    local_verified: bool,
+    preview: Option<&LocalPreviewDto>,
+    notion: Option<&NotionPreviewDto>,
+) -> bool {
+    if local_verified {
+        notion.is_some_and(|notion| {
+            (notion.status == "conflict"
+                && notion.reason.as_deref() == Some("notion-same-day-conflict"))
+                || notion.existing_mode.is_some()
+        })
+    } else {
+        preview.is_some_and(|preview| {
             preview.local_status == "conflict"
                 || preview.icloud_status.as_deref() == Some("conflict")
                 || preview.existing_mode.is_some()
         })
+    }
 }
 
 /// The mode word the Control API takes.

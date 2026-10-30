@@ -223,6 +223,36 @@ pub struct NotionReplaceRequest {
     pub owned_payload_digest: Digest,
 }
 
+/// The canonical same-day section as it stands on the month page, when the
+/// app did not write it. Appending to it or replacing it needs a request built
+/// from this observation.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct NotionExistingSection {
+    pub month_id: String,
+    /// Heading block ID first, then the body block IDs.
+    pub block_ids: Vec<String>,
+    /// Digest of the heading and body blocks as read.
+    pub section_digest: Digest,
+    pub blocks: Vec<NotionBlockPreview>,
+}
+
+/// Adds a dated separator and the new text to an existing section, after its
+/// last block. `owned_*` come from [`NotionExistingSection`].
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct NotionExtendRequest {
+    pub day: DiaryDay,
+    pub markdown: String,
+    /// Mac-local `YYYY-MM-DD HH:MM`, fixed when the plan was built.
+    pub appended_at: String,
+    pub expected_target_identity: String,
+    /// Digest of the whole section once the addition lands; `None` while
+    /// previewing, when the adapter computes it.
+    pub expected_result_digest: Option<Digest>,
+    pub owned_month_id: String,
+    pub owned_block_ids: Vec<String>,
+    pub owned_section_digest: Digest,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct NotionReplacePreflight {
     /// `observed_state_digest` is the digest of the verified owned section.
@@ -257,6 +287,29 @@ pub trait NotionOutputPort: Send + Sync {
     /// never inserting, and reports the resulting section.
     fn reconcile_replace(&self, _request: &NotionReplaceRequest) -> InspectionOutcome {
         InspectionOutcome::Unavailable
+    }
+
+    /// Read-only: the canonical same-day section, `None` when the day has no
+    /// section, or the content-free reason when it cannot be appended to or
+    /// replaced (duplicate or non-canonical headings, unreadable page).
+    fn observe_existing(&self, _day: &DiaryDay) -> Result<Option<NotionExistingSection>, String> {
+        Err("notion-existing-unsupported".to_owned())
+    }
+
+    /// Read-only: previews the addition to a section against the content the
+    /// person saw. The preflight's `payload_digest` is the digest of the whole
+    /// section after the addition.
+    fn preflight_extend(
+        &self,
+        _request: &NotionExtendRequest,
+    ) -> Result<NotionReplacePreflight, String> {
+        Err("notion-existing-unsupported".to_owned())
+    }
+
+    /// Resumable addition: inspects the section before every chunk, so calling
+    /// it again after an interruption never duplicates a write.
+    fn extend_section(&self, _request: &NotionExtendRequest, _: &AtomicBool) -> WriteOutcome {
+        WriteOutcome::Unavailable
     }
 }
 

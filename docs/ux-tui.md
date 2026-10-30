@@ -118,7 +118,17 @@ second row carries a `Tip:` naming the next step to the following stage. See
   conflicting same-day content, stop Notion only. Show both versions and offer
   only reread, discard the entry, or save under a different diary day, as
   described in [Publication and recovery](architecture.md#publication-and-recovery).
-  Never overwrite.
+  Never overwrite on its own.
+- When an entry already exists (a local, iCloud, or Notion conflict), Preview
+  lists **Append to the existing entry** and **Overwrite the existing entry**
+  after its standing controls (P1-M21). They are reached by focus and Enter like
+  every control, and appear only while the current phase shows an existing
+  entry, or after a mode was chosen so the person can switch. Choosing one
+  re-previews the exact plan: a `Mode:` line, the existing content, and the
+  resulting content (for a file, the planned backup name). Overwrite asks for a
+  second Enter and Esc cancels; Append needs none because the existing text is
+  kept. Local and iCloud are chosen in the local preview; Notion is chosen in
+  its own preview after the local file is verified.
 - When Notion is unconfigured, unreachable, or fails its preflight, show it as
   blocked in the preview and still allow the local entry to be approved and
   written. Notion can be retried later: a blocked destination needs a new
