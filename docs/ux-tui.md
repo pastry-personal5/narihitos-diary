@@ -27,6 +27,15 @@ registration or delivery is unavailable. The Command Line accepts only
 selection and entry confirmation remain focused controls and cannot be typed to
 bypass review.
 
+**P1-M15:** a fourth column, the Utility Sidebar, sits to the right of the Main
+Pane (Workflow, Resources, Main Pane, Utility). It stacks two Widgets: the
+read-only Diary Day Widget above the Assistant Widget. The Assistant Widget
+replaces the backend rows in the Resources Sidebar and includes a "None (manual
+only)" row. All four columns are inline from 151 columns (the Main Pane stays at
+least 50 wide); from 120 through 150 the Utility Sidebar opens as a focused
+overlay, and below 120 it overlays alongside Resources. Tab order follows screen
+order. See [the P1-M15 plan](phase-1/milestone-15-utility-sidebar-architecture.md).
+
 ## Approved behavior to represent
 
 - Show directory and header dates together when choosing source notes, visibly

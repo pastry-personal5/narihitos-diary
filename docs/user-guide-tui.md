@@ -22,8 +22,10 @@ and [ux-tui.md](ux-tui.md); this doc does not duplicate their detail.
 ## Moving around
 
 - Tab / Shift-Tab and the arrow keys move focus between the Workflow
-  Sidebar, Resources Sidebar, and Main Pane, and between controls inside the
-  Main Pane. Enter activates the focused control. There are no bare-letter
+  Sidebar, Resources Sidebar, Main Pane, and Utility Sidebar (left to right),
+  and between controls inside the Main Pane. On terminals narrower than 151
+  columns the Utility Sidebar is hidden until focused, then opens over the
+  right edge. Enter activates the focused control. There are no bare-letter
   hotkeys (Korean IME composes bare letters), so every action is reached by
   focus + Enter or by a Ctrl chord.
 - Ctrl-G opens the Command Line (`help`, `retry`, `day YYYY-MM-DD`,
@@ -74,9 +76,13 @@ later output.
 
 ## Compose stage
 
-- Pick a backend from the server's capability list (hosted default or Apple
-  on-device); the label shows which composition path is active. Manual
-  editing in the Draft editor is always available, with or without an
+- Pick a backend in the Utility Sidebar's Assistant Widget, which lists the
+  server's capability list (hosted default or Apple on-device) and a
+  "None (manual only)" row; focus a row and press Enter. The widget is
+  read-only with no open workflow, while an assistant job runs, and while
+  actions are disabled. The label shows which composition path is active. The
+  Diary Day Widget above it always shows the diary day you are working on.
+  Manual editing in the Draft editor is always available, with or without an
   assistant.
 - "Extract memories" sends only the confirmed included source bodies to the
   selected backend; review the resulting memories, then "Confirm reviewed
@@ -91,7 +97,7 @@ later output.
   "Reject current suggestion" — accept fails safely if the paragraph changed
   since the suggestion was made.
 - "Cancel assistant action" stops a running job; "Refresh assistant
-  resources" re-lists available backends.
+  resources" re-lists available backends in the Assistant Widget.
 
 ## Review stage
 

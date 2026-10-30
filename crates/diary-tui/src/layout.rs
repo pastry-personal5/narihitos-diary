@@ -13,6 +13,14 @@ pub const MIN_COLUMNS: u16 = 80;
 pub const MIN_ROWS: u16 = 30;
 pub const WIDE_COLUMNS: u16 = 120;
 pub const MEDIUM_COLUMNS: u16 = 100;
+/// Fixed Utility Sidebar width, border included.
+pub const UTILITY_SIDEBAR_WIDTH: u16 = 24;
+/// Smallest Main Pane width the shipped Wide band already accepts (120
+/// columns leave it 50), so the four-column band never goes below it.
+pub const MIN_MAIN_PANE_WIDTH: u16 = 50;
+/// Narrowest terminal that keeps all four columns inline without the Main
+/// Pane dropping below [`MIN_MAIN_PANE_WIDTH`].
+pub const FULL_COLUMNS: u16 = 151;
 /// Extra Resources Sidebar columns so a `YYYY-MM-DD HH:MM:SS` source label fits.
 pub const RESOURCES_EXTRA_WIDTH: u16 = 16;
 
@@ -48,6 +56,9 @@ pub const fn is_supported_size(width: u16, height: u16) -> bool {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum WidthBand {
+    /// Workflow, Resources, Main Pane, and Utility Sidebar all inline.
+    Full,
+    /// Workflow, Resources, and Main Pane inline; Utility overlays.
     Wide,
     Medium,
     Narrow,
@@ -65,13 +76,14 @@ pub struct AdaptiveAreas {
     pub work_status: Rect,
     pub workflow_sidebar: Option<Rect>,
     pub resources_sidebar: Option<Rect>,
+    pub utility_sidebar: Option<Rect>,
     pub main_pane: Rect,
     pub overlay: Option<SidebarOverlay>,
     pub command_line: Rect,
     pub status_line: Rect,
 }
 
-/// Produces the three approved width bands. A collapsed sidebar becomes an
+/// Produces the four width bands. A collapsed sidebar becomes an
 /// overlay only while its focus zone is active, so Tab/Shift-Tab never makes
 /// its controls unreachable.
 #[must_use]
@@ -84,8 +96,31 @@ pub fn adaptive_areas(area: Rect, focus: FocusZone) -> AdaptiveAreas {
     ])
     .areas(area);
 
-    let (band, workflow_sidebar, resources_sidebar, main_pane, overlay) =
-        if area.width >= WIDE_COLUMNS {
+    let utility_overlay = |container: Rect| {
+        (focus == FocusZone::Utility).then_some(SidebarOverlay {
+            kind: SidebarKind::Utility,
+            area: right_overlay(container, UTILITY_SIDEBAR_WIDTH),
+        })
+    };
+    let (band, workflow_sidebar, resources_sidebar, utility_sidebar, main_pane, overlay) =
+        if area.width >= FULL_COLUMNS {
+            let resources_width = body.width / 4 + RESOURCES_EXTRA_WIDTH;
+            let [workflow, resources, main, utility] = Layout::horizontal([
+                Constraint::Length(MINIMUM_WORKFLOW_SIDEBAR_WIDTH),
+                Constraint::Length(resources_width),
+                Constraint::Min(0),
+                Constraint::Length(UTILITY_SIDEBAR_WIDTH),
+            ])
+            .areas(body);
+            (
+                WidthBand::Full,
+                Some(workflow),
+                Some(resources),
+                Some(utility),
+                main,
+                None,
+            )
+        } else if area.width >= WIDE_COLUMNS {
             let resources_width = body.width / 4 + RESOURCES_EXTRA_WIDTH;
             let [workflow, resources, main] = Layout::horizontal([
                 Constraint::Length(MINIMUM_WORKFLOW_SIDEBAR_WIDTH),
@@ -93,18 +128,29 @@ pub fn adaptive_areas(area: Rect, focus: FocusZone) -> AdaptiveAreas {
                 Constraint::Min(0),
             ])
             .areas(body);
-            (WidthBand::Wide, Some(workflow), Some(resources), main, None)
+            (
+                WidthBand::Wide,
+                Some(workflow),
+                Some(resources),
+                None,
+                main,
+                utility_overlay(main),
+            )
         } else if area.width >= MEDIUM_COLUMNS {
             let [workflow, main] = Layout::horizontal([
                 Constraint::Length(MINIMUM_WORKFLOW_SIDEBAR_WIDTH),
                 Constraint::Min(0),
             ])
             .areas(body);
-            let overlay = (focus == FocusZone::Resources).then_some(SidebarOverlay {
-                kind: SidebarKind::Resources,
-                area: right_overlay(main, 44 + RESOURCES_EXTRA_WIDTH),
-            });
-            (WidthBand::Medium, Some(workflow), None, main, overlay)
+            let overlay = if focus == FocusZone::Resources {
+                Some(SidebarOverlay {
+                    kind: SidebarKind::Resources,
+                    area: right_overlay(main, 44 + RESOURCES_EXTRA_WIDTH),
+                })
+            } else {
+                utility_overlay(main)
+            };
+            (WidthBand::Medium, Some(workflow), None, None, main, overlay)
         } else {
             let overlay = match focus {
                 FocusZone::Workflow => Some(SidebarOverlay {
@@ -115,9 +161,10 @@ pub fn adaptive_areas(area: Rect, focus: FocusZone) -> AdaptiveAreas {
                     kind: SidebarKind::Resources,
                     area: right_overlay(body, 44 + RESOURCES_EXTRA_WIDTH),
                 }),
+                FocusZone::Utility => utility_overlay(body),
                 FocusZone::Main => None,
             };
-            (WidthBand::Narrow, None, None, body, overlay)
+            (WidthBand::Narrow, None, None, None, body, overlay)
         };
 
     AdaptiveAreas {
@@ -125,6 +172,7 @@ pub fn adaptive_areas(area: Rect, focus: FocusZone) -> AdaptiveAreas {
         work_status,
         workflow_sidebar,
         resources_sidebar,
+        utility_sidebar,
         main_pane,
         overlay,
         command_line,
@@ -181,15 +229,57 @@ mod tests {
     }
 
     #[test]
-    fn wide_layout_keeps_both_sidebars_inline() {
+    fn full_layout_keeps_all_four_columns_inline() {
         let areas = adaptive_areas(Rect::new(0, 0, 160, 30), FocusZone::Main);
-        assert_eq!(areas.band, WidthBand::Wide);
+        assert_eq!(areas.band, WidthBand::Full);
         assert_eq!(
             areas.workflow_sidebar.map(|area| area.width),
             Some(MINIMUM_WORKFLOW_SIDEBAR_WIDTH)
         );
         assert!(areas.resources_sidebar.is_some());
+        assert_eq!(
+            areas.utility_sidebar.map(|area| area.width),
+            Some(UTILITY_SIDEBAR_WIDTH)
+        );
         assert!(areas.overlay.is_none());
+        let utility = areas.utility_sidebar.expect("Utility Sidebar");
+        assert_eq!(
+            utility.right(),
+            areas.main_pane.right() + UTILITY_SIDEBAR_WIDTH
+        );
+        assert!(areas.main_pane.right() <= utility.x);
+    }
+
+    #[test]
+    fn the_full_threshold_is_the_narrowest_width_that_keeps_main_usable() {
+        let main_width = |width: u16| {
+            adaptive_areas(Rect::new(0, 0, width, 30), FocusZone::Main)
+                .main_pane
+                .width
+        };
+        assert!(main_width(FULL_COLUMNS) >= MIN_MAIN_PANE_WIDTH);
+        let at = adaptive_areas(Rect::new(0, 0, FULL_COLUMNS, 30), FocusZone::Main);
+        assert_eq!(at.band, WidthBand::Full);
+        let below = adaptive_areas(Rect::new(0, 0, FULL_COLUMNS - 1, 30), FocusZone::Main);
+        assert_eq!(below.band, WidthBand::Wide);
+        // Without the Utility column the Main Pane would also be at the floor
+        // here, so the threshold is exactly where a fourth column still fits.
+        let no_utility = main_width(FULL_COLUMNS - 1);
+        assert!(no_utility - UTILITY_SIDEBAR_WIDTH < MIN_MAIN_PANE_WIDTH);
+    }
+
+    #[test]
+    fn wide_layout_keeps_three_columns_and_overlays_utility_on_focus() {
+        let hidden = adaptive_areas(Rect::new(0, 0, 120, 30), FocusZone::Main);
+        assert_eq!(hidden.band, WidthBand::Wide);
+        assert!(hidden.resources_sidebar.is_some());
+        assert!(hidden.utility_sidebar.is_none());
+        assert!(hidden.overlay.is_none());
+        let focused = adaptive_areas(Rect::new(0, 0, 120, 30), FocusZone::Utility);
+        let overlay = focused.overlay.expect("Utility overlay");
+        assert_eq!(overlay.kind, SidebarKind::Utility);
+        assert_eq!(overlay.area.width, UTILITY_SIDEBAR_WIDTH);
+        assert_eq!(overlay.area.right(), focused.main_pane.right());
     }
 
     #[test]
@@ -208,6 +298,12 @@ mod tests {
             focused.overlay.map(|overlay| overlay.kind),
             Some(SidebarKind::Resources)
         );
+        let utility = adaptive_areas(Rect::new(0, 0, 119, 30), FocusZone::Utility);
+        assert_eq!(utility.band, WidthBand::Medium);
+        assert_eq!(
+            utility.overlay.map(|overlay| overlay.kind),
+            Some(SidebarKind::Utility)
+        );
     }
 
     #[test]
@@ -215,12 +311,14 @@ mod tests {
         for (focus, expected) in [
             (FocusZone::Workflow, Some(SidebarKind::Workflow)),
             (FocusZone::Resources, Some(SidebarKind::Resources)),
+            (FocusZone::Utility, Some(SidebarKind::Utility)),
             (FocusZone::Main, None),
         ] {
             let areas = adaptive_areas(Rect::new(0, 0, 80, 30), focus);
             assert_eq!(areas.band, WidthBand::Narrow);
             assert!(areas.workflow_sidebar.is_none());
             assert!(areas.resources_sidebar.is_none());
+            assert!(areas.utility_sidebar.is_none());
             assert_eq!(areas.overlay.map(|overlay| overlay.kind), expected);
             if focus == FocusZone::Workflow {
                 assert_eq!(

@@ -6,6 +6,15 @@ This changelog records owner decisions and material plan changes for Phase 1.
 
 ## Entries
 
+- 2026-10-30 — P1-M15 planned — Owner asked for a fourth TUI column, a
+  multi-purpose right sidebar, named the Utility Sidebar, with the assistant
+  picker as its Assistant Widget, moved out of Compose/Resources and including a "None (manual only)"
+  row. Inline at 120 columns would leave the Main Pane about 26 columns, so the
+  owner accepted raising the four-column threshold (151 columns, from the shipped
+  50-column Main Pane floor) with the Utility Sidebar as an overlay below it. A read-only Diary
+  Day Widget was then added above the Assistant Widget. Names added to
+  `ux-terms.md`. No `today` marker (server-owned, no client date source). No
+  API change.
 - 2026-10-30 — P1-M11 amendments — Owner waived the "P1-M10 is Done" entry
   criterion. Contract version 5 and SQLite migration 6 add the amendment seed
   (file digest, receipt version, hand-edited flag). Amendment receipts take the

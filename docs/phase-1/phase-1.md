@@ -259,6 +259,19 @@ identical Markdown file, quietly and without affecting local or Notion output.
 
 Plan: [overview](milestone-14-icloud-output-overview.md).
 
+### P1-M15: Utility Sidebar
+
+Status: Done
+
+Goal: Add a multi-purpose right Utility Sidebar to the TUI with a Diary Day
+Widget and the Assistant Widget (assistant picker).
+
+Plan: [overview](milestone-15-utility-sidebar-overview.md),
+[architecture plan](milestone-15-utility-sidebar-architecture.md).
+
+Notes: TUI-only; no Control API change. Planned to run before P1-M13 so release
+qualification covers the final layout.
+
 ### P1-M13: Release qualification
 
 Status: Planned

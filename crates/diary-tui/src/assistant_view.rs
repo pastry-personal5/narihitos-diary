@@ -14,7 +14,6 @@ pub enum AssistantResource {
     Draft,
     MemoryReview,
     MemoryCandidate(usize),
-    Backend(usize),
     ConfirmedSource(usize),
     Suggestion(usize),
 }
@@ -113,30 +112,6 @@ impl AssistantViewModel {
                 resources.push(AssistantResource::MemoryCandidate(index));
             }
         }
-        for (index, backend) in self.backends.iter().enumerate() {
-            let selected = workflow.and_then(|value| value.assistant_backend_id.as_deref())
-                == Some(backend.id.as_str());
-            let state = if selected && backend.available {
-                "selected"
-            } else if selected {
-                "selected; unavailable"
-            } else if !backend.available {
-                "unavailable"
-            } else if workflow
-                .and_then(|value| value.language.as_deref())
-                .is_some_and(|language| !backend.supported_languages.iter().any(|v| v == language))
-            {
-                "unsupported language"
-            } else {
-                "available"
-            };
-            rows.push(ResourceRow {
-                label: format!("{} · {}", backend.display_label, backend.composition_path),
-                state: state.to_owned(),
-                indent: 1,
-            });
-            resources.push(AssistantResource::Backend(index));
-        }
         if let Some(workflow) = workflow {
             for (index, source) in workflow
                 .candidates
@@ -167,6 +142,20 @@ impl AssistantViewModel {
         (ResourcesSidebarModel { rows }, resources)
     }
 
+    /// The selected backend as `<label> · <path>`, or `manual` when none is
+    /// selected or the selected ID is not listed. Shown in Compose, Work
+    /// Status, and the Status Line; the Assistant Widget does not replace it.
+    #[must_use]
+    pub fn selected_label(&self, workflow: Option<&WorkflowDto>) -> String {
+        workflow
+            .and_then(|value| value.assistant_backend_id.as_deref())
+            .and_then(|id| self.backends.iter().find(|backend| backend.id == id))
+            .map_or_else(
+                || "manual".to_owned(),
+                |backend| format!("{} · {}", backend.display_label, backend.composition_path),
+            )
+    }
+
     #[must_use]
     pub fn job_label(&self) -> Option<String> {
         self.active_job
@@ -179,38 +168,60 @@ impl AssistantViewModel {
 mod tests {
     use super::*;
 
-    fn backend(id: &str, label: &str, available: bool) -> AssistantBackendDto {
-        AssistantBackendDto {
-            id: id.to_owned(),
-            display_label: label.to_owned(),
-            composition_path: "hosted".to_owned(),
-            available,
-            reason_code: (!available).then(|| "offline".to_owned()),
-            supported_languages: vec!["en-US".to_owned(), "ko-KR".to_owned()],
-            supported_actions: vec!["extract-memories".to_owned()],
-        }
-    }
-
     #[test]
-    fn backend_collection_is_provider_neutral_scrollable_and_explicit() {
+    fn resources_list_no_backend_rows_because_the_assistant_widget_owns_selection() {
         let view = AssistantViewModel {
-            backends: vec![
-                backend("one", "첫 번째", true),
-                backend("two", "Second", false),
-                backend("three", "Third", true),
-            ],
+            backends: vec![AssistantBackendDto {
+                id: "one".to_owned(),
+                display_label: "첫 번째".to_owned(),
+                composition_path: "hosted".to_owned(),
+                available: true,
+                reason_code: None,
+                supported_languages: vec!["en-US".to_owned()],
+                supported_actions: vec!["draft-entry".to_owned()],
+            }],
             ..AssistantViewModel::default()
         };
         let (resources, kinds) = view.resources(None, false);
         assert_eq!(kinds.len(), resources.rows.len());
         assert!(
-            resources
+            !resources
                 .rows
                 .iter()
                 .any(|row| row.label.contains("첫 번째"))
         );
-        assert!(resources.rows.iter().any(|row| row.state == "unavailable"));
-        assert!(matches!(kinds[4], AssistantResource::Backend(2)));
+    }
+
+    #[test]
+    fn selected_label_names_backend_and_path_or_falls_back_to_manual() {
+        let view = AssistantViewModel {
+            backends: vec![AssistantBackendDto {
+                id: "one".to_owned(),
+                display_label: "Codex".to_owned(),
+                composition_path: "hosted".to_owned(),
+                available: true,
+                reason_code: None,
+                supported_languages: vec!["en-US".to_owned()],
+                supported_actions: vec!["draft-entry".to_owned()],
+            }],
+            ..AssistantViewModel::default()
+        };
+        let mut workflow: WorkflowDto = serde_json::from_value(serde_json::json!({
+            "id": "w", "diary_day": "2026-10-30", "state": "composing",
+            "revision": 1, "buffer_version": 1, "language": "en-US",
+            "style": "plain", "assistant_backend_id": "one",
+            "composition_path": "hosted", "selection_digest": null,
+            "explicit_empty_selection": false, "invalidation_code": null,
+            "entry_text": "", "entry_confirmed": false, "local_status": null,
+            "notion_status": null, "icloud_status": null, "amendment": null,
+            "candidates": []
+        }))
+        .unwrap();
+        assert_eq!(view.selected_label(Some(&workflow)), "Codex · hosted");
+        workflow.assistant_backend_id = None;
+        workflow.composition_path = None;
+        assert_eq!(view.selected_label(Some(&workflow)), "manual");
+        assert_eq!(view.selected_label(None), "manual");
     }
 
     #[test]

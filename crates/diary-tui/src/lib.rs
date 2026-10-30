@@ -27,5 +27,6 @@ pub mod start_view;
 pub mod status_line;
 pub mod terminal;
 pub mod theme;
+pub mod widgets;
 pub mod work_status;
 pub mod worker;

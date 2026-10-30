@@ -6,12 +6,14 @@ pub enum FocusZone {
     Workflow,
     Resources,
     Main,
+    Utility,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum SidebarKind {
     Workflow,
     Resources,
+    Utility,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -20,6 +22,7 @@ pub struct FocusModel {
     pub workflow_index: usize,
     pub resource_index: usize,
     pub main_control_index: usize,
+    pub utility_index: usize,
 }
 
 impl Default for FocusModel {
@@ -29,6 +32,7 @@ impl Default for FocusModel {
             workflow_index: 0,
             resource_index: 0,
             main_control_index: 0,
+            utility_index: 0,
         }
     }
 }
@@ -38,15 +42,17 @@ impl FocusModel {
         self.zone = match self.zone {
             FocusZone::Workflow => FocusZone::Resources,
             FocusZone::Resources => FocusZone::Main,
-            FocusZone::Main => FocusZone::Workflow,
+            FocusZone::Main => FocusZone::Utility,
+            FocusZone::Utility => FocusZone::Workflow,
         };
     }
 
     pub fn previous_zone(&mut self) {
         self.zone = match self.zone {
-            FocusZone::Workflow => FocusZone::Main,
+            FocusZone::Workflow => FocusZone::Utility,
             FocusZone::Resources => FocusZone::Workflow,
             FocusZone::Main => FocusZone::Resources,
+            FocusZone::Utility => FocusZone::Main,
         };
     }
 
@@ -68,10 +74,17 @@ impl FocusModel {
         }
     }
 
-    pub fn clamp(&mut self, workflow_count: usize, resource_count: usize, control_count: usize) {
+    pub fn clamp(
+        &mut self,
+        workflow_count: usize,
+        resource_count: usize,
+        control_count: usize,
+        utility_count: usize,
+    ) {
         self.workflow_index = clamp_index(self.workflow_index, workflow_count);
         self.resource_index = clamp_index(self.resource_index, resource_count);
         self.main_control_index = clamp_index(self.main_control_index, control_count);
+        self.utility_index = clamp_index(self.utility_index, utility_count);
     }
 
     fn active_index_mut(&mut self) -> &mut usize {
@@ -79,6 +92,7 @@ impl FocusModel {
             FocusZone::Workflow => &mut self.workflow_index,
             FocusZone::Resources => &mut self.resource_index,
             FocusZone::Main => &mut self.main_control_index,
+            FocusZone::Utility => &mut self.utility_index,
         }
     }
 }
@@ -92,9 +106,11 @@ mod tests {
     use super::*;
 
     #[test]
-    fn tab_order_cycles_through_the_three_interactive_zones() {
+    fn tab_order_follows_screen_order_through_the_four_interactive_zones() {
         let mut focus = FocusModel::default();
         assert_eq!(focus.zone, FocusZone::Main);
+        focus.next_zone();
+        assert_eq!(focus.zone, FocusZone::Utility);
         focus.next_zone();
         assert_eq!(focus.zone, FocusZone::Workflow);
         focus.next_zone();
@@ -103,6 +119,12 @@ mod tests {
         assert_eq!(focus.zone, FocusZone::Main);
         focus.previous_zone();
         assert_eq!(focus.zone, FocusZone::Resources);
+        focus.previous_zone();
+        assert_eq!(focus.zone, FocusZone::Workflow);
+        focus.previous_zone();
+        assert_eq!(focus.zone, FocusZone::Utility);
+        focus.previous_zone();
+        assert_eq!(focus.zone, FocusZone::Main);
     }
 
     #[test]
@@ -126,8 +148,10 @@ mod tests {
             workflow_index: 5,
             resource_index: 5,
             main_control_index: 5,
+            utility_index: 5,
         };
-        focus.clamp(2, 0, 3);
+        focus.clamp(2, 0, 3, 4);
+        assert_eq!(focus.utility_index, 3);
         assert_eq!(focus.workflow_index, 1);
         assert_eq!(focus.resource_index, 0);
         assert_eq!(focus.main_control_index, 2);

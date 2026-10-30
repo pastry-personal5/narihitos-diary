@@ -69,9 +69,10 @@ places these terms in the stage flow.
 
 ## Canonical chrome terms
 
-The terminal client's screen chrome is six zones: a full-width Work Status pane
-above the left-to-right Workflow Sidebar, Resources Sidebar, and Main Pane,
-followed by a bottom Command Line and bottom-most Status Line.
+The terminal client's screen chrome is seven zones: a full-width Work Status pane
+above the left-to-right Workflow Sidebar, Resources Sidebar, Main Pane, and
+Utility Sidebar, followed by a bottom Command Line and bottom-most Status Line.
+The Utility Sidebar is planned in P1-M15.
 
 | UI term | Code-facing name | Meaning |
 |---|---|---|
@@ -80,7 +81,11 @@ followed by a bottom Command Line and bottom-most Status Line.
 | Resources Sidebar | `resources_sidebar` | Middle chrome pane listing context-relevant sources, inputs, assistant suggestions, or outputs with explicit resource state; activating an item shows its content in the Main Pane, and it may render an indented tree. |
 | Stage state | `stage_state` | A Workflow Sidebar progress marker: done, available, locked, or stale, plus a separate current marker for the stage open in the Main Pane. Always use text or symbols, never color alone. |
 | Resource state | `resource_state` | One or more Resources Sidebar markers: ready, active, included, preparing, unavailable, warning, blocked, conflict, or stale. `active` controls the Main Pane; `included` controls the prospective source set. Always use text or symbols, never color alone. |
-| Main Pane | `main_pane` | Right chrome pane; renders the active stage and active resource. |
+| Main Pane | `main_pane` | Center chrome pane; renders the active stage and active resource. |
+| Utility Sidebar | `utility_sidebar` | Rightmost chrome pane (P1-M15): a vertical stack of Widgets that stay reachable in every stage, independent of the active stage and resource. Widgets are ordered top to bottom and each is a titled box. |
+| Widget | `widget` | One titled box in the Utility Sidebar with a single purpose. It is either read-only or has its own rows, which take focus in order; a read-only Widget is skipped by focus. |
+| Diary Day Widget | `diary_day_widget` | Top Widget: read-only display of the diary day being worked on, with its weekday, and the workflow state; "No day chosen" before a workflow is open. |
+| Assistant Widget | `assistant_widget` | Second Widget: lists the assistant backends with composition path and availability, plus "None (manual only)"; Enter selects one for the open workflow. |
 | Banner | `banner` | Top region of the Main Pane for a condition that needs a decision, such as a conflict or a stale source, with its explanation. |
 | Command Line | `command_line` | Bottom single-line input for typed commands; not a text filter. Opens with a chord, takes ASCII tokens, and maps Hangul typed on the 2-Set Korean layout back to them. |
 | Status Line | `status_line` | Bottom-most compact ambient bar: diary day, workflow state, connection, IME indicator, progress, a short error summary, and action hints truncated by priority. It may repeat important state shown in Work Status. |

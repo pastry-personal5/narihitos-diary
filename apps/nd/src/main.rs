@@ -52,6 +52,10 @@ use diary_tui::start_view::StartViewModel;
 use diary_tui::status_line::{StatusLineModel, StatusLineWidget};
 use diary_tui::terminal::TerminalGuard;
 use diary_tui::theme::Palette;
+use diary_tui::widgets::{
+    AssistantWidgetModel, DiaryDayWidgetModel, UtilitySidebarModel, UtilitySidebarWidget,
+    read_only_reason, selection_request,
+};
 use diary_tui::work_status::{WorkStatusModel, WorkStatusWidget};
 use diary_tui::worker::{Intent, Worker, WorkerResult};
 use tokio::sync::{mpsc, oneshot};
@@ -1860,19 +1864,7 @@ fn run_connected_session(
             .as_ref()
             .map(|workflow| workflow.diary_day.clone())
             .or_else(|| selected_day.clone());
-        let selected_backend_label = current_workflow
-            .as_ref()
-            .and_then(|workflow| workflow.assistant_backend_id.as_deref())
-            .and_then(|id| {
-                assistant_view
-                    .backends
-                    .iter()
-                    .find(|backend| backend.id == id)
-            })
-            .map_or_else(
-                || "manual".to_owned(),
-                |backend| format!("{} · {}", backend.display_label, backend.composition_path),
-            );
+        let selected_backend_label = assistant_view.selected_label(current_workflow.as_ref());
         status_line.action_hint = Some(format!("{selected_backend_label} | Ctrl-C twice: quit"));
 
         let stage_model = map_workflow(current_workflow.as_ref(), false);
@@ -1930,6 +1922,20 @@ fn run_connected_session(
         }
         let (compose_resources, assistant_resources) =
             assistant_view.resources(current_workflow.as_ref(), compose_view.is_dirty());
+        let utility_model = UtilitySidebarModel {
+            diary_day: DiaryDayWidgetModel::from_workflow(current_workflow.as_ref()),
+            assistant: AssistantWidgetModel::new(
+                &assistant_view.backends,
+                current_workflow.as_ref(),
+                read_only_reason(
+                    current_workflow.is_some(),
+                    can_mutate,
+                    assistant_job.is_some(),
+                    assistant_selection_pending,
+                )
+                .map(str::to_owned),
+            ),
+        };
         let visible_resource_count = match current_stage {
             Stage::Start => start_view.workflows.len(),
             Stage::Sources => sources_view.candidates.len(),
@@ -1957,6 +1963,7 @@ fn run_connected_session(
             ALL_STAGES.len(),
             visible_resource_count,
             visible_control_count,
+            utility_model.focusable_rows(),
         );
 
         let mut displayed_status = work_status.clone();
@@ -2154,6 +2161,12 @@ fn run_connected_session(
                     .focused(focus.zone == FocusZone::Resources)
                     .palette(palette)
             };
+            let utility_widget = || {
+                UtilitySidebarWidget::new(&utility_model)
+                    .focused(focus.zone == FocusZone::Utility)
+                    .focused_row((focus.zone == FocusZone::Utility).then_some(focus.utility_index))
+                    .palette(palette)
+            };
             let main_height = areas.main_pane.height.saturating_sub(2);
             main_scroll = resolve_main_scroll(
                 current_stage,
@@ -2193,6 +2206,9 @@ fn run_connected_session(
             if let Some(resources_area) = areas.resources_sidebar {
                 frame.render_widget(resources_widget(), resources_area);
             }
+            if let Some(utility_area) = areas.utility_sidebar {
+                frame.render_widget(utility_widget(), utility_area);
+            }
             if let Some(overlay) = areas.overlay {
                 frame.render_widget(OverlayClearWidget, overlay.area);
                 match overlay.kind {
@@ -2201,6 +2217,9 @@ fn run_connected_session(
                     }
                     SidebarKind::Resources => {
                         frame.render_widget(resources_widget(), overlay.area);
+                    }
+                    SidebarKind::Utility => {
+                        frame.render_widget(utility_widget(), overlay.area);
                     }
                 }
             }
@@ -2566,6 +2585,7 @@ fn run_connected_session(
                     &focus,
                     visible_resource_count,
                     visible_control_count,
+                    utility_model.focusable_rows(),
                 ));
             }
             InputPoll::Event(InputEvent::Down) => {
@@ -2573,6 +2593,7 @@ fn run_connected_session(
                     &focus,
                     visible_resource_count,
                     visible_control_count,
+                    utility_model.focusable_rows(),
                 ));
             }
             InputPoll::Event(InputEvent::Enter) => match focus.zone {
@@ -2589,6 +2610,26 @@ fn run_connected_session(
                         current_stage = stage;
                     } else {
                         feedback = Some("That stage is locked".to_owned());
+                    }
+                }
+                FocusZone::Utility => {
+                    match selection_request(
+                        &utility_model.assistant,
+                        &assistant_view.backends,
+                        focus.utility_index,
+                    ) {
+                        Ok(backend_id) => {
+                            if let Some(workflow) = &current_workflow {
+                                assistant_selection_pending = worker
+                                    .try_send(Intent::SelectAssistant {
+                                        workflow_id: workflow.id.clone(),
+                                        revision: workflow.revision,
+                                        backend_id,
+                                    })
+                                    .is_ok();
+                            }
+                        }
+                        Err(message) => feedback = Some(message),
                     }
                 }
                 FocusZone::Resources if current_stage == Stage::Start => {
@@ -2662,28 +2703,6 @@ fn run_connected_session(
                                     "Memory inclusion changed; confirm review to persist"
                                         .to_owned(),
                                 );
-                            }
-                        }
-                        Some(AssistantResource::Backend(index))
-                            if can_mutate && !assistant_selection_pending =>
-                        {
-                            if let (Some(workflow), Some(backend)) = (
-                                current_workflow.as_ref(),
-                                assistant_view.backends.get(*index),
-                            ) {
-                                if backend.available {
-                                    assistant_selection_pending = worker
-                                        .try_send(Intent::SelectAssistant {
-                                            workflow_id: workflow.id.clone(),
-                                            revision: workflow.revision,
-                                            backend_id: Some(backend.id.clone()),
-                                        })
-                                        .is_ok();
-                                } else {
-                                    feedback = Some(
-                                        "That backend is unavailable; nothing was sent".to_owned(),
-                                    );
-                                }
                             }
                         }
                         Some(AssistantResource::ConfirmedSource(index))
@@ -3752,11 +3771,17 @@ fn publish_screen_body(focus: &FocusModel, workflow: Option<&WorkflowDto>) -> St
     )
 }
 
-fn focus_item_count(focus: &FocusModel, resource_count: usize, control_count: usize) -> usize {
+fn focus_item_count(
+    focus: &FocusModel,
+    resource_count: usize,
+    control_count: usize,
+    utility_count: usize,
+) -> usize {
     match focus.zone {
         FocusZone::Workflow => ALL_STAGES.len(),
         FocusZone::Resources => resource_count,
         FocusZone::Main => control_count,
+        FocusZone::Utility => utility_count,
     }
 }
 

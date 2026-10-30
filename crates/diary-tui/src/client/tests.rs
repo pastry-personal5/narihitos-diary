@@ -328,3 +328,56 @@ fn source_detail_with_handle_sends_and_retains_the_job_result_handle() {
         Some("handle_abc")
     );
 }
+
+#[test]
+fn assistant_selection_sends_the_revision_etag_and_a_null_backend_to_deselect() {
+    let transport = FakeTransport::new();
+    transport.push(
+        "PUT",
+        "/v1/workflows/wf_20261029/assistant-selection",
+        RawResponse {
+            status: 500,
+            ..RawResponse::default()
+        },
+    );
+    let client = ApiClient::new(transport);
+    let _ = client.set_assistant_selection(&attachment(), "wf_20261029", 7, None);
+    let seen = client.transport.seen.borrow();
+    assert_eq!(seen[0].method, "PUT");
+    assert_eq!(seen[0].if_match.as_deref(), Some("\"wf-7\""));
+    let body: serde_json::Value =
+        serde_json::from_slice(seen[0].body.as_deref().expect("body")).unwrap();
+    assert_eq!(body, serde_json::json!({ "backend_id": null }));
+}
+
+#[test]
+fn a_stale_assistant_selection_is_a_typed_problem_never_ok() {
+    let transport = FakeTransport::new();
+    transport.push(
+        "PUT",
+        "/v1/workflows/wf_20261029/assistant-selection",
+        RawResponse {
+            status: 412,
+            body: serde_json::json!({
+                "type": "https://nd.local/problems/precondition-failed",
+                "title": "Precondition failed",
+                "status": 412,
+                "code": "precondition-failed",
+                "instance": null
+            })
+            .to_string()
+            .into_bytes(),
+            ..RawResponse::default()
+        },
+    );
+    let client = ApiClient::new(transport);
+    match client.set_assistant_selection(
+        &attachment(),
+        "wf_20261029",
+        3,
+        Some("codex-default".to_owned()),
+    ) {
+        ClientOutcome::Problem(problem) => assert_eq!(problem.status, 412),
+        _ => panic!("expected a typed problem outcome"),
+    }
+}
