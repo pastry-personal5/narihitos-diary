@@ -12,13 +12,6 @@ pub struct LocalPreviewDto {
     pub existing_text: Option<String>,
     pub intended_changes: Vec<String>,
     pub local_status: String,
-    pub notion_status: String,
-    /// Mirror target label and status; absent when no mirror is configured
-    /// or from a server that predates the mirror kind.
-    #[serde(default)]
-    pub icloud_target: Option<String>,
-    #[serde(default)]
-    pub icloud_status: Option<String>,
     /// `append` or `overwrite` when this plan replaces existing content;
     /// absent for an ordinary plan or a server that predates the choice.
     #[serde(default)]
@@ -46,29 +39,86 @@ pub struct NotionBlockDto {
     pub depth: u8,
 }
 
+/// One remote a completed day can be pushed to.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub struct NotionPreviewDto {
-    pub workflow: WorkflowDto,
-    pub path: Vec<String>,
-    pub year_exists: bool,
-    pub month_exists: bool,
-    /// Where the new section goes on the month page (`end`, `after YYYY-MM-DD`,
-    /// or `before YYYY-MM-DD`); empty from a server that predates ordering.
+pub struct RemoteDto {
+    /// Stable remote id: `icloud` or `notion`.
+    pub id: String,
+    pub label: String,
+    /// `not-pushed`, `exists`, `pushed`, or `blocked`.
+    pub status: String,
+    /// Closed content-free token when the remote is blocked.
     #[serde(default)]
-    pub placement: String,
-    pub renderer_version: u32,
-    pub api_version: String,
-    pub payload_digest: String,
-    pub plan_digest: Option<String>,
-    pub blocks: Vec<NotionBlockDto>,
-    /// The existing section a chosen Append or Overwrite acts on.
-    #[serde(default)]
-    pub current_blocks: Vec<NotionBlockDto>,
-    /// `append` or `overwrite` when this plan acts on an existing section.
+    pub reason: Option<String>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct RemoteListDto {
+    pub remotes: Vec<RemoteDto>,
+}
+
+/// Optional body of a remote preview. Without `existing_mode`, content already
+/// at the remote is shown but no Append or Overwrite plan is made.
+#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RemotePreviewRequest {
     #[serde(default)]
     pub existing_mode: Option<String>,
+}
+
+/// What a push would do, and what the remote holds now. The push is the
+/// approval of exactly this plan.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct RemotePreviewDto {
+    pub id: String,
+    pub label: String,
     pub status: String,
+    #[serde(default)]
     pub reason: Option<String>,
+    pub workflow: WorkflowDto,
+    /// iCloud file path, or the Notion root / year / month path.
+    pub target: Vec<String>,
+    /// The exact iCloud text that would be written.
+    #[serde(default)]
+    pub payload: Option<String>,
+    /// The iCloud text already present, shown automatically.
+    #[serde(default)]
+    pub existing_text: Option<String>,
+    #[serde(default)]
+    pub intended_changes: Vec<String>,
+    /// Where the Notion section goes (`end`, `after YYYY-MM-DD`, `before ...`).
+    #[serde(default)]
+    pub placement: String,
+    #[serde(default)]
+    pub blocks: Vec<NotionBlockDto>,
+    /// The Notion section already present, shown automatically.
+    #[serde(default)]
+    pub current_blocks: Vec<NotionBlockDto>,
+    /// `append` or `overwrite` when this plan acts on existing content.
+    #[serde(default)]
+    pub existing_mode: Option<String>,
+    /// Absent while there is nothing the person can push yet.
+    #[serde(default)]
+    pub plan_digest: Option<String>,
+    /// Only for a Notion month page that cannot be changed safely: a URL to
+    /// fix it by hand in the Notion app or on Notion Web.
+    #[serde(default)]
+    pub page_url: Option<String>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RemotePushRequest {
+    pub plan_digest: String,
+    #[serde(default)]
+    pub existing_mode: Option<String>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct RemoteReadinessDto {
+    /// The workflow revision the answer describes.
+    pub revision: u64,
+    pub readiness: DestinationReadinessDto,
 }
 
 /// One destination's read-only readiness. `reason` and `next_step` are closed
@@ -81,13 +131,6 @@ pub struct DestinationReadinessDto {
     pub next_step: String,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub struct PublishReadinessDto {
-    /// The workflow revision the answer describes.
-    pub revision: u64,
-    pub destinations: Vec<DestinationReadinessDto>,
-}
-
 /// Present on a workflow while a completed day is being amended.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct AmendmentDto {
@@ -96,15 +139,7 @@ pub struct AmendmentDto {
     pub hand_edited: bool,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub struct AmendmentNotionDto {
-    pub current_blocks: Vec<NotionBlockDto>,
-    pub replacement_blocks: Vec<NotionBlockDto>,
-    pub status: String,
-    pub reason: Option<String>,
-}
-
-/// Current against replacement content per destination.
+/// The current file against its replacement.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct AmendmentPreviewDto {
     pub workflow: WorkflowDto,
@@ -113,7 +148,6 @@ pub struct AmendmentPreviewDto {
     pub local_current: String,
     pub local_payload: String,
     pub local_status: String,
-    pub notion: Option<AmendmentNotionDto>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -238,8 +272,6 @@ dto!(
         #[serde(default)]
         pub notion_status: Option<String>,
         #[serde(default)]
-        pub icloud_status: Option<String>,
-        #[serde(default)]
         pub amendment: Option<AmendmentDto>,
         pub candidates: Vec<SourceCandidateDto>,
     }
@@ -263,7 +295,6 @@ pub struct WorkflowDto {
     pub entry_confirmed: bool,
     pub local_status: Option<String>,
     pub notion_status: Option<String>,
-    pub icloud_status: Option<String>,
     pub amendment: Option<AmendmentDto>,
     pub candidates: Vec<SourceCandidateDto>,
 }
@@ -296,7 +327,6 @@ impl TryFrom<WorkflowDtoWire> for WorkflowDto {
             entry_confirmed: value.entry_confirmed,
             local_status: value.local_status,
             notion_status: value.notion_status,
-            icloud_status: value.icloud_status,
             amendment: value.amendment,
             candidates: value.candidates,
         })

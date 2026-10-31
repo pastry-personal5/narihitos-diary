@@ -228,9 +228,8 @@ read over `/mcp`.
 
 ### Adding connectors
 
-A peer file destination such as the iCloud mirror adds a `DestinationKind`
-and reuses the local adapter instead of a new connector; see
-"Publication and recovery".
+A peer file destination such as the iCloud remote reuses the local adapter
+instead of a new connector; see "Publication and recovery".
 
 Register connectors at startup with a stable connector ID, display name, and
 declared capabilities. Source references are namespaced by connector. When two
@@ -392,14 +391,25 @@ approved amendment, or an explicitly chosen and previewed Append or Overwrite
 replaces a file. The local file
 is the durable source of truth for retrying later destinations.
 
-The optional iCloud mirror (`DestinationKind::Mirror`, destination `icloud`,
-enabled by `paths.icloud_entries_root`) reuses the local adapter on an
-iCloud-validated root and writes the same bytes after the local write is
-verified, in the same job and under the same plan approval. A blocked, evicted
-(`.<name>.icloud` placeholder), conflicting, or uncertain mirror leaves the day
-`Partial` and never changes local or Notion; reconciliation (`reconcile_mirror_intents`; not run at `nd serve` startup) inspects an
-uncertain mirror write before any retry, and `publish_mirror_guarded` retries
-the mirror alone. See the [iCloud output design](superpowers/specs/2026-10-30-icloud-output-design.md).
+A verified local write completes the day (P1-M22): completion depends on the
+local destination alone, and remote rows never hold a day open. Remotes are
+pushed afterward, on request, through the remote routes.
+
+The optional iCloud remote (destination `icloud`, enabled by
+`paths.icloud_entries_root`) reuses the local adapter on an iCloud-validated
+root. It is stateless: its plan is derived from the verified local file and the
+folder as it stands, with a plan digest over the target, the observed folder
+state, the local bytes, and the chosen mode. A push is the approval and acts
+only on a plan digest that still matches; a changed folder fails the push with
+`precondition-failed` so the client shows the preview again. Absent or identical
+content, or the copy this app wrote earlier (its latest `icloud` receipt),
+needs no choice; other existing content is `Exists` and is pushed only with
+Append (the entry added under a dated separator) or Overwrite (backed up first).
+A missing folder or an evicted (`.<name>.icloud` placeholder) file is `Blocked`.
+An uncertain write keeps its intent; `reconcile_mirror_intents` (not run at
+`nd serve` startup) resolves it by inspection before any retry. Local
+publication and amendments never write iCloud. See the
+[remote publication design](superpowers/specs/2026-10-31-remote-publication-stages-design.md).
 
 The Notion adapter sends only the confirmed body, without YAML front matter.
 It treats the configured page as a root, tolerates unrelated content, resolves
@@ -465,11 +475,14 @@ and approval; a pending one reuses the original approval only while the
 re-checked plan digest is unchanged. No multi-destination transaction is
 claimed. See [operational constraints](research/mvp-operational-constraints.md).
 
-A local conflict stops the whole plan, because Notion is attempted only after
-the local write succeeds; a Notion conflict stops only Notion. The server
-returns the existing content and the planned payload for display and accepts
-three resolutions: reread the destination, discard the entry, or save under a
-different diary day. The last starts or resumes the workflow for the new day,
+No state is a dead end (P1-M22). A local preview never reports a conflict: an
+existing different file is previewed as an Append plan (the default) or, by
+explicit choice, an Overwrite plan, and the server returns the existing content
+and the planned payload for display. A file that changes after the preview
+fails the approval or the write with `precondition-failed`, and the next
+preview shows it as it is. The server still accepts three resolutions for a
+local conflict left by an older client: reread the destination, discard the
+entry, or save under a different diary day. The last starts or resumes the workflow for the new day,
 carries the confirmed selection and entry text over as unconfirmed (notes from
 other days are legal through the explicit extra-date rule), and runs the
 existing-entry check for that day. It never replaces existing content: if the
@@ -482,8 +495,8 @@ amendment, not a conflict.
 
 P1-M21 lets the person resolve a differing destination without losing either
 side. The choice is a request field on the two preview routes
-(`output-previews` for the local file and iCloud mirror, `notion-previews` for
-Notion), `existing_mode` of `append` or `overwrite`; without it a differing
+(`output-previews` for the local file, and `remotes/{name}/previews` for iCloud
+and Notion), `existing_mode` of `append` or `overwrite`; without it a differing
 destination is the conflict described above. Reread, discard, and save under a
 different day are unchanged. The choice is made in the phase where the
 conflict shows and changes nothing until that exact plan is approved.
@@ -502,8 +515,8 @@ observed-state digest, so any change since the preview voids the plan.
   and the new body. Overwrite first copies the file to
   `<name>.md.bak-<12 hex of its digest>`, reads the copy back, then replaces it
   atomically through the digest-guarded `replace`; a failed backup blocks the
-  write. The mirror always receives the final local bytes, so a differing
-  mirror file is backed up and replaced the same way. Because the file may no
+  write. An iCloud push receives the final local bytes (Overwrite) or the
+  existing file plus the Append block, and replaces the file the same way. Because the file may no
   longer equal a plain rendering, `verify_local_receipt` compares it with the
   receipt's own payload digest.
 - **Notion.** The adapter exposes `observe_existing` (the single canonical
@@ -670,8 +683,7 @@ previous plan and its approval.
 | `POST /v1/workflows/{id}/output-plans`, `GET /v1/workflows/{id}/output-plan`, `POST /v1/workflows/{id}/approvals` | Build exact per-destination previews and record an interactive approval bound to their digests. |
 | `POST /v1/workflows/{id}/publications`, `GET /v1/workflows/{id}/publications` | Execute the approved plan and inspect each destination's receipt or pending state. |
 | `POST /v1/workflows/{id}/output-previews`, `POST /v1/workflows/{id}/output-approvals`, `POST /v1/workflows/{id}/local-publications` | P1-M9's shipped local preview, approval, and background publication resources. |
-| `POST /v1/workflows/{id}/readiness` | P1-M19's read-only Publish readiness check (contract version 6). Returns, per destination (`notion`, `icloud`), a `readiness` (`ready`, `not-ready`, `conflict`, `published`), a closed `reason` token, and a closed `next_step` token. It requires the workflow revision precondition, writes no plan, intent, or revision, and carries no path, page ID, or response text. The TUI owns the wording. |
-| `POST /v1/workflows/{id}/notion-previews`, `POST /v1/workflows/{id}/notion-approvals`, `POST /v1/workflows/{id}/notion-publications` | P1-M10's local-receipt-gated Notion-only preflight, approval, and background publication resources. Preview returns labels and exact blocks but no page/block IDs. |
+| `GET /v1/workflows/{id}/remotes`, `POST /v1/workflows/{id}/remotes/{name}/readiness`, `.../previews`, `.../pushes` | P1-M22 remote resources (contract version 9) for a `Completed` day: the remotes (`icloud`, `notion`) with a status, the read-only per-remote readiness check (a closed `readiness`, `reason`, and `next_step`; revision precondition; no plan, intent, or revision change), the read-only plan with any content already there (optional `existing_mode`), and a push job that approves and publishes exactly the previewed plan digest. A blocked Notion month page carries `page_url`; no other response carries a page ID, path, or response text. |
 | `POST /v1/workflows/{id}/conflict-resolutions` | Apply reread, discard the entry, or save under a different diary day. |
 | `GET /v1/jobs/{id}`, `DELETE /v1/jobs/{id}` | Observe or request cancellation of background work. |
 | `GET /v1/events?workflow_id={id}` | Receive server changes over SSE; reconnect by fetching the latest workflow representation. |

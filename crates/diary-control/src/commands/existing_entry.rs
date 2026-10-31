@@ -39,7 +39,8 @@ impl ExistingEntryMode {
         }
     }
 
-    pub(super) const fn chosen(self) -> bool {
+    #[must_use]
+    pub const fn chosen(self) -> bool {
         !matches!(self, Self::Refuse)
     }
 }

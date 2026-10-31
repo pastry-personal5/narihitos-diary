@@ -1,8 +1,7 @@
 //! Pure screen-body builders for the connected terminal session.
 
 use diary_control_contract::{
-    CapabilitiesDto, LocalPreviewDto, NotionPreviewDto, PreferencesDto, SetupCheckDto,
-    SourceDetailDto, WorkflowDto,
+    CapabilitiesDto, LocalPreviewDto, PreferencesDto, SetupCheckDto, SourceDetailDto, WorkflowDto,
 };
 
 use crate::amendment_view;
@@ -10,7 +9,6 @@ use crate::assistant_view::{AssistantResource, AssistantViewModel};
 use crate::compose_view::ComposeViewModel;
 use crate::date_display::format_diary_day;
 use crate::focus::{FocusModel, FocusZone};
-use crate::readiness_view::{ReadinessView, readiness_block};
 use crate::review_view::first_unresolved_delimiter;
 use crate::sources_menu::{SourcesMenuItem, SourcesMenuState, label as menu_label};
 use crate::sources_view::{SourcesViewModel, source_label};
@@ -160,11 +158,7 @@ pub fn review_screen_body(
     )
 }
 
-pub fn preview_screen_body(
-    focus: &FocusModel,
-    preview: Option<&LocalPreviewDto>,
-    notion: Option<&NotionPreviewDto>,
-) -> String {
+pub fn preview_screen_body(focus: &FocusModel, preview: Option<&LocalPreviewDto>) -> String {
     let marker = |index| {
         if focus.zone == FocusZone::Main && focus.main_control_index == index {
             ">"
@@ -173,16 +167,11 @@ pub fn preview_screen_body(
         }
     };
     let mut text = format!(
-        "{} Generate/refresh preview\n{} Approve exact plan\n{} Save conflict under another day\n",
+        "{} Generate/refresh preview\n{} Approve exact plan\n",
         marker(0),
-        marker(1),
-        marker(2)
+        marker(1)
     );
-    let local_verified = notion
-        .map(|notion| &notion.workflow)
-        .or(preview.map(|preview| &preview.workflow))
-        .is_some_and(|workflow| workflow.local_status.as_deref() == Some("verified"));
-    if crate::existing_entry_view::offered(local_verified, preview, notion) {
+    if crate::existing_entry_view::offered(preview) {
         text.push_str(&format!(
             "{} Append to the existing entry\n{} Overwrite the existing entry\n",
             marker(crate::existing_entry_view::APPEND_CONTROL),
@@ -190,75 +179,18 @@ pub fn preview_screen_body(
         ));
     }
     text.push('\n');
-    if let Some(notion) = notion {
+    if let Some(preview) = preview {
         text.push_str(&format!(
-            "Path: {}\nPosition: {}\nRenderer: {} · API: {}\nSHA-256: {}\nNotion: {}\nYear: {} · Month: {}\n",
-            notion.path.join(" → "),
-            if notion.placement.is_empty() {
-                "end"
-            } else {
-                &notion.placement
-            },
-            notion.renderer_version,
-            notion.api_version,
-            notion.payload_digest,
-            notion.status,
-            if notion.year_exists {
-                "existing"
-            } else {
-                "create"
-            },
-            if notion.month_exists {
-                "existing"
-            } else {
-                "create"
+            "Target: {}\nSHA-256: {}\nLocal: {}\n",
+            preview.target,
+            preview.payload_digest,
+            // Preview never stops at a conflict; a status from an older
+            // server is still shown in plain words.
+            match preview.local_status.as_str() {
+                "conflict" => "file changed",
+                other => other,
             },
         ));
-        if let Some(reason) = &notion.reason {
-            text.push_str(&format!("Reason: {reason}\n"));
-        }
-        if let Some(mode) = &notion.existing_mode {
-            text.push_str(&format!(
-                "{}\n",
-                crate::existing_entry_view::mode_line(mode)
-            ));
-        }
-        text.push('\n');
-        if !notion.current_blocks.is_empty() {
-            let label = match notion.existing_mode.as_deref() {
-                Some("append") => "will be appended to",
-                _ => "will be replaced",
-            };
-            text.push_str(&format!("Existing section ({label}):\n"));
-            for block in &notion.current_blocks {
-                text.push_str(&format!(
-                    "{}{}: {}\n",
-                    "  ".repeat(usize::from(block.depth)),
-                    block.kind,
-                    block.text
-                ));
-            }
-            text.push_str("\nPlanned:\n");
-        }
-        for block in &notion.blocks {
-            text.push_str(&format!(
-                "{}{}: {}\n",
-                "  ".repeat(usize::from(block.depth)),
-                block.kind,
-                block.text
-            ));
-        }
-    } else if let Some(preview) = preview {
-        text.push_str(&format!(
-            "Target: {}\nSHA-256: {}\nLocal: {}\nNotion: {}\n",
-            preview.target, preview.payload_digest, preview.local_status, preview.notion_status,
-        ));
-        if let Some(target) = &preview.icloud_target {
-            text.push_str(&format!(
-                "iCloud mirror: {target} ({})\n",
-                preview.icloud_status.as_deref().unwrap_or("pending")
-            ));
-        }
         if let Some(mode) = &preview.existing_mode {
             text.push_str(&format!(
                 "{}\n",
@@ -271,14 +203,15 @@ pub fn preview_screen_body(
         }
         if let Some(existing) = &preview.existing_text {
             let label = match preview.existing_mode.as_deref() {
-                Some("append") => "will be appended to",
                 Some("overwrite") => "will be replaced",
-                _ => "conflict",
+                _ => "kept; the entry is added below it",
             };
-            text.push_str(&format!("\nExisting target ({label}):\n{existing}\n"));
+            text.push_str(&format!("\nExisting file ({label}):\n{existing}\n"));
         }
     } else {
-        text.push_str("Generate a read-only output preview to inspect the exact destination.\n");
+        text.push_str(
+            "Generate a read-only preview to inspect the exact file that will be saved.\n",
+        );
     }
     text
 }
@@ -314,15 +247,9 @@ pub fn amendment_preview_screen_body(
     let choices = workflow
         .and_then(amendment_view::conflict_choices)
         .unwrap_or(&[]);
-    for (index, choice) in [
-        amendment_view::ConflictChoice::Reread,
-        amendment_view::ConflictChoice::AbandonAmendment,
-    ]
-    .into_iter()
-    .enumerate()
-    {
+    for choice in [amendment_view::ConflictChoice::AbandonAmendment] {
         if choices.contains(&choice) {
-            text.push_str(&format!("{} {}\n", marker(index + 2), choice.label()));
+            text.push_str(&format!("{} {}\n", marker(2), choice.label()));
         }
     }
     text.push('\n');
@@ -335,11 +262,7 @@ pub fn amendment_preview_screen_body(
     text
 }
 
-pub fn publish_screen_body(
-    focus: &FocusModel,
-    workflow: Option<&WorkflowDto>,
-    readiness: &ReadinessView,
-) -> String {
+pub fn publish_screen_body(focus: &FocusModel, workflow: Option<&WorkflowDto>) -> String {
     let marker = |index| {
         if focus.zone == FocusZone::Main && focus.main_control_index == index {
             ">"
@@ -347,20 +270,9 @@ pub fn publish_screen_body(
             " "
         }
     };
-    let icloud = workflow.and_then(|w| w.icloud_status.as_deref());
     let local = workflow
         .and_then(|w| w.local_status.as_deref())
         .unwrap_or("pending");
-    // A verified mirror stays quiet: a note on the local row, no row of its own.
-    let local_note = if icloud == Some("verified") {
-        " (also saved to iCloud)"
-    } else {
-        ""
-    };
-    let icloud_row = match icloud {
-        Some(status) if status != "verified" => format!("iCloud mirror: {status}\n"),
-        _ => String::new(),
-    };
     let completion = workflow
         .and_then(amendment_view::completion_text)
         .map(|text| format!("{text}\n\n"))
@@ -368,17 +280,27 @@ pub fn publish_screen_body(
     let primary = if workflow.is_some_and(amendment_view::offers_amendment) {
         "Amend this entry"
     } else {
-        "Publish approved destination"
+        "Publish approved local file"
+    };
+    let local = if local == "conflict" {
+        "file changed"
+    } else {
+        local
+    };
+    let changed = if local == "file changed" {
+        "\n\nThe file changed after you approved. Open Preview to see it again, then approve."
+    } else {
+        ""
+    };
+    let next = if workflow.is_some_and(|w| w.state == "completed") {
+        "\n\nSaved. Go to Publish Remote to push this entry to iCloud or Notion."
+    } else {
+        ""
     };
     format!(
-        "{completion}Local publication: {local}{local_note}\n{icloud_row}Notion: {}\n\n{}\n\n{} {primary}\n{} Cancel pending publication\n{} Check Notion and iCloud readiness",
-        workflow
-            .and_then(|w| w.notion_status.as_deref())
-            .unwrap_or("blocked"),
-        readiness_block(readiness),
+        "{completion}Local publication: {local}\n\n{} {primary}\n{} Cancel pending publication{changed}{next}",
         marker(0),
         marker(1),
-        marker(2)
     )
 }
 

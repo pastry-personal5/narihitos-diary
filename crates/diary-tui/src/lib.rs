@@ -19,6 +19,7 @@ pub mod ime;
 pub mod layout;
 pub mod main_pane;
 pub mod readiness_view;
+pub mod remote_view;
 pub mod resources;
 pub mod review_view;
 pub mod sanitize;

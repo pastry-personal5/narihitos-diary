@@ -42,21 +42,32 @@ P1-M11 adds amendment resources under
 `/v1/workflows/{id}/amendments`: `POST` seeds an amendment on a `Completed` day
 (`201`, workflow with an `amendment` object whose `hand_edited` flag drives the
 changed-since-publication banner), and `previews`, `approvals`, `publications`
-(job), `notion-retries` (job), `rereads`, and `abandonments` follow the usual
-revision precondition. A preview returns current and replacement content per
-destination and the plan digest to approve. The `/v1/amendments` entry is gone
+(job), `rereads`, and `abandonments` follow the usual revision precondition. An
+amendment replaces the local file only (contract version 9 removes
+`notion-retries` and the Notion half of the preview). A preview returns the
+current file and its replacement and the plan digest to approve; it never
+reports a conflict, and approval is refused with `precondition-failed` if the
+file changed since the preview. The `/v1/amendments` entry is gone
 from the capabilities disabled-routes list. `/mcp` routes do not exist.
 `source:read`, including availability-aware discovery and preparation, is
 advertised and accepted only while the Swift helper is available; its absence
 does not prevent the explicit continue-without-notes action from a newly
 started workflow.
 
-The additive `icloud_status` workflow field and the local preview's
-`icloud_target`/`icloud_status` fields describe the optional iCloud mirror
-destination (kind `mirror`, destination `icloud`). They are absent when no
-mirror is configured; clients that predate them ignore them and treat an
-unknown destination kind as non-blocking. See the
-[iCloud output design](superpowers/specs/2026-10-30-icloud-output-design.md).
+Contract version 9 (P1-M22) makes remotes one family on a `Completed` day:
+`GET /v1/workflows/{id}/remotes` lists them (`icloud`, `notion`) with a status
+(`not-pushed`, `exists`, `pushed`, `blocked`); `POST .../remotes/{name}/previews`
+(optional `existing_mode` of `append` or `overwrite`) returns the read-only plan
+and any content already there; `POST .../remotes/{name}/readiness` is the
+read-only per-remote check; `POST .../remotes/{name}/pushes` takes the previewed
+`plan_digest` (and `existing_mode`) and returns a job, because a push is the
+approval. A remote that changed since its preview fails the job with
+`precondition-failed`, and the client shows the preview again. A blocked Notion
+month page carries `page_url` in its preview, only in that state. The local
+preview no longer carries any iCloud or Notion field, and the earlier
+`notion-previews`, `notion-approvals`, `notion-publications`, and `readiness`
+routes are gone. See the
+[remote publication design](superpowers/specs/2026-10-31-remote-publication-stages-design.md).
 
 Capabilities report `manual_workflow_available` separately from
 `assistant_backends[]`. Manual editing has no backend ID or composition path.

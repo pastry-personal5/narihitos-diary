@@ -51,11 +51,6 @@ pub(super) async fn preview_local_output(
         existing_text: preview.existing_text,
         intended_changes: preview.intended_changes,
         local_status: local_status.to_owned(),
-        notion_status: "blocked".to_owned(),
-        icloud_target: preview.mirror_target,
-        icloud_status: preview
-            .mirror_status
-            .map(|status| status.as_str().to_owned()),
         existing_mode: (preview.mode != ExistingEntryMode::Refuse)
             .then(|| preview.mode.as_str().to_owned()),
     };
@@ -165,252 +160,6 @@ pub(super) async fn run_local_publication_job(
 }
 
 /// Read-only: no workflow event is published and no revision changes.
-pub(super) async fn check_publish_readiness(
-    State(state): State<AppState>,
-    Path(id): Path<String>,
-    headers: HeaderMap,
-) -> Result<Json<PublishReadinessDto>, ApiError> {
-    let day = day_from_id(&id)?;
-    let revision = workflow_precondition(&headers)?;
-    let service = state.0.config.commands.clone();
-    let tag_day = day.clone();
-    let outcome =
-        tokio::task::spawn_blocking(move || service.check_publish_readiness(&day, revision))
-            .await
-            .map_err(|_| ApiError::internal())?;
-    let report = match outcome {
-        Ok(report) => report,
-        Err(error) => {
-            log_debug(
-                &state,
-                DiagnosticEvent::ReadinessRefused {
-                    reason: match &error {
-                        CommandError::PreconditionFailed => "stale-revision",
-                        CommandError::Reconciling => "reconciling",
-                        CommandError::NotFound => "not-found",
-                        _ => "state-unavailable",
-                    },
-                },
-            );
-            return Err(ApiError::from(error));
-        }
-    };
-    for item in &report.destinations {
-        log_debug(
-            &state,
-            DiagnosticEvent::PublishReadiness {
-                destination: item.destination,
-                readiness: item.readiness.as_str(),
-                reason: item.reason,
-                next_step: item.next_step,
-                decided_by: item.decided_by,
-                duration_ms: item.duration_ms,
-            },
-        );
-    }
-    if let Some(workflow) = state
-        .0
-        .config
-        .diagnostics
-        .as_ref()
-        .and_then(|log| log.tag("workflow", tag_day.as_str().as_bytes()))
-    {
-        log_debug(
-            &state,
-            DiagnosticEvent::ReadinessCheck {
-                workflow,
-                revision: report.revision,
-                local_verified: report.local_verified,
-                notion_configured: report.notion_configured,
-                icloud_configured: report.icloud_configured,
-                duration_ms: report.duration_ms,
-            },
-        );
-    }
-    Ok(Json(PublishReadinessDto {
-        revision: report.revision,
-        destinations: report
-            .destinations
-            .iter()
-            .map(|item| DestinationReadinessDto {
-                destination: item.destination.to_owned(),
-                readiness: item.readiness.as_str().to_owned(),
-                reason: item.reason.to_owned(),
-                next_step: item.next_step.to_owned(),
-            })
-            .collect(),
-    }))
-}
-
-pub(super) async fn preview_notion_output(
-    State(state): State<AppState>,
-    Path(id): Path<String>,
-    headers: HeaderMap,
-    body: Bytes,
-) -> Result<Json<NotionPreviewDto>, ApiError> {
-    let day = day_from_id(&id)?;
-    let revision = workflow_precondition(&headers)?;
-    let mode = existing_mode_from(&body)?;
-    let service = state.0.config.commands.clone();
-    let preview = blocking(move || service.preview_notion_with(&day, revision, mode)).await?;
-    log_debug(
-        &state,
-        DiagnosticEvent::NotionPreview {
-            status: NOTION_PREVIEW_STATUSES
-                .iter()
-                .copied()
-                .find(|status| *status == preview.status.as_str())
-                .unwrap_or("blocked"),
-            reason: match preview.reason.as_deref() {
-                None => "none",
-                Some(reason) => NOTION_PREVIEW_REASONS
-                    .iter()
-                    .copied()
-                    .find(|known| *known == reason)
-                    .unwrap_or("other"),
-            },
-        },
-    );
-    let result = NotionPreviewDto {
-        workflow: workflow_dto(&preview.workflow),
-        path: vec![preview.root_label, preview.year_title, preview.month_title],
-        year_exists: preview.year_exists,
-        month_exists: preview.month_exists,
-        placement: preview.placement,
-        renderer_version: preview.renderer_version,
-        api_version: preview.api_version,
-        payload_digest: preview.payload_digest.as_str().to_owned(),
-        plan_digest: preview.plan_digest.map(|digest| digest.as_str().to_owned()),
-        blocks: preview
-            .blocks
-            .into_iter()
-            .map(|block| NotionBlockDto {
-                kind: block.kind,
-                text: block.text,
-                depth: block.depth,
-            })
-            .collect(),
-        current_blocks: preview
-            .current_blocks
-            .into_iter()
-            .map(|block| NotionBlockDto {
-                kind: block.kind,
-                text: block.text,
-                depth: block.depth,
-            })
-            .collect(),
-        existing_mode: (preview.mode != ExistingEntryMode::Refuse)
-            .then(|| preview.mode.as_str().to_owned()),
-        status: preview.status.as_str().to_owned(),
-        reason: preview.reason,
-    };
-    publish_event(
-        &state,
-        "workflow.changed",
-        Some(id),
-        Some(result.workflow.revision),
-        None,
-        None,
-    );
-    Ok(Json(result))
-}
-
-pub(super) async fn approve_notion_output(
-    State(state): State<AppState>,
-    Path(id): Path<String>,
-    headers: HeaderMap,
-    Json(request): Json<LocalApprovalRequest>,
-) -> Result<Response, ApiError> {
-    let day = day_from_id(&id)?;
-    let revision = workflow_precondition(&headers)?;
-    let digest = Digest::parse(request.plan_digest)
-        .map_err(|_| ApiError::new(StatusCode::BAD_REQUEST, "invalid-plan-digest"))?;
-    let service = state.0.config.commands.clone();
-    let workflow = blocking(move || service.approve_notion(&day, revision, &digest)).await?;
-    publish_event(
-        &state,
-        "workflow.changed",
-        Some(id),
-        Some(workflow.revision()),
-        None,
-        None,
-    );
-    workflow_response(StatusCode::OK, &workflow)
-}
-
-pub(super) async fn publish_notion_output(
-    State(state): State<AppState>,
-    Path(id): Path<String>,
-    headers: HeaderMap,
-) -> Result<(StatusCode, Json<JobAcceptedDto>), ApiError> {
-    let day = day_from_id(&id)?;
-    let revision = workflow_precondition(&headers)?;
-    let job_id = new_job(&state, "notion-publication", &id)?;
-    tokio::spawn(run_notion_publication_job(
-        state,
-        job_id.clone(),
-        id,
-        day,
-        revision,
-    ));
-    Ok((StatusCode::ACCEPTED, Json(JobAcceptedDto { job_id })))
-}
-
-pub(super) async fn run_notion_publication_job(
-    state: AppState,
-    job_id: String,
-    workflow_id: String,
-    day: DiaryDay,
-    revision: u64,
-) {
-    let Ok(_permit) = Arc::clone(&state.0.workers).acquire_owned().await else {
-        return;
-    };
-    if !mark_running(&state, &job_id) {
-        return;
-    }
-    let Some((commit_state, cancelled)) = assistant_job_state(&state, &job_id) else {
-        fail_job(&state, &job_id, "internal-failure");
-        return;
-    };
-    if commit_state
-        .compare_exchange(
-            COMMIT_ACTIVE,
-            COMMITTING,
-            Ordering::AcqRel,
-            Ordering::Acquire,
-        )
-        .is_err()
-    {
-        return;
-    }
-    let snapshot_day = day.clone();
-    let service = state.0.config.commands.clone();
-    let outcome = tokio::task::spawn_blocking(move || {
-        service.publish_notion_guarded(&day, revision, &cancelled)
-    })
-    .await;
-    match outcome {
-        Ok(Ok(workflow)) => {
-            log_publication_snapshot(&state, "notion-publication", "finished", &snapshot_day).await;
-            publish_event(
-                &state,
-                "workflow.changed",
-                Some(workflow_id),
-                Some(workflow.revision()),
-                None,
-                None,
-            );
-            finish_job(&state, &job_id, None, None);
-        }
-        Ok(Err(error)) => {
-            log_publication_snapshot(&state, "notion-publication", "failed", &snapshot_day).await;
-            fail_job(&state, &job_id, error.diagnostic_code());
-        }
-        Err(_) => fail_job(&state, &job_id, "internal-failure"),
-    }
-}
-
 pub(super) async fn seed_amendment(
     State(state): State<AppState>,
     Path(id): Path<String>,
@@ -485,16 +234,6 @@ pub(super) async fn preview_amendment(
         .output_plan()
         .map(|plan| plan.plan_digest.as_str().to_owned())
         .ok_or_else(|| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal-failure"))?;
-    let blocks = |blocks: Vec<diary_core::NotionBlockPreview>| {
-        blocks
-            .into_iter()
-            .map(|block| NotionBlockDto {
-                kind: block.kind,
-                text: block.text,
-                depth: block.depth,
-            })
-            .collect()
-    };
     let result = AmendmentPreviewDto {
         workflow: workflow_dto(&preview.workflow),
         plan_digest,
@@ -502,12 +241,6 @@ pub(super) async fn preview_amendment(
         local_current: preview.local_current,
         local_payload: preview.local_payload,
         local_status: preview.local_status.as_str().to_owned(),
-        notion: preview.notion.map(|notion| AmendmentNotionDto {
-            current_blocks: blocks(notion.current_blocks),
-            replacement_blocks: blocks(notion.replacement_blocks),
-            status: notion.status.as_str().to_owned(),
-            reason: notion.reason,
-        }),
     };
     publish_event(
         &state,
@@ -551,33 +284,7 @@ pub(super) async fn publish_amendment(
     let day = day_from_id(&id)?;
     let revision = workflow_precondition(&headers)?;
     let job_id = new_job(&state, "amendment-publication", &id)?;
-    tokio::spawn(run_amendment_job(
-        state,
-        job_id.clone(),
-        id,
-        day,
-        revision,
-        false,
-    ));
-    Ok((StatusCode::ACCEPTED, Json(JobAcceptedDto { job_id })))
-}
-
-pub(super) async fn retry_amendment_notion(
-    State(state): State<AppState>,
-    Path(id): Path<String>,
-    headers: HeaderMap,
-) -> Result<(StatusCode, Json<JobAcceptedDto>), ApiError> {
-    let day = day_from_id(&id)?;
-    let revision = workflow_precondition(&headers)?;
-    let job_id = new_job(&state, "amendment-notion-retry", &id)?;
-    tokio::spawn(run_amendment_job(
-        state,
-        job_id.clone(),
-        id,
-        day,
-        revision,
-        true,
-    ));
+    tokio::spawn(run_amendment_job(state, job_id.clone(), id, day, revision));
     Ok((StatusCode::ACCEPTED, Json(JobAcceptedDto { job_id })))
 }
 
@@ -587,7 +294,6 @@ pub(super) async fn run_amendment_job(
     workflow_id: String,
     day: DiaryDay,
     revision: u64,
-    notion_only: bool,
 ) {
     let Ok(_permit) = Arc::clone(&state.0.workers).acquire_owned().await else {
         return;
@@ -610,21 +316,12 @@ pub(super) async fn run_amendment_job(
     {
         return;
     }
-    let amendment_kind = if notion_only {
-        "amendment-notion-retry"
-    } else {
-        "amendment-publication"
-    };
+    let amendment_kind = "amendment-publication";
     let snapshot_day = day.clone();
     let service = state.0.config.commands.clone();
-    let outcome = tokio::task::spawn_blocking(move || {
-        if notion_only {
-            service.retry_amendment_notion(&day, revision, &cancelled)
-        } else {
-            service.publish_amendment(&day, revision, &cancelled)
-        }
-    })
-    .await;
+    let outcome =
+        tokio::task::spawn_blocking(move || service.publish_amendment(&day, revision, &cancelled))
+            .await;
     match outcome {
         Ok(Ok(workflow)) => {
             log_publication_snapshot(&state, amendment_kind, "finished", &snapshot_day).await;

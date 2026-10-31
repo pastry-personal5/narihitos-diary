@@ -15,9 +15,9 @@ pub use codex_assistant::{
     ProcessCodexTransport,
 };
 pub use commands::{
-    AmendmentNotionPreview, AmendmentPreview, AmendmentSeeded, CommandError, CommandService,
-    ControlStore, DestinationReadiness, ExistingEntryMode, LocalPreview, NotionPreview,
-    PublishReadiness, Readiness, local_body,
+    AmendmentPreview, AmendmentSeeded, CommandError, CommandService, ControlStore,
+    DestinationReadiness, ExistingEntryMode, LocalPreview, NotionPreview, PublishReadiness,
+    Readiness, RemoteStatus, RemoteSummary, local_body,
 };
 pub use diagnostic_tags::{DiagnosticTag, DiagnosticTagger};
 pub use diagnostics::{

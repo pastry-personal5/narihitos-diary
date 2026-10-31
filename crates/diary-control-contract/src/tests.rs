@@ -121,14 +121,13 @@ fn workflow_dto_rejects_partial_or_malformed_assistant_selection() {
 }
 
 #[test]
-fn route_table_contains_local_and_notion_publication_and_excludes_future_surfaces() {
+fn route_table_contains_local_publication_and_remotes_and_excludes_future_surfaces() {
     assert!(ROUTES.iter().all(|route| !route.path.contains("mcp")));
     for suffix in [
         "/amendments",
         "/amendments/previews",
         "/amendments/approvals",
         "/amendments/publications",
-        "/amendments/notion-retries",
         "/amendments/rereads",
         "/amendments/abandonments",
     ] {
@@ -138,27 +137,43 @@ fn route_table_contains_local_and_notion_publication_and_excludes_future_surface
         );
     }
     assert_eq!(
-        CONTRACT_VERSION, 8,
-        "the existing-entry choice bumped the contract"
-    );
-    assert!(
-        ROUTES
-            .iter()
-            .any(|route| route.path == "/v1/workflows/{id}/readiness" && route.method == "POST"),
-        "readiness check route"
+        CONTRACT_VERSION, 9,
+        "the remote publication stages bumped the contract"
     );
     assert!(
         ROUTES
             .iter()
             .any(|route| route.path.ends_with("/local-publications"))
     );
-    for suffix in [
+    // Remotes are one family; the Notion-only and combined readiness routes are gone.
+    for (method, suffix) in [
+        ("GET", "/remotes"),
+        ("POST", "/remotes/{name}/readiness"),
+        ("POST", "/remotes/{name}/previews"),
+        ("POST", "/remotes/{name}/pushes"),
+    ] {
+        assert!(
+            ROUTES
+                .iter()
+                .any(|route| route.method == method && route.path.ends_with(suffix)),
+            "{method} {suffix}"
+        );
+    }
+    for gone in [
         "/notion-previews",
         "/notion-approvals",
         "/notion-publications",
     ] {
-        assert!(ROUTES.iter().any(|route| route.path.ends_with(suffix)));
+        assert!(
+            !ROUTES.iter().any(|route| route.path.ends_with(gone)),
+            "{gone}"
+        );
     }
+    assert!(
+        !ROUTES
+            .iter()
+            .any(|route| route.path == "/v1/workflows/{id}/readiness")
+    );
     for path in [
         "/v1/assistant-backends",
         "/v1/workflows/{id}/memory-extractions",

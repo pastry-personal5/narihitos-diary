@@ -1,9 +1,7 @@
 //! Amendment of a `Completed` day: local-first, digest-guarded replacement of
 //! only the content the app itself wrote and receipted.
 
-use diary_core::{
-    AmendmentSeed, NotionReplacePreflight, NotionReplaceRequest, Receipt, WorkflowState,
-};
+use diary_core::{AmendmentSeed, NotionReplaceRequest, WorkflowState};
 
 use super::*;
 
@@ -15,15 +13,6 @@ pub struct AmendmentPreview {
     pub local_current: String,
     pub local_payload: String,
     pub local_status: DestinationStatus,
-    pub notion: Option<AmendmentNotionPreview>,
-}
-
-#[derive(Clone, Debug)]
-pub struct AmendmentNotionPreview {
-    pub current_blocks: Vec<NotionBlockPreview>,
-    pub replacement_blocks: Vec<NotionBlockPreview>,
-    pub status: DestinationStatus,
-    pub reason: Option<String>,
 }
 
 /// The editor seed: the file body without its re-rendered front matter.
@@ -193,24 +182,4 @@ impl CommandService {
             .map_err(CommandError::Store)?;
         Ok(workflow)
     }
-}
-
-/// Which destination an unresolved amendment intent belonged to.
-#[derive(Clone, Copy)]
-enum Reconciled {
-    Local,
-    Mirror,
-    Notion,
-}
-
-fn local_verified(workflow: &Workflow) -> bool {
-    progress_status(workflow, "local") == DestinationStatus::Verified
-}
-
-fn progress_status(workflow: &Workflow, destination: &str) -> DestinationStatus {
-    workflow
-        .destination_progress()
-        .iter()
-        .find(|item| item.destination == destination)
-        .map_or(DestinationStatus::Blocked, |item| item.status)
 }

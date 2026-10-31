@@ -63,30 +63,37 @@ stage, and activating one displays its content in the right Main Pane.
    applies a still-current suggestion; reject leaves the entry unchanged.
 5. **Review:** Review inferred reflections and confirm the complete edited
    entry.
-6. **Preview:** Preview the local Markdown file and the Notion section,
-   including their destination paths and text. Approve the exact output plan
-   before writing.
-7. **Publish:** Write the local file first, at the configurable default path
-   `~/Documents/narihitos-diary/entries/YYYY/MM/YYYY-MM-DD.md`. Publish the
-   confirmed Markdown body, with YAML front matter stripped, under a native
+6. **Preview:** Preview the local Markdown file only: its destination path and
+   exact text. Preview says nothing about any remote. Approve the exact output
+   plan before writing.
+7. **Publish Local:** Write the local file, at the configurable default path
+   `~/Documents/narihitos-diary/entries/YYYY/MM/YYYY-MM-DD.md`. A verified local
+   write completes the day.
+8. **Publish Remote:** The remotes (iCloud, Notion) are listed; the person
+   picks one and sees what it already holds, checks readiness on request, and
+   pushes. A push is its own approval of exactly the plan shown, and nothing is
+   sent to a remote without it, now or later. Push the
+   confirmed Markdown body to Notion, with YAML front matter stripped, under a native
    `heading_2: YYYY-MM-DD (DDD)` section, in ascending date order, in the configured Notion
    root's `YYYY` year and `YYYY-MM` month subpages. `DDD` is the fixed uppercase
    English weekday. Convert the body losslessly to native Notion blocks,
    preserving unsupported constructs literally. Allow unrelated hierarchy
    content, create only missing unique canonical subpages, and write only after
-   the read-only preflight and conflict checks. Show success, pending, or
-   blocked state separately for each destination.
+   the read-only preflight and conflict checks. Show each remote's status
+   separately: not pushed, exists, pushed, or blocked.
 
+### iCloud remote
 
-### iCloud mirror
-
-When `paths.icloud_entries_root` is configured, each approved local entry is also
-saved to that iCloud Drive folder as a byte-identical Markdown file, with no
-extra approval or prompt. It never blocks or changes the local or Notion
-outputs: a missing folder, an evicted placeholder, different existing content,
-or an uncertain write leaves the day partial and is shown in Publish, and the
-mirror can be retried alone. Without the setting nothing changes. See the
-[iCloud output design](superpowers/specs/2026-10-30-icloud-output-design.md).
+When `paths.icloud_entries_root` is configured, iCloud is a remote. It is never
+written automatically: the person previews the copy (the saved local file's
+exact bytes) in Publish Remote and pushes it. A missing folder or an evicted
+placeholder shows the remote as blocked; it never affects the local file or
+Notion. Content that is already there is shown, and Append or Overwrite
+resolves it (an Overwrite backs the file up first); the copy this app saved
+earlier is updated without asking. See the
+[remote publication design](superpowers/specs/2026-10-31-remote-publication-stages-design.md)
+(P1-M22); the [original mirror design](superpowers/specs/2026-10-30-icloud-output-design.md)
+is superseded in part.
 
 ## Boundaries people can rely on
 
@@ -119,35 +126,33 @@ mirror can be retried alone. Without the setting nothing changes. See the
   unavailable when the model or locale is not ready. The screen labels the
   selected backend and whether its composition path is hosted or Apple
   on-device; manual editing always remains available.
-- A different local file at the target path is never overwritten automatically.
-  Conflicting same-day Notion content stops publication for resolution. A
-  conflict shows both versions and offers reread, discard the entry, or save
-  under a different diary day. When a diary entry already exists at the local
-  file, the iCloud mirror, or a Notion section, Preview also offers **Append**
-  and **Overwrite** (P1-M21). Append keeps the existing content and adds a
+- A different local file at the target path is never overwritten without an
+  explicit, confirmed choice, and nothing ever ends in a dead-end conflict. When
+  a diary entry already exists at the local file, Preview defaults to
+  **Append**, which keeps what is there, and offers **Overwrite** (P1-M21,
+  P1-M22); at iCloud or Notion, the remote's menu shows the existing content and
+  offers the same two. A file that changes after it was previewed or approved is
+  previewed again, never stuck. Append keeps the existing content and adds a
   `---` separator, an `*Appended YYYY-MM-DD HH:MM*` line (Mac-local time fixed
   when the plan is built), and the new text. Overwrite copies a file to
   `<name>.md.bak-<digest>` beside it first, or replaces a Notion section's body
   (Notion's trash is its safety net), and asks for a second Enter. Each is a
   per-publication choice that is previewed exactly and applies only while the
   content is still what was previewed; a duplicate or non-canonical Notion
-  heading stays a plain conflict. The iCloud mirror always ends byte-identical
-  to the final local file.
+  heading cannot be changed safely: the remote shows a warning with a link to
+  fix the page by hand in Notion. An iCloud push receives the final local
+  bytes (Append adds the entry to what is already there).
 - A completed entry can be amended: the editor opens with the saved text
-  (including your own hand edits to the file, flagged), and approving the
-  replacement plan replaces only content the app itself wrote. Anything else
-  stays a conflict. The local file is replaced first, atomically and only while
-  it still matches the digest recorded when the editor was seeded; Notion is
-  then replaced section-wise (new body inserted and read back before the old
-  blocks are trashed). If Notion then fails or is uncertain, the local file
-  keeps the new text and Notion is retried alone. A conflict offers reread
-  (rebind to the file as it is now, or re-preview the Notion section, keeping
-  your text) or abandoning the
-  amendment, which leaves files and receipts untouched. With an iCloud mirror
-  configured, the mirror is replaced after the local file, only while it still
-  holds the bytes the app itself mirrored (its own receipt digest); any other
-  content, or an unreachable folder, leaves the mirror in conflict or blocked
-  without affecting local or Notion, and the mirror is retried alone.
+  (including your own hand edits to the file, flagged). The amendment preview
+  shows the file as it is now against its replacement, and approving binds that
+  exact content; the file is replaced atomically, and only while it still holds
+  what was shown. If it changed after approval, previewing again shows it as it
+  is, or the amendment can be abandoned, which leaves files and receipts
+  untouched. An amendment never writes a remote. Pushing again updates iCloud's
+  copy the app itself saved (its own receipt digest), and updates a Notion
+  section the app wrote in place (new body inserted and read back before the old
+  blocks are trashed); anything else already there is shown for Append or
+  Overwrite.
 - If Notion is unconfigured, unreachable, or fails its preflight, the local
   entry can still be approved and written, and Notion shows blocked and can be
   retried later after a new Notion-only preview and approval. If Notion fails

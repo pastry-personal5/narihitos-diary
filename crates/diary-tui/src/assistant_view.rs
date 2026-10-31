@@ -213,7 +213,7 @@ mod tests {
             "composition_path": "hosted", "selection_digest": null,
             "explicit_empty_selection": false, "invalidation_code": null,
             "entry_text": "", "entry_confirmed": false, "local_status": null,
-            "notion_status": null, "icloud_status": null, "amendment": null,
+            "notion_status": null, "amendment": null,
             "candidates": []
         }))
         .unwrap();

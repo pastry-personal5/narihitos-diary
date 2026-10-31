@@ -6,7 +6,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use diary_connectors::{LocalOutput, SqliteStore};
-use diary_control::{CommandError, CommandService};
+use diary_control::{CommandError, CommandService, ExistingEntryMode, RemoteStatus};
 use diary_core::{
     CatalogRequest, Clock, DestinationStatus, DiaryDay, Digest, FreshnessOutcome,
     InspectionOutcome, LocalOutputError, LocalOutputPort, LocalOutputState, NotionBlockPreview,
@@ -227,17 +227,80 @@ fn publish_notion(service: &CommandService, day: &DiaryDay, workflow: &Workflow)
     service.publish_notion(day, approved.revision()).unwrap()
 }
 
+fn mirror_file(fx: &Fixture) -> PathBuf {
+    fx.mirror().target(&fx.day)
+}
+
+fn local_bytes(fx: &Fixture) -> Vec<u8> {
+    fs::read(fx.local.target(&fx.day)).unwrap()
+}
+
+fn icloud_status(service: &CommandService, day: &DiaryDay) -> RemoteStatus {
+    service
+        .remotes(day)
+        .unwrap()
+        .into_iter()
+        .find(|remote| remote.id == "icloud")
+        .unwrap()
+        .status
+}
+
+fn push(
+    service: &CommandService,
+    day: &DiaryDay,
+    mode: ExistingEntryMode,
+) -> Result<DestinationStatus, CommandError> {
+    let preview = service.preview_icloud(day, mode).unwrap();
+    service.push_icloud(day, mode, &preview.plan_digest, || true)
+}
+
 #[test]
-fn mirror_is_byte_identical_and_day_completes_without_extra_approval() {
+fn local_publication_completes_the_day_and_never_touches_icloud() {
     let fx = Fixture::new();
     let service = fx.with_mirror();
     let published = publish(&service, &fx.day);
+    assert_eq!(published.state().as_str(), "completed");
     assert_eq!(status_of(&published, "local"), DestinationStatus::Verified);
-    assert_eq!(status_of(&published, "icloud"), DestinationStatus::Verified);
-    let mirrored = fs::read(fx.mirror().target(&fx.day)).unwrap();
-    assert_eq!(mirrored, fs::read(fx.local.target(&fx.day)).unwrap());
-    let completed = publish_notion(&service, &fx.day, &published);
-    assert_eq!(completed.state().as_str(), "completed");
+    assert!(!mirror_file(&fx).exists());
+    assert!(
+        published
+            .destination_progress()
+            .iter()
+            .all(|item| item.destination != "icloud")
+    );
+    assert!(
+        fx.store
+            .receipts(&fx.day)
+            .unwrap()
+            .iter()
+            .all(|receipt| receipt.destination != "icloud")
+    );
+    // The plan holds the local file only (plus Notion's blocked placeholder).
+    assert_eq!(published.output_plan().unwrap().targets.len(), 2);
+}
+
+#[test]
+fn push_writes_the_local_bytes_and_marks_the_remote_pushed() {
+    let fx = Fixture::new();
+    let service = fx.with_mirror();
+    publish(&service, &fx.day);
+    assert_eq!(icloud_status(&service, &fx.day), RemoteStatus::NotPushed);
+    let preview = service
+        .preview_icloud(&fx.day, ExistingEntryMode::Refuse)
+        .unwrap();
+    assert_eq!(preview.status, RemoteStatus::NotPushed);
+    assert!(preview.existing_text.is_none());
+    let status = service
+        .push_icloud(
+            &fx.day,
+            ExistingEntryMode::Refuse,
+            &preview.plan_digest,
+            || true,
+        )
+        .unwrap();
+    assert_eq!(status, DestinationStatus::Verified);
+    assert_eq!(fs::read(mirror_file(&fx)).unwrap(), local_bytes(&fx));
+    assert_eq!(icloud_status(&service, &fx.day), RemoteStatus::Pushed);
     assert!(
         fx.store
             .receipts(&fx.day)
@@ -245,94 +308,160 @@ fn mirror_is_byte_identical_and_day_completes_without_extra_approval() {
             .iter()
             .any(|receipt| receipt.destination == "icloud")
     );
+    // Pushing again changes nothing.
+    let receipts = fx.store.receipts(&fx.day).unwrap().len();
+    assert_eq!(
+        push(&service, &fx.day, ExistingEntryMode::Refuse).unwrap(),
+        DestinationStatus::Verified
+    );
+    assert_eq!(fx.store.receipts(&fx.day).unwrap().len(), receipts);
 }
 
 #[test]
-fn no_mirror_configured_leaves_plan_and_behavior_unchanged() {
-    let fx = Fixture::new();
-    let service = fx.base();
-    let confirmed = confirmed(&service, &fx.day);
-    let preview = service
-        .preview_local(&fx.day, confirmed.revision())
-        .unwrap();
-    assert!(preview.mirror_target.is_none());
-    assert_eq!(preview.workflow.output_plan().unwrap().targets.len(), 2);
-    assert_eq!(preview.workflow.destination_progress().len(), 2);
-    assert!(!fx.mirror().target(&fx.day).exists());
-}
-
-#[test]
-fn missing_icloud_root_blocks_mirror_but_local_publishes_day_partial() {
+fn a_missing_icloud_folder_blocks_only_the_remote() {
     let fx = Fixture::new();
     let service = fx.with_mirror();
+    publish(&service, &fx.day);
     fs::remove_dir_all(&fx.mirror_root).unwrap();
-    let published = publish(&service, &fx.day);
-    assert_eq!(published.state().as_str(), "partial");
-    assert_eq!(status_of(&published, "local"), DestinationStatus::Verified);
-    assert_eq!(status_of(&published, "icloud"), DestinationStatus::Blocked);
+    let preview = service
+        .preview_icloud(&fx.day, ExistingEntryMode::Refuse)
+        .unwrap();
+    assert_eq!(preview.status, RemoteStatus::Blocked);
+    assert_eq!(
+        push(&service, &fx.day, ExistingEntryMode::Refuse).unwrap(),
+        DestinationStatus::Blocked
+    );
     assert!(fx.local.target(&fx.day).exists());
     assert!(!fx.mirror_root.exists());
-    assert!(
-        fx.store
-            .unresolved_intents(Some(&fx.day))
-            .unwrap()
-            .is_empty()
+    assert_eq!(
+        service.load_workflow(&fx.day).unwrap().state().as_str(),
+        "completed"
     );
 }
 
 #[test]
-fn evicted_placeholder_blocks_mirror() {
+fn an_evicted_placeholder_blocks_the_remote() {
     let fx = Fixture::new();
     let service = fx.with_mirror();
-    let target = fx.mirror().target(&fx.day);
+    publish(&service, &fx.day);
+    let target = mirror_file(&fx);
     fs::create_dir_all(target.parent().unwrap()).unwrap();
     fs::write(target.parent().unwrap().join(".2026-10-30.md.icloud"), "").unwrap();
-    let published = publish(&service, &fx.day);
-    assert_eq!(status_of(&published, "local"), DestinationStatus::Verified);
-    assert_eq!(status_of(&published, "icloud"), DestinationStatus::Blocked);
+    assert_eq!(icloud_status(&service, &fx.day), RemoteStatus::Blocked);
     assert!(!target.exists());
 }
 
 #[test]
-fn different_mirror_content_is_conflict_and_local_notion_unaffected() {
+fn existing_content_is_shown_and_append_or_overwrite_resolves_it() {
     let fx = Fixture::new();
     let service = fx.with_mirror();
-    let target = fx.mirror().target(&fx.day);
+    publish(&service, &fx.day);
+    let target = mirror_file(&fx);
     fs::create_dir_all(target.parent().unwrap()).unwrap();
-    fs::write(&target, "someone else's file").unwrap();
-    let published = publish(&service, &fx.day);
-    assert_eq!(status_of(&published, "local"), DestinationStatus::Verified);
-    assert_eq!(status_of(&published, "icloud"), DestinationStatus::Conflict);
-    assert_eq!(fs::read_to_string(&target).unwrap(), "someone else's file");
-    let after_notion = publish_notion(&service, &fx.day, &published);
+    fs::write(&target, "an entry written elsewhere\n").unwrap();
+
+    // Shown without asking; not a dead end, and nothing is pushable until a
+    // mode is chosen.
+    let shown = service
+        .preview_icloud(&fx.day, ExistingEntryMode::Refuse)
+        .unwrap();
+    assert_eq!(shown.status, RemoteStatus::Exists);
     assert_eq!(
-        status_of(&after_notion, "notion"),
+        shown.existing_text.as_deref(),
+        Some("an entry written elsewhere\n")
+    );
+    assert!(matches!(
+        service.push_icloud(
+            &fx.day,
+            ExistingEntryMode::Refuse,
+            &shown.plan_digest,
+            || true
+        ),
+        Err(CommandError::PreconditionFailed)
+    ));
+    assert_eq!(
+        fs::read_to_string(&target).unwrap(),
+        "an entry written elsewhere\n"
+    );
+
+    // Append keeps what is there and adds the entry under a dated separator.
+    let append = service
+        .preview_icloud(&fx.day, ExistingEntryMode::Append)
+        .unwrap();
+    assert!(append.payload.starts_with("an entry written elsewhere\n"));
+    assert!(append.payload.contains("Today was quiet."));
+    assert_eq!(
+        service
+            .push_icloud(
+                &fx.day,
+                ExistingEntryMode::Append,
+                &append.plan_digest,
+                || true
+            )
+            .unwrap(),
         DestinationStatus::Verified
     );
-    assert_eq!(
-        status_of(&after_notion, "icloud"),
-        DestinationStatus::Conflict
-    );
-    assert_eq!(after_notion.state().as_str(), "partial");
+    assert_eq!(fs::read_to_string(&target).unwrap(), append.payload);
 }
 
 #[test]
-fn mirror_failure_does_not_block_notion_preview_and_publish() {
+fn overwrite_backs_up_and_replaces_with_the_local_bytes() {
     let fx = Fixture::new();
     let service = fx.with_mirror();
-    fs::remove_dir_all(&fx.mirror_root).unwrap();
-    let published = publish(&service, &fx.day);
-    let after_notion = publish_notion(&service, &fx.day, &published);
+    publish(&service, &fx.day);
+    let target = mirror_file(&fx);
+    fs::create_dir_all(target.parent().unwrap()).unwrap();
+    fs::write(&target, "an entry written elsewhere\n").unwrap();
     assert_eq!(
-        status_of(&after_notion, "notion"),
+        push(&service, &fx.day, ExistingEntryMode::Overwrite).unwrap(),
         DestinationStatus::Verified
     );
+    assert_eq!(fs::read(&target).unwrap(), local_bytes(&fx));
+    let backed_up = fs::read_dir(target.parent().unwrap())
+        .unwrap()
+        .filter_map(Result::ok)
+        .any(|entry| entry.file_name().to_string_lossy().contains(".bak-"));
+    assert!(backed_up, "the replaced file keeps a backup");
+}
+
+#[test]
+fn a_folder_that_changed_since_the_preview_refuses_the_push() {
+    let fx = Fixture::new();
+    let service = fx.with_mirror();
+    publish(&service, &fx.day);
+    let target = mirror_file(&fx);
+    fs::create_dir_all(target.parent().unwrap()).unwrap();
+    fs::write(&target, "first version\n").unwrap();
+    let preview = service
+        .preview_icloud(&fx.day, ExistingEntryMode::Overwrite)
+        .unwrap();
+    fs::write(&target, "edited after the preview\n").unwrap();
+    assert!(matches!(
+        service.push_icloud(
+            &fx.day,
+            ExistingEntryMode::Overwrite,
+            &preview.plan_digest,
+            || true
+        ),
+        Err(CommandError::PreconditionFailed)
+    ));
     assert_eq!(
-        status_of(&after_notion, "icloud"),
-        DestinationStatus::Blocked
+        fs::read_to_string(&target).unwrap(),
+        "edited after the preview\n"
     );
+}
+
+#[test]
+fn icloud_and_notion_are_pushed_independently() {
+    let fx = Fixture::new();
+    let service = fx.with_mirror();
+    let published = publish(&service, &fx.day);
+    let done = publish_notion(&service, &fx.day, &published);
+    assert_eq!(status_of(&done, "notion"), DestinationStatus::Verified);
+    assert_eq!(icloud_status(&service, &fx.day), RemoteStatus::NotPushed);
+    assert!(!mirror_file(&fx).exists());
     assert_eq!(
-        status_of(&after_notion, "local"),
+        push(&service, &fx.day, ExistingEntryMode::Refuse).unwrap(),
         DestinationStatus::Verified
     );
 }
@@ -342,60 +471,6 @@ fn mirror_failure_does_not_block_notion_preview_and_publish() {
 struct AmbiguousMirror {
     inner: LocalOutput,
     writes: AtomicU64,
-}
-
-/// Models a local write that creates the final file and then reports an
-/// unavailable result before the caller receives confirmation.
-struct LandedUncertainLocal {
-    inner: LocalOutput,
-    writes: AtomicU64,
-}
-impl LocalOutputPort for LandedUncertainLocal {
-    fn target(&self, day: &DiaryDay) -> String {
-        self.inner.target(day).to_string_lossy().into_owned()
-    }
-    fn inspect(&self, day: &DiaryDay, payload: &str) -> Result<LocalOutputState, LocalOutputError> {
-        self.inner.inspect(day, payload)
-    }
-    fn write(&self, day: &DiaryDay, payload: &str) -> Result<LocalOutputState, LocalOutputError> {
-        self.writes.fetch_add(1, Ordering::SeqCst);
-        self.inner.write(day, payload)?;
-        Err(LocalOutputError::Unavailable)
-    }
-}
-
-#[test]
-fn landed_uncertain_local_is_receipted_and_mirror_runs_without_restart() {
-    let fx = Fixture::new();
-    let local = Arc::new(LandedUncertainLocal {
-        inner: LocalOutput::new(fx._scratch.0.join("entries")).unwrap(),
-        writes: AtomicU64::new(0),
-    });
-    let service = CommandService::new(
-        fx.store.clone(),
-        Arc::new(EmptySources),
-        Arc::new(EmptySources),
-        Arc::new(FixedClock),
-    )
-    .with_local_output(local.clone())
-    .with_mirror_output(fx.mirror())
-    .with_notion_output(Arc::new(SyntheticNotion));
-    let published = publish(&service, &fx.day);
-    assert_eq!(status_of(&published, "local"), DestinationStatus::Verified);
-    assert_eq!(status_of(&published, "icloud"), DestinationStatus::Verified);
-    assert_eq!(status_of(&published, "notion"), DestinationStatus::Blocked);
-    assert_eq!(local.writes.load(Ordering::SeqCst), 1);
-    assert!(
-        fx.store
-            .unresolved_intents(Some(&fx.day))
-            .unwrap()
-            .is_empty()
-    );
-    assert_eq!(fx.store.receipts(&fx.day).unwrap().len(), 2);
-    let notion = service
-        .preview_notion(&fx.day, published.revision())
-        .unwrap();
-    assert_eq!(notion.status, DestinationStatus::Pending);
 }
 impl LocalOutputPort for AmbiguousMirror {
     fn target(&self, day: &DiaryDay) -> String {
@@ -412,16 +487,18 @@ impl LocalOutputPort for AmbiguousMirror {
 }
 
 #[test]
-fn restart_after_ambiguous_mirror_write_reconciles_to_verified() {
+fn restart_after_an_ambiguous_push_reconciles_without_writing_again() {
     let fx = Fixture::new();
     let ambiguous = Arc::new(AmbiguousMirror {
         inner: LocalOutput::new_icloud(fx.mirror_root.clone(), &fx.home).unwrap(),
         writes: AtomicU64::new(0),
     });
     let service = fx.base().with_mirror_output(ambiguous.clone());
-    let published = publish(&service, &fx.day);
-    assert_eq!(status_of(&published, "local"), DestinationStatus::Verified);
-    assert_eq!(status_of(&published, "icloud"), DestinationStatus::Pending);
+    publish(&service, &fx.day);
+    assert_eq!(
+        push(&service, &fx.day, ExistingEntryMode::Refuse).unwrap(),
+        DestinationStatus::Pending
+    );
     assert_eq!(fx.store.unresolved_intents(Some(&fx.day)).unwrap().len(), 1);
     assert_eq!(ambiguous.writes.load(Ordering::SeqCst), 1);
 
@@ -434,73 +511,7 @@ fn restart_after_ambiguous_mirror_write_reconciles_to_verified() {
             .unwrap()
             .is_empty()
     );
-    let workflow = restarted.load_workflow(&fx.day).unwrap();
-    assert_eq!(status_of(&workflow, "icloud"), DestinationStatus::Verified);
     assert_eq!(ambiguous.writes.load(Ordering::SeqCst), 1);
-    assert_eq!(
-        fs::read(fx.mirror().target(&fx.day)).unwrap(),
-        fs::read(fx.local.target(&fx.day)).unwrap()
-    );
-}
-
-#[test]
-fn mirror_retry_after_blocked_completes_day() {
-    let fx = Fixture::new();
-    let service = fx.with_mirror();
-    fs::remove_dir_all(&fx.mirror_root).unwrap();
-    let published = publish(&service, &fx.day);
-    assert_eq!(status_of(&published, "icloud"), DestinationStatus::Blocked);
-    fs::create_dir_all(&fx.mirror_root).unwrap();
-    let retried = service
-        .publish_mirror_guarded(&fx.day, published.revision(), || true)
-        .unwrap();
-    assert_eq!(status_of(&retried, "icloud"), DestinationStatus::Verified);
-    let completed = publish_notion(&service, &fx.day, &retried);
-    assert_eq!(completed.state().as_str(), "completed");
-    assert_eq!(
-        fs::read(fx.mirror().target(&fx.day)).unwrap(),
-        fs::read(fx.local.target(&fx.day)).unwrap()
-    );
-}
-
-#[test]
-fn config_change_between_preview_and_publish_forces_new_preview() {
-    let fx = Fixture::new();
-    // Mirror removed after preview.
-    let with = fx.with_mirror();
-    let confirmed_with = confirmed(&with, &fx.day);
-    let preview = with
-        .preview_local(&fx.day, confirmed_with.revision())
-        .unwrap();
-    let digest = preview.workflow.output_plan().unwrap().plan_digest.clone();
-    let without = fx.base();
-    assert!(matches!(
-        without.approve_local(&fx.day, preview.workflow.revision(), &digest),
-        Err(CommandError::PreconditionFailed)
-    ));
-    // Approved with the mirror, then removed before publish.
-    let approved = with
-        .approve_local(&fx.day, preview.workflow.revision(), &digest)
-        .unwrap();
-    assert!(matches!(
-        without.publish_local(&fx.day, approved.revision()),
-        Err(CommandError::PreconditionFailed)
-    ));
-    assert!(!fx.local.target(&fx.day).exists());
-}
-
-#[test]
-fn mirror_added_after_preview_forces_new_preview() {
-    let fx = Fixture::new();
-    let without = fx.base();
-    let confirmed = confirmed(&without, &fx.day);
-    let preview = without
-        .preview_local(&fx.day, confirmed.revision())
-        .unwrap();
-    let digest = preview.workflow.output_plan().unwrap().plan_digest.clone();
-    let with = fx.with_mirror();
-    assert!(matches!(
-        with.approve_local(&fx.day, preview.workflow.revision(), &digest),
-        Err(CommandError::PreconditionFailed)
-    ));
+    assert_eq!(fs::read(mirror_file(&fx)).unwrap(), local_bytes(&fx));
+    assert_eq!(icloud_status(&restarted, &fx.day), RemoteStatus::Pushed);
 }

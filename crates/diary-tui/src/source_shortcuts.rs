@@ -325,7 +325,8 @@ mod tests {
             Stage::Compose,
             Stage::Review,
             Stage::Preview,
-            Stage::Publish,
+            Stage::PublishLocal,
+            Stage::PublishRemote,
         ] {
             let context = ShortcutContext {
                 stage,

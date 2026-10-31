@@ -149,31 +149,20 @@ struct Fixture {
     _scratch: Scratch,
     store: Arc<SqliteStore>,
     local: Arc<LocalOutput>,
-    home: PathBuf,
-    mirror_root: PathBuf,
     day: DiaryDay,
 }
 
 impl Fixture {
     fn new() -> Self {
         let scratch = Scratch::new();
-        let home = scratch.0.join("home");
-        let mirror_root = home.join("Library/Mobile Documents/com~apple~CloudDocs/entries");
-        fs::create_dir_all(&mirror_root).unwrap();
         let store = Arc::new(SqliteStore::open(scratch.0.join("state.sqlite3")).unwrap());
         let local = Arc::new(LocalOutput::new(scratch.0.join("entries")).unwrap());
         Self {
             _scratch: scratch,
             store,
             local,
-            home,
-            mirror_root,
             day: DiaryDay::parse("2026-10-30").unwrap(),
         }
-    }
-
-    fn mirror(&self) -> Arc<LocalOutput> {
-        Arc::new(LocalOutput::new_icloud(self.mirror_root.clone(), &self.home).unwrap())
     }
 
     fn base(&self) -> CommandService {
@@ -186,10 +175,6 @@ impl Fixture {
         .with_local_output(self.local.clone())
         .with_notion_output(Arc::new(SyntheticNotion))
     }
-
-    fn with_mirror(&self) -> CommandService {
-        self.base().with_mirror_output(self.mirror())
-    }
 }
 
 fn status_of(workflow: &Workflow, destination: &str) -> DestinationStatus {
@@ -199,20 +184,6 @@ fn status_of(workflow: &Workflow, destination: &str) -> DestinationStatus {
         .find(|item| item.destination == destination)
         .unwrap()
         .status
-}
-
-/// Previews, approves, and publishes the local entry, returning the workflow.
-fn publish(service: &CommandService, day: &DiaryDay) -> Workflow {
-    let confirmed = confirmed(service, day);
-    let preview = service.preview_local(day, confirmed.revision()).unwrap();
-    let approved = service
-        .approve_local(
-            day,
-            preview.workflow.revision(),
-            &preview.workflow.output_plan().unwrap().plan_digest,
-        )
-        .unwrap();
-    service.publish_local(day, approved.revision()).unwrap()
 }
 
 fn publish_notion(service: &CommandService, day: &DiaryDay, workflow: &Workflow) -> Workflow {
@@ -237,13 +208,6 @@ fn seed_local(fx: &Fixture, text: &str) {
     let target = local_target(fx);
     fs::create_dir_all(target.parent().unwrap()).unwrap();
     fs::write(target, text).unwrap();
-}
-
-fn seed_mirror(fx: &Fixture, text: &str) -> PathBuf {
-    let target = fx.mirror().target(&fx.day);
-    fs::create_dir_all(target.parent().unwrap()).unwrap();
-    fs::write(&target, text).unwrap();
-    target
 }
 
 fn preview_with(
@@ -283,24 +247,27 @@ fn backups(path: &std::path::Path) -> Vec<PathBuf> {
 }
 
 #[test]
-fn a_differing_file_is_still_a_conflict_unless_a_mode_is_chosen() {
+fn a_differing_file_defaults_to_append_and_is_never_a_conflict() {
     let fx = Fixture::new();
     let service = fx.base();
     seed_local(&fx, EXISTING);
     let preview = preview_with(&service, &fx.day, ExistingEntryMode::Refuse);
     assert_eq!(
         status_of(&preview.workflow, "local"),
-        DestinationStatus::Conflict
+        DestinationStatus::Pending
     );
+    assert_eq!(preview.mode, ExistingEntryMode::Append);
     assert_eq!(preview.existing_text.as_deref(), Some(EXISTING));
-    assert!(matches!(
-        service.approve_local(
+    assert!(preview.payload.starts_with(EXISTING));
+    // The plan can be approved as it stands, and nothing is written before
+    // publication.
+    service
+        .approve_local(
             &fx.day,
             preview.workflow.revision(),
-            &preview.workflow.output_plan().unwrap().plan_digest
-        ),
-        Err(CommandError::Workflow(_))
-    ));
+            &preview.workflow.output_plan().unwrap().plan_digest,
+        )
+        .unwrap();
     assert_eq!(fs::read_to_string(local_target(&fx)).unwrap(), EXISTING);
 }
 
@@ -439,79 +406,4 @@ fn a_backup_that_cannot_be_written_leaves_the_file_untouched() {
     let published = approve_and_publish(&service, &fx.day, &preview);
     assert_ne!(status_of(&published, "local"), DestinationStatus::Verified);
     assert_eq!(fs::read_to_string(local_target(&fx)).unwrap(), EXISTING);
-}
-
-#[test]
-fn the_mirror_ends_byte_identical_to_the_final_local_file_and_its_old_content_is_backed_up() {
-    let fx = Fixture::new();
-    let service = fx.with_mirror();
-    seed_local(&fx, EXISTING);
-    let mirror = seed_mirror(&fx, "an older mirror copy");
-    let preview = preview_with(&service, &fx.day, ExistingEntryMode::Append);
-    assert_eq!(preview.mirror_status, Some(DestinationStatus::Pending));
-    let published = approve_and_publish(&service, &fx.day, &preview);
-    assert_eq!(status_of(&published, "local"), DestinationStatus::Verified);
-    assert_eq!(status_of(&published, "icloud"), DestinationStatus::Verified);
-    assert_eq!(
-        fs::read(&mirror).unwrap(),
-        fs::read(local_target(&fx)).unwrap()
-    );
-    assert_eq!(fs::read_to_string(&mirror).unwrap(), preview.payload);
-    let kept = backups(&mirror);
-    assert_eq!(kept.len(), 1);
-    assert_eq!(
-        fs::read_to_string(&kept[0]).unwrap(),
-        "an older mirror copy"
-    );
-}
-
-#[test]
-fn a_mirror_conflict_from_a_plain_preview_is_never_replaced_even_on_retry() {
-    let fx = Fixture::new();
-    let service = fx.with_mirror();
-    let mirror = seed_mirror(&fx, "someone else's file");
-    let published = publish(&service, &fx.day);
-    assert_eq!(status_of(&published, "icloud"), DestinationStatus::Conflict);
-    let retried = service.publish_mirror_guarded(&fx.day, published.revision(), || true);
-    let _ = retried;
-    assert_eq!(fs::read_to_string(&mirror).unwrap(), "someone else's file");
-    assert!(backups(&mirror).is_empty());
-}
-
-#[test]
-fn overwrite_replaces_a_differing_mirror_even_when_the_local_file_is_new() {
-    let fx = Fixture::new();
-    let service = fx.with_mirror();
-    let mirror = seed_mirror(&fx, "mirror only");
-    let preview = preview_with(&service, &fx.day, ExistingEntryMode::Overwrite);
-    let published = approve_and_publish(&service, &fx.day, &preview);
-    assert_eq!(status_of(&published, "icloud"), DestinationStatus::Verified);
-    assert_eq!(
-        fs::read(&mirror).unwrap(),
-        fs::read(local_target(&fx)).unwrap()
-    );
-    assert_eq!(
-        fs::read_to_string(&backups(&mirror)[0]).unwrap(),
-        "mirror only"
-    );
-}
-
-#[test]
-fn the_planned_bytes_are_re_derived_after_a_restart_so_a_mirror_retry_works() {
-    let fx = Fixture::new();
-    let service = fx.with_mirror();
-    seed_local(&fx, EXISTING);
-    fs::remove_dir_all(&fx.mirror_root).unwrap();
-    let preview = preview_with(&service, &fx.day, ExistingEntryMode::Append);
-    let published = approve_and_publish(&service, &fx.day, &preview);
-    assert_eq!(status_of(&published, "icloud"), DestinationStatus::Blocked);
-    fs::create_dir_all(&fx.mirror_root).unwrap();
-    let retried = service
-        .publish_mirror_guarded(&fx.day, published.revision(), || true)
-        .unwrap();
-    assert_eq!(status_of(&retried, "icloud"), DestinationStatus::Verified);
-    assert_eq!(
-        fs::read_to_string(fx.mirror().target(&fx.day)).unwrap(),
-        preview.payload
-    );
 }

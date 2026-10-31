@@ -19,8 +19,9 @@ workflow states.
 | Sources | `sources` | Discovery, source-note inclusion, readable-text inspection, selected-only download, and source-set confirmation. |
 | Compose | `compose` | Assistant selection, optional memory review, draft creation, manual editing, and paragraph review. The Draft editor is always available. |
 | Review | `review` | Review and confirmation of the complete edited entry. |
-| Preview | `preview` | Exact local and Notion output plans and approval. |
-| Publish | `publish` | Per-destination progress, verification, retry, and conflict resolution. |
+| Preview | `preview` | The exact local file plan and its approval. Says nothing about any remote. |
+| Publish Local | `publish-local` | Saving the local file; a verified save completes the day. |
+| Publish Remote | `publish-remote` | The remotes (iCloud, Notion): what each holds, readiness, and pushing. A push is the approval. |
 
 Use these six labels wherever the complete journey is shown. An optional step
 inside a stage can be unavailable without removing or renaming the stage. Each

@@ -31,8 +31,8 @@ bypass review.
 Pane (Workflow, Resources, Main Pane, Utility). It stacks two Widgets: the
 read-only Diary Day Widget above the Assistant Widget. The Assistant Widget
 replaces the backend rows in the Resources Sidebar and includes a "None (manual
-only)" row. All four columns are inline from 151 columns (the Main Pane stays at
-least 50 wide); from 120 through 150 the Utility Sidebar opens as a focused
+only)" row. All four columns are inline from 161 columns (the Main Pane stays at
+least 50 wide); from 120 through 160 the Utility Sidebar opens as a focused
 overlay, and below 120 it overlays alongside Resources. Tab order follows screen
 order. See [the P1-M15 plan](phase-1/milestone-15-utility-sidebar-architecture.md).
 
@@ -99,36 +99,42 @@ second row carries a `Tip:` naming the next step to the following stage. See
   with `YYYY-MM-DD (DDD)`, using a fixed uppercase English weekday, and shows
   the ordered native blocks produced by lossless Markdown conversion. Show
   conflicts and partial success plainly.
-- When an iCloud mirror is configured, Preview shows one `iCloud mirror` line
-  with its target and status. Publish shows a mirror row only while it is
-  pending, blocked, or in conflict; a verified mirror is a note on the local
-  row (`also saved to iCloud`). A mirror failure never raises a modal and never
+- Preview shows only the local file and never mentions a remote. Publish Local
+  shows the local save and, once the day is completed, points to Publish Remote.
+  Publish Remote lists the remotes (iCloud, Notion) in the Resources Sidebar with
+  a status (`Not pushed`, `Exists`, `Pushed`, `Blocked`); the Main Pane shows the
+  selected remote's menu: Show what will be pushed, Check readiness, Append and
+  Overwrite (only while it holds content, which is shown automatically), and Push.
+  Push is the approval; Overwrite asks for a second Enter and Esc cancels. A
+  blocked Notion month page shows a warning and a URL to fix it by hand. A remote
+  failure never raises a modal and never
   fails the local publication.
-- Publish offers a manual `Check Notion and iCloud readiness` control, the last
-  Publish control. Nothing runs automatically. Each destination shows `Not
-  checked` before a check and `Checking...` during one, then `READY`, `NOT
-  READY`, `CONFLICT`, or `PUBLISHED` with a plain-language reason and next step.
-  The check is read-only, needs no mutation authority, and its answer clears
-  when the workflow revision or day changes. A ready Notion points to Preview and
-  approval; readiness never stands in for approval.
-- The Notion preview shows a `Position` line (`end`, `after YYYY-MM-DD`, or
+- Each remote's menu offers a manual `Check readiness` control. Nothing runs
+  automatically. It shows `Not checked` before a check and `Checking...` during
+  one, then `READY`, `NOT READY`, `CONFLICT`, or `PUBLISHED` with a
+  plain-language reason and next step. The check is read-only, needs no mutation
+  authority, and its answer clears when the workflow revision, day, or remote
+  changes.
+- The Notion plan shows a `Position` line (`end`, `after YYYY-MM-DD`, or
   `before YYYY-MM-DD`) saying where the day's section goes on the month page
   (P1-M20). A page whose order changes before the write needs a new preview.
-- When the local file differs, stop the whole plan; when Notion holds
-  conflicting same-day content, stop Notion only. Show both versions and offer
-  only reread, discard the entry, or save under a different diary day, as
-  described in [Publication and recovery](architecture.md#publication-and-recovery).
-  Never overwrite on its own.
-- When an entry already exists (a local, iCloud, or Notion conflict), Preview
-  lists **Append to the existing entry** and **Overwrite the existing entry**
-  after its standing controls (P1-M21). They are reached by focus and Enter like
-  every control, and appear only while the current phase shows an existing
-  entry, or after a mode was chosen so the person can switch. Choosing one
-  re-previews the exact plan: a `Mode:` line, the existing content, and the
-  resulting content (for a file, the planned backup name). Overwrite asks for a
-  second Enter and Esc cancels; Append needs none because the existing text is
-  kept. Local and iCloud are chosen in the local preview; Notion is chosen in
-  its own preview after the local file is verified.
+- No screen ends in a dead-end "conflict". Preview never stops at one: when the
+  local file already holds something else, the plan defaults to **Append**, which
+  keeps what is there and adds the entry below it, so it can be approved as it
+  stands. **Overwrite** stays an explicit choice and never happens on its own.
+  Content already at a remote is shown in that remote's menu with the same two
+  choices. If a file changes after it was previewed or approved, the screen says
+  so in plain words and shows it again (an approval that is refused previews the
+  file again automatically), as described in
+  [Publication and recovery](architecture.md#publication-and-recovery).
+- When an entry already exists, Preview lists **Append to the existing entry**
+  and **Overwrite the existing entry** after its two standing controls (P1-M21).
+  They are reached by focus and Enter like every control, and appear only while
+  the preview shows an existing entry. Choosing one re-previews the exact plan: a
+  `Mode:` line, the existing content, and the resulting content (for a file, the
+  planned backup name). Overwrite asks for a second Enter and Esc cancels;
+  Append needs none because the existing text is kept. Remotes offer the same
+  two in their own menu.
 - When Notion is unconfigured, unreachable, or fails its preflight, show it as
   blocked in the preview and still allow the local entry to be approved and
   written. Notion can be retried later: a blocked destination needs a new
@@ -138,14 +144,12 @@ second row carries a `Tip:` naming the next step to the following stage. See
   actions target Notion only and never rewrite the local file.
 - Offer to amend a completed day. The editor opens with the saved text and, if
   the file was hand-edited, a banner saying it changed since publication. The
-  output preview shows current and replacement content per destination, and a
-  destination that no longer matches our receipt is a Conflict. The offer
-  appears on the Publish stage of a completed day ("Amend this entry"); the
-  Preview stage then lists preview, approve, and, only on a local conflict,
-  reread, plus abandon the amendment. After the local file is replaced, a Notion
-  conflict offers the same two: reread previews the section again and needs a
-  new approval. Publish then replaces, or retries Notion alone while it is
-  pending.
+  amendment preview shows the current file against its replacement, nothing
+  about any remote. The offer appears on the Publish Local stage of a completed
+  day ("Amend this entry"); the Preview stage then lists preview and approve,
+  plus abandon the amendment once the file changed after approval. Publish Local
+  replaces the file. Remotes are pushed again afterward: iCloud updates the copy
+  this app saved, and a Notion section this app wrote is updated in place.
 - Display the macOS input language through Text Input Source Services
   notifications, use a 500 ms polling fallback when notification registration
   fails, show `IME: EN` or `IME: KO` for English and Korean, and show `IME: ?`
@@ -234,11 +238,10 @@ ordered native-block projection. It separates read-only preflight results from
 actions that create pages or append blocks, allows unrelated hierarchy content,
 and marks a blocked destination with its reason. Approval is a deliberate
 action on this screen, tied to the displayed plan, and no typed command bypasses it. The
-publication screen shows the local and Notion statuses on separate lines and
-distinguishes local success, Notion pending, Notion blocked, verified success,
-and a conflict. Cancelling a publication that may already have written leaves
-the destination reconciling rather than claiming rollback. The Conflict view lays the existing
-content beside the planned payload and offers the three resolutions above.
+publication screens show the local save and each remote separately and
+distinguish success, pending, blocked, and a file that changed. Cancelling a
+publication that may already have written leaves the destination reconciling
+rather than claiming rollback.
 Connection loss disables publication until the client reloads the server's
 current workflow.
 

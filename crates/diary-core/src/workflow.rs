@@ -36,6 +36,8 @@ pub const LEGAL_TRANSITIONS: &[(WorkflowState, WorkflowState)] = &[
     (WorkflowState::Partial, WorkflowState::Publishing),
     (WorkflowState::Partial, WorkflowState::OutputPlanned),
     (WorkflowState::Completed, WorkflowState::Composing),
+    (WorkflowState::Completed, WorkflowState::OutputPlanned),
+    (WorkflowState::Completed, WorkflowState::Publishing),
 ];
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -173,6 +175,24 @@ impl Workflow {
     }
 
     pub fn restore(record: PersistedWorkflow) -> Result<Self, WorkflowError> {
+        let mut record = record;
+        // P1-M22 migration: before remotes stopped gating completion, a day
+        // whose local file was verified but whose iCloud or Notion row was not
+        // stayed `Partial`. Such a day is now `Completed`; its remote rows keep
+        // their statuses and are not deleted.
+        if record.state == WorkflowState::Partial
+            && record.amendment.is_none()
+            && record.all_verified_at.is_none()
+            && record.output_plan.as_ref().is_some_and(|plan| {
+                plan.targets
+                    .iter()
+                    .any(|target| target.kind == DestinationKind::Local)
+                    && ensure_every_local_verified(plan, &record.destination_progress).is_ok()
+            })
+        {
+            record.state = WorkflowState::Completed;
+            record.all_verified_at = Some(record.updated_at);
+        }
         let workflow = Self {
             day: record.day,
             state: record.state,

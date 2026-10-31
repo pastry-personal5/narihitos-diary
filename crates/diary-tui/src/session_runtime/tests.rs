@@ -327,7 +327,6 @@ fn composing_workflow() -> WorkflowDto {
         entry_confirmed: false,
         local_status: None,
         notion_status: None,
-        icloud_status: None,
         amendment: None,
         candidates: vec![
             diary_control_contract::SourceCandidateDto {
@@ -426,139 +425,8 @@ fn compose_and_review_show_both_conflict_versions_and_the_full_entry() {
     assert!(review_body.contains("save the Draft before confirming"));
 }
 
-#[test]
-fn preview_and_publish_show_exact_file_conflict_and_separate_statuses() {
-    let mut workflow = composing_workflow();
-    workflow.local_status = Some("conflict".to_owned());
-    workflow.notion_status = Some("blocked".to_owned());
-    let preview = LocalPreviewDto {
-        workflow: workflow.clone(),
-        target: "/tmp/entry.md".to_owned(),
-        payload: "---\ndate: \"2026-10-29\"\n---\n\nplanned".to_owned(),
-        payload_digest: "digest".to_owned(),
-        plan_digest: "plan".to_owned(),
-        existing_text: Some("existing content".to_owned()),
-        intended_changes: Vec::new(),
-        local_status: "conflict".to_owned(),
-        notion_status: "blocked".to_owned(),
-        icloud_target: None,
-        icloud_status: None,
-        existing_mode: None,
-    };
-    let focus = FocusModel {
-        zone: FocusZone::Main,
-        main_control_index: 2,
-        ..FocusModel::default()
-    };
-    let body = preview_screen_body(&focus, Some(&preview), None);
-    assert!(body.contains("planned"));
-    assert!(body.contains("existing content"));
-    assert!(body.contains("> Save conflict under another day"));
-    assert!(
-        publish_screen_body(&focus, Some(&workflow), &ReadinessView::NotChecked)
-            .contains("Local publication: conflict\nNotion: blocked")
-    );
-}
-
-#[test]
-fn notion_preview_shows_where_the_day_goes_on_the_month_page() {
-    let notion = |placement: &str| NotionPreviewDto {
-        workflow: composing_workflow(),
-        path: vec!["Notion root".into(), "2026".into(), "2026-10".into()],
-        year_exists: true,
-        month_exists: true,
-        placement: placement.to_owned(),
-        renderer_version: 1,
-        api_version: "2026-03-11".into(),
-        payload_digest: "digest".into(),
-        plan_digest: Some("plan".into()),
-        blocks: Vec::new(),
-        current_blocks: Vec::new(),
-        existing_mode: None,
-        status: "pending".into(),
-        reason: None,
-    };
-    let focus = FocusModel::default();
-    let body = preview_screen_body(&focus, None, Some(&notion("after 2026-10-28")));
-    assert!(body.contains("Position: after 2026-10-28\n"));
-    // A server that predates ordering sends no placement: show the old behavior.
-    let legacy = preview_screen_body(&focus, None, Some(&notion("")));
-    assert!(legacy.contains("Position: end\n"));
-}
-
-#[test]
-fn verified_mirror_collapses_into_local_row_note() {
-    let mut workflow = workflow_dto_for_publish_tests();
-    workflow.local_status = Some("verified".to_owned());
-    workflow.icloud_status = Some("verified".to_owned());
-    let body = publish_screen_body(
-        &FocusModel::default(),
-        Some(&workflow),
-        &ReadinessView::NotChecked,
-    );
-    assert!(body.contains("Local publication: verified (also saved to iCloud)"));
-    assert!(!body.contains("iCloud mirror:"));
-}
-
-#[test]
-fn pending_blocked_or_conflict_mirror_shows_own_row() {
-    for status in ["pending", "blocked", "conflict"] {
-        let mut workflow = workflow_dto_for_publish_tests();
-        workflow.local_status = Some("verified".to_owned());
-        workflow.icloud_status = Some(status.to_owned());
-        let body = publish_screen_body(
-            &FocusModel::default(),
-            Some(&workflow),
-            &ReadinessView::NotChecked,
-        );
-        assert!(body.contains(&format!("iCloud mirror: {status}\n")));
-        assert!(!body.contains("also saved to iCloud"));
-    }
-}
-
-#[test]
-fn no_mirror_configured_adds_no_publish_row() {
-    let workflow = workflow_dto_for_publish_tests();
-    let body = publish_screen_body(
-        &FocusModel::default(),
-        Some(&workflow),
-        &ReadinessView::NotChecked,
-    );
-    assert!(!body.contains("iCloud mirror"));
-    assert!(!body.contains("also saved to iCloud"));
-}
-
-#[test]
-fn publish_offers_a_manual_readiness_check_as_its_last_control() {
-    let workflow = workflow_dto_for_publish_tests();
-    let body = publish_screen_body(
-        &FocusModel::default(),
-        Some(&workflow),
-        &ReadinessView::NotChecked,
-    );
-    assert!(body.contains("Notion  Not checked"));
-    assert!(body.contains("iCloud  Not checked"));
-    let focus = FocusModel {
-        zone: FocusZone::Main,
-        main_control_index: 2,
-        ..FocusModel::default()
-    };
-    let body = publish_screen_body(&focus, Some(&workflow), &ReadinessView::Checking);
-    assert!(body.contains("> Check Notion and iCloud readiness"));
-    assert!(body.contains("Notion  Checking..."));
-    assert!(body.contains("  Publish approved destination"));
-    assert!(body.contains("  Cancel pending publication"));
-}
-
-fn workflow_dto_for_publish_tests() -> WorkflowDto {
-    let mut workflow = composing_workflow();
-    workflow.local_status = None;
-    workflow.notion_status = None;
-    workflow.icloud_status = None;
-    workflow
-}
-
-fn preview_with(local: &str, icloud: Option<&str>, mode: Option<&str>) -> LocalPreviewDto {
+/// A preview of a file that already holds `existing content`.
+fn local_preview_with(local: &str, mode: Option<&str>) -> LocalPreviewDto {
     LocalPreviewDto {
         workflow: composing_workflow(),
         target: "/tmp/entry.md".to_owned(),
@@ -568,95 +436,100 @@ fn preview_with(local: &str, icloud: Option<&str>, mode: Option<&str>) -> LocalP
         existing_text: Some("existing content".to_owned()),
         intended_changes: Vec::new(),
         local_status: local.to_owned(),
-        notion_status: "blocked".to_owned(),
-        icloud_target: None,
-        icloud_status: icloud.map(str::to_owned),
         existing_mode: mode.map(str::to_owned),
     }
 }
 
 #[test]
-fn append_and_overwrite_are_offered_only_for_an_existing_entry() {
-    use crate::existing_entry_view::{mode_for, offered};
-    assert!(!offered(false, None, None));
-    assert!(!offered(
-        false,
-        Some(&preview_with("pending", None, None)),
-        None
-    ));
-    assert!(offered(
-        false,
-        Some(&preview_with("conflict", None, None)),
-        None
-    ));
-    assert!(offered(
-        false,
-        Some(&preview_with("pending", Some("conflict"), None)),
-        None
-    ));
-    assert!(offered(
-        false,
-        Some(&preview_with("pending", None, Some("append"))),
-        None
-    ));
-    // Once the local file is verified the Notion phase owns the screen.
-    let local = preview_with("conflict", None, None);
-    assert!(!offered(true, Some(&local), None));
-    let notion = |status: &str, reason: Option<&str>, mode: Option<&str>| NotionPreviewDto {
-        workflow: composing_workflow(),
-        path: vec!["Notion root".into(), "2026".into(), "2026-10".into()],
-        year_exists: true,
-        month_exists: true,
-        placement: "end".into(),
-        renderer_version: 1,
-        api_version: "2026-03-11".into(),
-        payload_digest: "digest".into(),
-        plan_digest: None,
-        blocks: Vec::new(),
-        current_blocks: Vec::new(),
-        existing_mode: mode.map(str::to_owned),
-        status: status.into(),
-        reason: reason.map(str::to_owned),
+fn preview_shows_only_the_local_file_and_never_mentions_a_remote() {
+    let mut workflow = composing_workflow();
+    workflow.local_status = Some("conflict".to_owned());
+    let mut preview = local_preview_with("conflict", None);
+    preview.workflow = workflow.clone();
+    preview.payload = "---\ndate: \"2026-10-29\"\n---\n\nplanned".to_owned();
+    let focus = FocusModel {
+        zone: FocusZone::Main,
+        main_control_index: 1,
+        ..FocusModel::default()
     };
-    assert!(offered(
-        true,
-        None,
-        Some(&notion("conflict", Some("notion-same-day-conflict"), None))
-    ));
-    assert!(!offered(
-        true,
-        None,
-        Some(&notion("conflict", Some("notion-section-not-owned"), None))
-    ));
-    assert!(!offered(true, None, Some(&notion("pending", None, None))));
-    assert!(offered(
-        true,
-        None,
-        Some(&notion("pending", None, Some("append")))
-    ));
-    assert_eq!(mode_for(3), Some("append"));
-    assert_eq!(mode_for(4), Some("overwrite"));
-    assert_eq!(mode_for(2), None);
+    let body = preview_screen_body(&focus, Some(&preview));
+    assert!(body.contains("planned"));
+    assert!(body.contains("existing content"));
+    assert!(body.contains("> Approve exact plan"));
+    let lowered = body.to_lowercase();
+    assert!(!lowered.contains("conflict"));
+    assert!(!lowered.contains("icloud"));
+    assert!(!lowered.contains("notion"));
+}
+
+#[test]
+fn publish_local_shows_the_local_save_and_points_to_the_remote_stage() {
+    let mut workflow = workflow_dto_for_publish_tests();
+    workflow.state = "completed".to_owned();
+    workflow.local_status = Some("verified".to_owned());
+    let body = publish_screen_body(&FocusModel::default(), Some(&workflow));
+    assert!(body.contains("Local publication: verified"));
+    assert!(body.contains("Go to Publish Remote"));
+    assert!(!body.contains("Notion:"));
+    assert!(!body.contains("readiness"));
+    let focus = FocusModel {
+        zone: FocusZone::Main,
+        main_control_index: 1,
+        ..FocusModel::default()
+    };
+    let pending = workflow_dto_for_publish_tests();
+    let body = publish_screen_body(&focus, Some(&pending));
+    assert!(body.contains("  Publish approved local file"));
+    assert!(body.contains("> Cancel pending publication"));
+}
+
+fn workflow_dto_for_publish_tests() -> WorkflowDto {
+    let mut workflow = composing_workflow();
+    workflow.local_status = None;
+    workflow.notion_status = None;
+    workflow
+}
+
+fn fresh_local_preview() -> LocalPreviewDto {
+    let mut preview = local_preview_with("pending", None);
+    preview.existing_text = None;
+    preview
+}
+
+#[test]
+fn append_and_overwrite_are_offered_only_for_an_existing_local_entry() {
+    use crate::existing_entry_view::{mode_for, offered};
+    assert!(!offered(None));
+    assert!(!offered(Some(&fresh_local_preview())));
+    // The preview already defaults to Append; the choice is to switch.
+    assert!(offered(Some(&local_preview_with(
+        "pending",
+        Some("append")
+    ))));
+    assert!(offered(Some(&local_preview_with("pending", None))));
+    assert_eq!(mode_for(2), Some("append"));
+    assert_eq!(mode_for(3), Some("overwrite"));
+    assert_eq!(mode_for(1), None);
 }
 
 #[test]
 fn preview_lists_the_commands_and_the_chosen_mode_only_when_an_entry_exists() {
     let focus = FocusModel {
         zone: FocusZone::Main,
-        main_control_index: 3,
+        main_control_index: 2,
         ..FocusModel::default()
     };
-    let conflict = preview_with("conflict", None, None);
-    let body = preview_screen_body(&focus, Some(&conflict), None);
+    let existing = local_preview_with("pending", Some("append"));
+    let body = preview_screen_body(&focus, Some(&existing));
     assert!(body.contains("> Append to the existing entry"));
     assert!(body.contains("  Overwrite the existing entry"));
-    let plain = preview_screen_body(&focus, Some(&preview_with("pending", None, None)), None);
+    assert!(body.contains("kept; the entry is added below it"));
+    let plain = preview_screen_body(&focus, Some(&fresh_local_preview()));
     assert!(!plain.contains("Append to the existing entry"));
     let chosen = preview_screen_body(
         &focus,
-        Some(&preview_with("pending", None, Some("overwrite"))),
-        None,
+        Some(&local_preview_with("pending", Some("overwrite"))),
     );
     assert!(chosen.contains("Mode: Overwrite"));
-    assert!(chosen.contains("Existing target (will be replaced)"));
+    assert!(chosen.contains("Existing file (will be replaced)"));
 }

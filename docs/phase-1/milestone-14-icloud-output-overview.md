@@ -1,6 +1,6 @@
 # P1-M14: iCloud output overview
 
-Status: Done
+Status: Done (superseded in part by [P1-M22](milestone-22-remote-publication-stages-overview.md): iCloud is no longer an automatic mirror and is pushed on request)
 
 This milestone mirrors each published diary entry to a configured iCloud Drive
 folder as a byte-identical Markdown file, automatically and quietly, without

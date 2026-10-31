@@ -348,6 +348,18 @@ Plan: [overview](milestone-21-append-overwrite-existing-entry-overview.md).
 Notes: Owner-approved 2026-10-30; narrows "never overwrite" to "never overwrite
 without an explicit, confirmed choice"; raises the contract to version 8.
 
+### P1-M22: Remote publication stages
+
+Status: In progress
+
+Goal: Make Preview local-only, add Publish to Local, and add a Publish to
+Remote stage that pushes to iCloud and Notion on request.
+
+Plan: [overview](milestone-22-remote-publication-stages-overview.md).
+
+Notes: Owner-requested 2026-10-31; the iCloud copy is no longer an automatic
+mirror; raises the contract to version 9.
+
 ### P1-M13: Release qualification
 
 Status: Planned

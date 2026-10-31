@@ -5,9 +5,9 @@ use std::env;
 use std::time::{Duration, Instant};
 
 use diary_control_contract::{
-    CapabilitiesDto, JOB_NOT_FOUND, LocalPreviewDto, NotionPreviewDto, PreferencesDto,
-    PublishReadinessDto, ResolveParagraphSuggestionRequest, SetupCheckDto, SourceDetailDto,
-    StartParagraphReviewRequest, WorkflowDto, buffer_etag, job_status,
+    CapabilitiesDto, JOB_NOT_FOUND, LocalPreviewDto, PreferencesDto, RemoteDto, RemotePreviewDto,
+    ResolveParagraphSuggestionRequest, SetupCheckDto, SourceDetailDto, StartParagraphReviewRequest,
+    WorkflowDto, buffer_etag, job_status,
 };
 
 use crate::amendment_view;
@@ -22,7 +22,8 @@ use crate::help_overlay::{HelpOverlayWidget, overlay_area};
 use crate::ime::{ImeState, ImeTracker, MacInputLanguageNotifications, MacInputLanguageQuery};
 use crate::layout::{OverlayClearWidget, adaptive_areas};
 use crate::main_pane::MainPaneWidget;
-use crate::readiness_view::{ReadinessView, needs_notion_approval};
+use crate::readiness_view::{CheckedReadiness, ReadinessView};
+use crate::remote_view::{RemoteControl, remote_screen_body};
 use crate::resources::{ResourceRow, ResourcesSidebarModel, ResourcesSidebarWidget};
 use crate::review_view::{ReviewViewModel, can_confirm, first_unresolved_delimiter};
 use crate::screen_body::*;
@@ -107,16 +108,22 @@ pub fn run_connected_session(
     let mut session_style: Option<String> = None;
     let mut current_workflow: Option<WorkflowDto> = None;
     let mut local_preview: Option<LocalPreviewDto> = None;
-    let mut notion_preview: Option<NotionPreviewDto> = None;
-    // Publish readiness is asked for, never automatic; the answer belongs to
-    // one workflow revision and shows as not checked once that moves on.
-    let mut readiness_checked: Option<(String, PublishReadinessDto)> = None;
+    // Remotes of a completed day. Looking at one is automatic and read-only;
+    // readiness is asked for, never automatic, and its answer belongs to one
+    // remote of one workflow revision.
+    let mut remotes: Vec<RemoteDto> = Vec::new();
+    let mut remote_preview: Option<RemotePreviewDto> = None;
+    // What the Publish Remote stage already asked the server about.
+    let mut remote_requested: Option<(String, String)> = None;
+    let mut remotes_listed_for: Option<String> = None;
+    let mut remote_loading = false;
+    let mut remote_push_pending = false;
+    let mut remote_overwrite_confirmation = false;
+    let mut readiness_checked: Option<CheckedReadiness> = None;
     let mut readiness_pending = false;
     let mut amendment_preview: Option<diary_control_contract::AmendmentPreviewDto> = None;
     let mut local_action_pending = false;
     let mut local_publication_job: Option<String> = None;
-    let mut conflict_day_editing = false;
-    let mut conflict_day_draft = String::new();
     let mut current_stage = Stage::Start;
     let mut focus = FocusModel::default();
     let mut start_pending = false;
@@ -277,7 +284,9 @@ pub fn run_connected_session(
                             session_style = Some(workflow.style.clone());
                             selected_day = Some(workflow.diary_day.clone());
                             local_preview = None;
-                            notion_preview = None;
+                            remote_preview = None;
+                            remote_requested = None;
+                            remotes.clear();
                             let model = map_workflow(Some(&workflow), false);
                             current_stage = model.default_current;
                             sources_view.load_candidates_from(&workflow);
@@ -388,8 +397,45 @@ pub fn run_connected_session(
                                     workflow_id: workflow.id.clone(),
                                 });
                             }
-                            feedback =
-                                Some("Local publication finished; reloading status".to_owned());
+                            if remote_push_pending {
+                                // Look at the remote again either way, so what
+                                // is shown is what is there now.
+                                remote_push_pending = false;
+                                remote_loading = false;
+                                remote_requested = None;
+                                remotes_listed_for = None;
+                                feedback = Some(match &outcome {
+                                    ClientOutcome::Ok(job)
+                                        if job.status == job_status::COMPLETED =>
+                                    {
+                                        "Pushed".to_owned()
+                                    }
+                                    ClientOutcome::Ok(job)
+                                        if job.error_code.as_deref()
+                                            == Some("precondition-failed") =>
+                                    {
+                                        "The remote changed; showing what is there now".to_owned()
+                                    }
+                                    ClientOutcome::Ok(job) => format!(
+                                        "Push did not finish: {}",
+                                        job.error_code.as_deref().unwrap_or("unknown")
+                                    ),
+                                    _ => "Push status is unknown; showing what is there now"
+                                        .to_owned(),
+                                });
+                            } else {
+                                feedback = Some(match &outcome {
+                                    ClientOutcome::Ok(job)
+                                        if job.error_code.as_deref()
+                                            == Some("precondition-failed") =>
+                                    {
+                                        "The file changed after you approved. Open Preview to see it again."
+                                            .to_owned()
+                                    }
+                                    _ => "Local publication finished; reloading status"
+                                        .to_owned(),
+                                });
+                            }
                         }
                     }
                     if is_assistant {
@@ -858,8 +904,25 @@ pub fn run_connected_session(
                     match *outcome {
                         ClientOutcome::Ok(workflow) => {
                             current_workflow = Some(workflow);
-                            current_stage = Stage::Publish;
+                            current_stage = Stage::PublishLocal;
                             feedback = Some("Exact output plan approved".to_owned());
+                        }
+                        // The file changed since it was previewed: show it
+                        // again instead of leaving the approval stuck.
+                        ClientOutcome::Problem(problem)
+                            if problem.code == "precondition-failed"
+                                && current_workflow.is_some() =>
+                        {
+                            if let Some(workflow) = &current_workflow {
+                                local_action_pending = worker
+                                    .try_send(Intent::PreviewLocal {
+                                        workflow_id: workflow.id.clone(),
+                                        revision: workflow.revision,
+                                    })
+                                    .is_ok();
+                            }
+                            feedback =
+                                Some("The file changed; showing it again to approve".to_owned());
                         }
                         ClientOutcome::Problem(problem) => feedback = Some(problem.safe_label()),
                         ClientOutcome::Transport(error) => {
@@ -880,13 +943,59 @@ pub fn run_connected_session(
                         }
                     }
                 }
-                WorkerResult::ReadinessChecked(outcome) => {
+                WorkerResult::RemotesListed(outcome) => match *outcome {
+                    ClientOutcome::Ok(list) => {
+                        remotes = list.remotes;
+                        remotes_listed_for = current_workflow
+                            .as_ref()
+                            .map(|workflow| workflow.id.clone());
+                    }
+                    ClientOutcome::Problem(problem) => feedback = Some(problem.safe_label()),
+                    ClientOutcome::Transport(error) => {
+                        feedback = Some(error.safe_label().to_owned())
+                    }
+                },
+                WorkerResult::RemotePreviewed(outcome) => {
+                    remote_loading = false;
+                    match *outcome {
+                        ClientOutcome::Ok(preview) => {
+                            current_workflow = Some(preview.workflow.clone());
+                            if let Some(remote) =
+                                remotes.iter_mut().find(|remote| remote.id == preview.id)
+                            {
+                                remote.status = preview.status.clone();
+                                remote.reason = preview.reason.clone();
+                            }
+                            feedback = Some(match preview.status.as_str() {
+                                "exists" => format!(
+                                    "{} already holds an entry; choose Append or Overwrite",
+                                    preview.label
+                                ),
+                                "blocked" => {
+                                    format!("{} cannot be pushed to right now", preview.label)
+                                }
+                                "pushed" => format!("{} already has this entry", preview.label),
+                                _ => format!("{} plan ready; inspect it, then Push", preview.label),
+                            });
+                            remote_preview = Some(preview);
+                        }
+                        ClientOutcome::Problem(problem) => feedback = Some(problem.safe_label()),
+                        ClientOutcome::Transport(error) => {
+                            feedback = Some(error.safe_label().to_owned())
+                        }
+                    }
+                }
+                WorkerResult::RemoteChecked(outcome) => {
                     readiness_pending = false;
                     match *outcome {
                         ClientOutcome::Ok(report) => {
-                            readiness_checked = current_workflow
-                                .as_ref()
-                                .map(|workflow| (workflow.id.clone(), report));
+                            readiness_checked = current_workflow.as_ref().map(|workflow| {
+                                (
+                                    workflow.id.clone(),
+                                    report.readiness.destination.clone(),
+                                    report,
+                                )
+                            });
                             feedback = Some("Readiness checked".to_owned());
                         }
                         ClientOutcome::Problem(problem) => feedback = Some(problem.safe_label()),
@@ -895,49 +1004,22 @@ pub fn run_connected_session(
                         }
                     }
                 }
-                WorkerResult::NotionPreviewed(outcome) => {
-                    local_action_pending = false;
-                    match *outcome {
-                        ClientOutcome::Ok(preview) => {
-                            current_workflow = Some(preview.workflow.clone());
-                            let ready = preview.status == "pending";
-                            notion_preview = Some(preview);
-                            feedback = Some(if ready {
-                                "Notion plan ready; inspect every projected block before approval"
-                                    .to_owned()
-                            } else {
-                                "Notion preflight is blocked or conflicted".to_owned()
-                            });
-                        }
-                        ClientOutcome::Problem(problem) => feedback = Some(problem.safe_label()),
-                        ClientOutcome::Transport(error) => {
-                            feedback = Some(error.safe_label().to_owned())
-                        }
-                    }
-                }
-                WorkerResult::NotionApproved(outcome) => {
-                    local_action_pending = false;
-                    match *outcome {
-                        ClientOutcome::Ok(workflow) => {
-                            current_workflow = Some(workflow);
-                            current_stage = Stage::Publish;
-                            feedback = Some("Exact Notion block plan approved".to_owned());
-                        }
-                        ClientOutcome::Problem(problem) => feedback = Some(problem.safe_label()),
-                        ClientOutcome::Transport(error) => {
-                            feedback = Some(error.safe_label().to_owned())
-                        }
-                    }
-                }
-                WorkerResult::NotionPublished(outcome) => {
-                    local_action_pending = false;
+                WorkerResult::RemotePushed(outcome) => {
                     match outcome {
                         ClientOutcome::Ok(job) => {
                             local_publication_job = Some(job.job_id);
-                            feedback = Some("Notion publication started".to_owned());
+                            remote_push_pending = true;
+                            feedback = Some("Push started".to_owned());
                         }
-                        ClientOutcome::Problem(problem) => feedback = Some(problem.safe_label()),
+                        ClientOutcome::Problem(problem) => {
+                            remote_loading = false;
+                            // A remote that changed since the preview shows its
+                            // current content again instead of stalling.
+                            remote_requested = None;
+                            feedback = Some(problem.safe_label());
+                        }
                         ClientOutcome::Transport(error) => {
+                            remote_loading = false;
                             feedback = Some(error.safe_label().to_owned())
                         }
                     }
@@ -958,7 +1040,6 @@ pub fn run_connected_session(
                             current_workflow = Some(workflow);
                             amendment_preview = None;
                             local_preview = None;
-                            notion_preview = None;
                         }
                         ClientOutcome::Problem(problem) => feedback = Some(problem.safe_label()),
                         ClientOutcome::Transport(error) => {
@@ -985,7 +1066,7 @@ pub fn run_connected_session(
                     local_action_pending = false;
                     match *outcome {
                         ClientOutcome::Ok(workflow) => {
-                            current_stage = Stage::Publish;
+                            current_stage = Stage::PublishLocal;
                             feedback = amendment_view::status_text(&workflow).map(str::to_owned);
                             current_workflow = Some(workflow);
                         }
@@ -995,8 +1076,7 @@ pub fn run_connected_session(
                         }
                     }
                 }
-                WorkerResult::AmendmentPublished(outcome)
-                | WorkerResult::AmendmentNotionRetried(outcome) => {
+                WorkerResult::AmendmentPublished(outcome) => {
                     local_action_pending = false;
                     match outcome {
                         ClientOutcome::Ok(job) => {
@@ -1013,34 +1093,11 @@ pub fn run_connected_session(
                     local_action_pending = false;
                     match *outcome {
                         ClientOutcome::Ok(workflow) => {
-                            current_stage = Stage::Publish;
+                            current_stage = Stage::PublishLocal;
                             current_workflow = Some(workflow);
                             amendment_preview = None;
                             feedback = Some(
                                 "Amendment abandoned; files and receipts are unchanged".to_owned(),
-                            );
-                        }
-                        ClientOutcome::Problem(problem) => feedback = Some(problem.safe_label()),
-                        ClientOutcome::Transport(error) => {
-                            feedback = Some(error.safe_label().to_owned())
-                        }
-                    }
-                }
-                WorkerResult::SavedUnderDay(outcome) => {
-                    local_action_pending = false;
-                    match *outcome {
-                        ClientOutcome::Ok(workflow) => {
-                            selected_day = Some(workflow.diary_day.clone());
-                            current_stage = map_workflow(Some(&workflow), false).default_current;
-                            sources_view.load_candidates_from(&workflow);
-                            compose_view.load_from_canonical(&workflow);
-                            draft_editor = DraftEditor::new(&compose_view.text);
-                            current_workflow = Some(workflow);
-                            local_preview = None;
-                            notion_preview = None;
-                            feedback = Some(
-                                "Target day opened; review and confirm its entry before output"
-                                    .to_owned(),
                             );
                         }
                         ClientOutcome::Problem(problem) => feedback = Some(problem.safe_label()),
@@ -1309,13 +1366,54 @@ pub fn run_connected_session(
                 .map(str::to_owned),
             ),
         };
+        if current_stage == Stage::PublishRemote
+            && !remote_loading
+            && !remote_push_pending
+            && local_publication_job.is_none()
+            && let Some(workflow) = &current_workflow
+            && workflow.state == "completed"
+        {
+            if remotes_listed_for.as_deref() != Some(workflow.id.as_str()) {
+                if worker
+                    .try_send(Intent::ListRemotes {
+                        workflow_id: workflow.id.clone(),
+                    })
+                    .is_ok()
+                {
+                    remotes_listed_for = Some(workflow.id.clone());
+                }
+            } else if let Some(remote) = remotes.get(focus.resource_index) {
+                let key = (workflow.id.clone(), remote.id.clone());
+                if remote_requested.as_ref() != Some(&key)
+                    && worker
+                        .try_send(Intent::PreviewRemote {
+                            workflow_id: workflow.id.clone(),
+                            revision: workflow.revision,
+                            remote: remote.id.clone(),
+                            existing_mode: None,
+                        })
+                        .is_ok()
+                {
+                    remote_requested = Some(key);
+                    remote_loading = true;
+                }
+            }
+        }
+        let selected_remote: Option<&RemoteDto> = remotes.get(focus.resource_index);
+        let shown_remote_preview = remote_preview.as_ref().filter(|preview| {
+            selected_remote.is_some_and(|remote| remote.id == preview.id)
+                && current_workflow
+                    .as_ref()
+                    .is_some_and(|workflow| workflow.id == preview.workflow.id)
+        });
         let visible_resource_count = match current_stage {
             Stage::Start => start_view.workflows.len(),
             Stage::Sources => sources_view.visible_len(),
             Stage::Compose => compose_resources.rows.len(),
             Stage::Review => 1,
             Stage::Preview => 1,
-            Stage::Publish => 2,
+            Stage::PublishLocal => 1,
+            Stage::PublishRemote => remotes.len().max(1),
         };
         let visible_control_count = match current_stage {
             Stage::Sources => sources_menu_items.len(),
@@ -1329,17 +1427,14 @@ pub fn run_connected_session(
                 4
             }
             Stage::Preview => {
-                3 + if existing_entry_offered(
-                    current_workflow.as_ref(),
-                    local_preview.as_ref(),
-                    notion_preview.as_ref(),
-                ) {
+                2 + if existing_entry_offered(local_preview.as_ref()) {
                     crate::existing_entry_view::EXTRA_CONTROLS
                 } else {
                     0
                 }
             }
-            Stage::Publish => 3,
+            Stage::PublishLocal => 2,
+            Stage::PublishRemote => crate::remote_view::controls(shown_remote_preview).len(),
             _ => START_CONTROL_COUNT,
         };
         focus.clamp(
@@ -1382,8 +1477,6 @@ pub fn run_connected_session(
             DEFAULT_NOTICE.to_owned()
         } else if day_editing {
             format!("Day: {day_draft}")
-        } else if conflict_day_editing {
-            format!("New diary day: {conflict_day_draft} (Enter confirms; Esc cancels)")
         } else if source_date_editing {
             format!("Extra source date: {source_date_draft}")
         } else if empty_selection_confirmation {
@@ -1397,6 +1490,8 @@ pub fn run_connected_session(
                     detail.source_note_name.as_str()
                 });
             format!("Delete {name} and linked audio? Enter confirms; Esc cancels")
+        } else if remote_overwrite_confirmation {
+            "Overwrite what the remote holds? Enter confirms; Esc cancels".to_owned()
         } else if overwrite_confirmation {
             "Overwrite the existing entry? A backup is kept first. Enter confirms; Esc cancels"
                 .to_owned()
@@ -1448,27 +1543,38 @@ pub fn run_connected_session(
                     indent: 0,
                 }],
             },
-            Stage::Publish => ResourcesSidebarModel {
-                rows: vec![
-                    ResourceRow {
-                        label: "Local file".to_owned(),
-                        state: current_workflow
-                            .as_ref()
-                            .and_then(|w| w.local_status.as_deref())
-                            .unwrap_or("pending")
-                            .to_owned(),
+            Stage::PublishLocal => ResourcesSidebarModel {
+                rows: vec![ResourceRow {
+                    label: "Local file".to_owned(),
+                    state: match current_workflow
+                        .as_ref()
+                        .and_then(|w| w.local_status.as_deref())
+                        .unwrap_or("pending")
+                    {
+                        "conflict" => "file changed",
+                        other => other,
+                    }
+                    .to_owned(),
+                    indent: 0,
+                }],
+            },
+            Stage::PublishRemote => ResourcesSidebarModel {
+                rows: if remotes.is_empty() {
+                    vec![ResourceRow {
+                        label: "Remotes".to_owned(),
+                        state: "none yet".to_owned(),
                         indent: 0,
-                    },
-                    ResourceRow {
-                        label: "Notion".to_owned(),
-                        state: current_workflow
-                            .as_ref()
-                            .and_then(|w| w.notion_status.as_deref())
-                            .unwrap_or("blocked")
-                            .to_owned(),
-                        indent: 0,
-                    },
-                ],
+                    }]
+                } else {
+                    remotes
+                        .iter()
+                        .map(|remote| ResourceRow {
+                            label: remote.label.clone(),
+                            state: crate::remote_view::status_label(&remote.status).to_owned(),
+                            indent: 0,
+                        })
+                        .collect()
+                },
             },
         };
         let main_body = match current_stage {
@@ -1529,17 +1635,23 @@ pub fn run_connected_session(
                     amendment_preview.as_ref(),
                 )
             }
-            Stage::Preview => {
-                preview_screen_body(&focus, local_preview.as_ref(), notion_preview.as_ref())
-            }
-            Stage::Publish => publish_screen_body(
+            Stage::Preview => preview_screen_body(&focus, local_preview.as_ref()),
+            Stage::PublishLocal => publish_screen_body(&focus, current_workflow.as_ref()),
+            Stage::PublishRemote => remote_screen_body(
                 &focus,
-                current_workflow.as_ref(),
+                current_workflow
+                    .as_ref()
+                    .is_some_and(|workflow| workflow.state == "completed"),
+                selected_remote,
+                shown_remote_preview,
                 &ReadinessView::resolve(
                     readiness_pending,
                     readiness_checked.as_ref(),
                     current_workflow.as_ref(),
+                    selected_remote.map_or("", |remote| remote.id.as_str()),
                 ),
+                remote_loading,
+                remote_overwrite_confirmation,
             ),
         };
         if current_stage != Stage::Sources {
@@ -1677,12 +1789,12 @@ pub fn run_connected_session(
             ime: status_line.ime,
             text_input_active: command_line_active
                 || day_editing
-                || conflict_day_editing
                 || source_date_editing
                 || source_editor_active
                 || editor_active,
             confirmation_active: empty_selection_confirmation
                 || overwrite_confirmation
+                || remote_overwrite_confirmation
                 || sources_view.pending_delete_confirmation.is_some()
                 || discard_confirmation.is_some()
                 || quit_confirmation,
@@ -1851,37 +1963,6 @@ pub fn run_connected_session(
                 | InputEvent::PageDown
                 | InputEvent::Delete => {}
             },
-            InputPoll::Event(event) if conflict_day_editing => match event {
-                InputEvent::Char(ch)
-                    if (ch.is_ascii_digit() || ch == '-') && conflict_day_draft.len() < 10 =>
-                {
-                    conflict_day_draft.push(ch)
-                }
-                InputEvent::Backspace => {
-                    conflict_day_draft.pop();
-                }
-                InputEvent::Enter => {
-                    if crate::command_line::is_valid_day(&conflict_day_draft) {
-                        if let Some(workflow) = &current_workflow {
-                            local_action_pending = worker
-                                .try_send(Intent::SaveUnderDay {
-                                    workflow_id: workflow.id.clone(),
-                                    revision: workflow.revision,
-                                    new_day: conflict_day_draft.clone(),
-                                })
-                                .is_ok();
-                        }
-                        conflict_day_editing = false;
-                    } else {
-                        feedback = Some("New day must be YYYY-MM-DD".to_owned());
-                    }
-                }
-                InputEvent::Esc => {
-                    conflict_day_editing = false;
-                    feedback = Some("Save under another day cancelled".to_owned());
-                }
-                _ => {}
-            },
             InputPoll::Event(event) if day_editing => match event {
                 InputEvent::Char(ch)
                     if (ch.is_ascii_digit() || ch == '-') && day_draft.len() < 10 =>
@@ -1973,6 +2054,32 @@ pub fn run_connected_session(
                         .try_send(existing_preview_intent(workflow, "overwrite"))
                         .is_ok();
                 }
+            }
+            InputPoll::Event(InputEvent::Enter) if remote_overwrite_confirmation => {
+                remote_overwrite_confirmation = false;
+                if can_mutate
+                    && !remote_loading
+                    && let (Some(workflow), Some(remote), Some(preview)) = (
+                        current_workflow.as_ref(),
+                        selected_remote,
+                        shown_remote_preview,
+                    )
+                    && let Some(digest) = preview.plan_digest.clone()
+                {
+                    remote_loading = worker
+                        .try_send(Intent::PushRemote {
+                            workflow_id: workflow.id.clone(),
+                            revision: workflow.revision,
+                            remote: remote.id.clone(),
+                            plan_digest: digest,
+                            existing_mode: preview.existing_mode.clone(),
+                        })
+                        .is_ok();
+                }
+            }
+            InputPoll::Event(InputEvent::Esc) if remote_overwrite_confirmation => {
+                remote_overwrite_confirmation = false;
+                feedback = Some("Overwrite cancelled".to_owned());
             }
             InputPoll::Event(InputEvent::Esc) if overwrite_confirmation => {
                 overwrite_confirmation = false;
@@ -2577,13 +2684,7 @@ pub fn run_connected_session(
                                     revision: workflow.revision,
                                     plan_digest: preview.plan_digest.clone(),
                                 }),
-                            2 if choices.contains(&amendment_view::ConflictChoice::Reread) => {
-                                Some(Intent::RereadAmendment {
-                                    workflow_id: workflow.id.clone(),
-                                    revision: workflow.revision,
-                                })
-                            }
-                            3 if choices
+                            2 if choices
                                 .contains(&amendment_view::ConflictChoice::AbandonAmendment) =>
                             {
                                 Some(Intent::AbandonAmendment {
@@ -2609,39 +2710,15 @@ pub fn run_connected_session(
                     {
                         match focus.main_control_index {
                             0 => {
-                                local_action_pending =
-                                    if workflow.local_status.as_deref() == Some("verified") {
-                                        worker
-                                            .try_send(Intent::PreviewNotion {
-                                                workflow_id: workflow.id.clone(),
-                                                revision: workflow.revision,
-                                            })
-                                            .is_ok()
-                                    } else {
-                                        worker
-                                            .try_send(Intent::PreviewLocal {
-                                                workflow_id: workflow.id.clone(),
-                                                revision: workflow.revision,
-                                            })
-                                            .is_ok()
-                                    };
+                                local_action_pending = worker
+                                    .try_send(Intent::PreviewLocal {
+                                        workflow_id: workflow.id.clone(),
+                                        revision: workflow.revision,
+                                    })
+                                    .is_ok();
                             }
                             1 if workflow.state == "output-planned" => {
-                                if workflow.local_status.as_deref() == Some("verified") {
-                                    if let Some(digest) = notion_preview
-                                        .as_ref()
-                                        .filter(|preview| preview.status == "pending")
-                                        .and_then(|preview| preview.plan_digest.clone())
-                                    {
-                                        local_action_pending = worker
-                                            .try_send(Intent::ApproveNotion {
-                                                workflow_id: workflow.id.clone(),
-                                                revision: workflow.revision,
-                                                plan_digest: digest,
-                                            })
-                                            .is_ok();
-                                    }
-                                } else if let Some(preview) = &local_preview {
+                                if let Some(preview) = &local_preview {
                                     local_action_pending = worker
                                         .try_send(Intent::ApproveLocal {
                                             workflow_id: workflow.id.clone(),
@@ -2651,22 +2728,7 @@ pub fn run_connected_session(
                                         .is_ok();
                                 }
                             }
-                            2 if workflow.local_status.as_deref() == Some("conflict")
-                                || local_preview
-                                    .as_ref()
-                                    .is_some_and(|preview| preview.local_status == "conflict") =>
-                            {
-                                conflict_day_draft.clear();
-                                conflict_day_editing = true;
-                                feedback = Some("Enter a different diary day".to_owned());
-                            }
-                            index @ (3 | 4)
-                                if existing_entry_offered(
-                                    current_workflow.as_ref(),
-                                    local_preview.as_ref(),
-                                    notion_preview.as_ref(),
-                                ) =>
-                            {
+                            index @ (2 | 3) if existing_entry_offered(local_preview.as_ref()) => {
                                 if crate::existing_entry_view::mode_for(index) == Some("append") {
                                     local_action_pending = worker
                                         .try_send(existing_preview_intent(workflow, "append"))
@@ -2686,22 +2748,82 @@ pub fn run_connected_session(
                         }
                     }
                 }
-                // Read-only, so it needs no mutation authority and never
-                // shares the busy flag with publication actions.
-                FocusZone::Main
-                    if current_stage == Stage::Publish && focus.main_control_index == 2 =>
-                {
-                    if !readiness_pending && let Some(workflow) = &current_workflow {
-                        readiness_pending = worker
-                            .try_send(Intent::CheckReadiness {
-                                workflow_id: workflow.id.clone(),
-                                revision: workflow.revision,
-                            })
-                            .is_ok();
+                FocusZone::Main if current_stage == Stage::PublishRemote => {
+                    let controls = crate::remote_view::controls(shown_remote_preview);
+                    let completed = current_workflow
+                        .as_ref()
+                        .is_some_and(|workflow| workflow.state == "completed");
+                    if let (Some(control), Some(remote), Some(workflow), true) = (
+                        controls.get(focus.main_control_index).copied(),
+                        selected_remote,
+                        current_workflow.as_ref(),
+                        completed,
+                    ) {
+                        let remote_id = remote.id.clone();
+                        let workflow_id = workflow.id.clone();
+                        let revision = workflow.revision;
+                        match control {
+                            RemoteControl::ShowPlan if !remote_loading => {
+                                remote_requested = None;
+                                remotes_listed_for = None;
+                            }
+                            RemoteControl::CheckReadiness if !readiness_pending => {
+                                readiness_pending = worker
+                                    .try_send(Intent::CheckRemote {
+                                        workflow_id,
+                                        revision,
+                                        remote: remote_id,
+                                    })
+                                    .is_ok();
+                            }
+                            RemoteControl::Append | RemoteControl::Overwrite
+                                if can_mutate && !remote_loading =>
+                            {
+                                let mode = if control == RemoteControl::Append {
+                                    "append"
+                                } else {
+                                    "overwrite"
+                                };
+                                remote_loading = worker
+                                    .try_send(Intent::PreviewRemote {
+                                        workflow_id,
+                                        revision,
+                                        remote: remote_id,
+                                        existing_mode: Some(mode.to_owned()),
+                                    })
+                                    .is_ok();
+                            }
+                            RemoteControl::Push if can_mutate && !remote_loading => {
+                                if shown_remote_preview.is_some_and(|p| {
+                                    p.existing_mode.as_deref() == Some("overwrite")
+                                }) {
+                                    remote_overwrite_confirmation = true;
+                                    feedback = Some(
+                                        "Overwrite replaces what is there; Enter again to confirm"
+                                            .to_owned(),
+                                    );
+                                } else if let Some(preview) = shown_remote_preview
+                                    && let Some(digest) = preview.plan_digest.clone()
+                                {
+                                    remote_loading = worker
+                                        .try_send(Intent::PushRemote {
+                                            workflow_id,
+                                            revision,
+                                            remote: remote_id,
+                                            plan_digest: digest,
+                                            existing_mode: preview.existing_mode.clone(),
+                                        })
+                                        .is_ok();
+                                }
+                            }
+                            _ => {}
+                        }
                     }
                 }
                 FocusZone::Main
-                    if current_stage == Stage::Publish && can_mutate && !local_action_pending =>
+                    if current_stage == Stage::PublishLocal
+                        && can_mutate
+                        && !local_action_pending =>
                 {
                     if focus.main_control_index == 1 {
                         if let Some(job_id) = &local_publication_job {
@@ -2725,14 +2847,6 @@ pub fn run_connected_session(
                                     workflow_id: workflow.id.clone(),
                                     revision: workflow.revision,
                                 }),
-                                "partial"
-                                    if workflow.local_status.as_deref() == Some("verified") =>
-                                {
-                                    Some(Intent::RetryAmendmentNotion {
-                                        workflow_id: workflow.id.clone(),
-                                        revision: workflow.revision,
-                                    })
-                                }
                                 "partial" => Some(Intent::PublishAmendment {
                                     workflow_id: workflow.id.clone(),
                                     revision: workflow.revision,
@@ -2748,28 +2862,13 @@ pub fn run_connected_session(
                                         Some("No approved replacement is pending".to_owned());
                                 }
                             }
-                        } else if needs_notion_approval(workflow) {
-                            feedback = Some(
-                                "Preview and approve the Notion plan in the Preview stage first"
-                                    .to_owned(),
-                            );
                         } else if workflow.state == "approved" || workflow.state == "partial" {
-                            local_action_pending =
-                                if workflow.local_status.as_deref() == Some("verified") {
-                                    worker
-                                        .try_send(Intent::PublishNotion {
-                                            workflow_id: workflow.id.clone(),
-                                            revision: workflow.revision,
-                                        })
-                                        .is_ok()
-                                } else {
-                                    worker
-                                        .try_send(Intent::PublishLocal {
-                                            workflow_id: workflow.id.clone(),
-                                            revision: workflow.revision,
-                                        })
-                                        .is_ok()
-                                };
+                            local_action_pending = worker
+                                .try_send(Intent::PublishLocal {
+                                    workflow_id: workflow.id.clone(),
+                                    revision: workflow.revision,
+                                })
+                                .is_ok();
                         } else {
                             feedback = Some("No approved local write is pending".to_owned());
                         }
@@ -2987,31 +3086,16 @@ pub fn run_connected_session(
 #[cfg(test)]
 mod tests;
 
-/// Whether Preview offers Append and Overwrite for the current workflow.
-fn existing_entry_offered(
-    workflow: Option<&WorkflowDto>,
-    preview: Option<&LocalPreviewDto>,
-    notion: Option<&NotionPreviewDto>,
-) -> bool {
-    let local_verified = workflow.is_some_and(|w| w.local_status.as_deref() == Some("verified"));
-    crate::existing_entry_view::offered(local_verified, preview, notion)
+/// Whether Preview offers Append and Overwrite for the local file.
+fn existing_entry_offered(preview: Option<&LocalPreviewDto>) -> bool {
+    crate::existing_entry_view::offered(preview)
 }
 
-/// The preview a chosen mode asks for: the local file and iCloud mirror
-/// until the local file is verified, then the Notion section.
+/// The local preview a chosen mode asks for.
 fn existing_preview_intent(workflow: &WorkflowDto, mode: &str) -> Intent {
-    let existing_mode = mode.to_owned();
-    if workflow.local_status.as_deref() == Some("verified") {
-        Intent::PreviewNotionExisting {
-            workflow_id: workflow.id.clone(),
-            revision: workflow.revision,
-            existing_mode,
-        }
-    } else {
-        Intent::PreviewExisting {
-            workflow_id: workflow.id.clone(),
-            revision: workflow.revision,
-            existing_mode,
-        }
+    Intent::PreviewExisting {
+        workflow_id: workflow.id.clone(),
+        revision: workflow.revision,
+        existing_mode: mode.to_owned(),
     }
 }

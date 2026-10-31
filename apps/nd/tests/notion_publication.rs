@@ -495,43 +495,35 @@ fn real_api_worker_runs_the_notion_only_flow_through_restart() {
     );
     let id = "wf_20261030".to_owned();
     worker
-        .try_send(Intent::PreviewNotion {
+        .try_send(Intent::PreviewRemote {
             workflow_id: id.clone(),
             revision: partial.revision(),
+            remote: "notion".to_owned(),
+            existing_mode: None,
         })
         .unwrap();
     let preview = match wait_result(&worker) {
-        WorkerResult::NotionPreviewed(outcome) => match *outcome {
+        WorkerResult::RemotePreviewed(outcome) => match *outcome {
             ClientOutcome::Ok(preview) => preview,
             _ => panic!("preview failed"),
         },
         _ => panic!("wrong worker result"),
     };
-    assert_eq!(preview.status, "pending");
-    assert_eq!(preview.path, ["Notion root", "2026", "2026-10"]);
+    assert_eq!(preview.status, "not-pushed");
+    assert_eq!(preview.target, ["Notion root", "2026", "2026-10"]);
     assert_eq!(preview.blocks[0].kind, "heading_2");
+    // Push is the approval: one request acts on exactly the previewed plan.
     worker
-        .try_send(Intent::ApproveNotion {
+        .try_send(Intent::PushRemote {
             workflow_id: id.clone(),
             revision: preview.workflow.revision,
+            remote: "notion".to_owned(),
             plan_digest: preview.plan_digest.clone().unwrap(),
-        })
-        .unwrap();
-    let approved = match wait_result(&worker) {
-        WorkerResult::NotionApproved(outcome) => match *outcome {
-            ClientOutcome::Ok(workflow) => workflow,
-            _ => panic!("approval failed"),
-        },
-        _ => panic!("wrong worker result"),
-    };
-    worker
-        .try_send(Intent::PublishNotion {
-            workflow_id: id.clone(),
-            revision: approved.revision,
+            existing_mode: None,
         })
         .unwrap();
     let job_id = match wait_result(&worker) {
-        WorkerResult::NotionPublished(ClientOutcome::Ok(job)) => job.job_id,
+        WorkerResult::RemotePushed(ClientOutcome::Ok(job)) => job.job_id,
         _ => panic!("job not accepted"),
     };
     let deadline = Instant::now() + Duration::from_secs(10);

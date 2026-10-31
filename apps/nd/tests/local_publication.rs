@@ -51,7 +51,7 @@ fn verified_local_receipt_gates_notion_preview_approval_and_publication() {
         )
         .unwrap();
     let partial = service.publish_local(&day, local.revision()).unwrap();
-    assert_eq!(partial.state().as_str(), "partial");
+    assert_eq!(partial.state().as_str(), "completed");
 
     let notion = service.preview_notion(&day, partial.revision()).unwrap();
     assert_eq!(notion.status.as_str(), "pending");
@@ -332,7 +332,7 @@ fn local_publication_requires_exact_approval_and_persists_receipt() {
 }
 
 #[test]
-fn restart_reconciles_write_after_lost_response_and_blocks_a_different_file() {
+fn restart_reconciles_write_after_lost_response_and_keeps_a_different_file() {
     let scratch = Scratch::new();
     let db = scratch.0.join("state.sqlite3");
     let store = Arc::new(SqliteStore::open(&db).unwrap());
@@ -406,38 +406,22 @@ fn restart_reconciles_write_after_lost_response_and_blocks_a_different_file() {
         conflict.existing_text.as_deref(),
         Some("other person's file")
     );
-    assert!(
-        restarted
-            .approve_local(
-                &other_day,
-                conflict.workflow.revision(),
-                &conflict.workflow.output_plan().unwrap().plan_digest
-            )
-            .is_err()
-    );
+    // Preview never stops at a conflict: the other file is kept and the entry
+    // is added below it, so the plan can be approved as it stands.
+    assert_eq!(conflict.mode, diary_control::ExistingEntryMode::Append);
+    assert!(conflict.payload.starts_with("other person's file"));
+    restarted
+        .approve_local(
+            &other_day,
+            conflict.workflow.revision(),
+            &conflict.workflow.output_plan().unwrap().plan_digest,
+        )
+        .unwrap();
     assert_eq!(
         fs::read_to_string(output.target(&other_day)).unwrap(),
-        "other person's file"
+        "other person's file",
+        "nothing is written before publication"
     );
-    let carried = restarted
-        .save_local_conflict_under_day(
-            &other_day,
-            conflict.workflow.revision(),
-            DiaryDay::parse("2026-11-01").unwrap(),
-        )
-        .unwrap();
-    assert_eq!(carried.entry().text, "Today was quiet.");
-    assert!(carried.entry().confirmed.is_none());
-    assert_eq!(carried.state().as_str(), "discovered");
-    assert!(carried.selection_digest().is_none());
-    let reopened_day = restarted
-        .save_local_conflict_under_day(
-            &other_day,
-            conflict.workflow.revision(),
-            DiaryDay::parse("2026-11-01").unwrap(),
-        )
-        .unwrap();
-    assert_eq!(reopened_day, carried);
 }
 
 #[test]
@@ -495,7 +479,6 @@ fn real_api_worker_previews_approves_and_publishes_local_file() {
         },
         _ => panic!("wrong worker result"),
     };
-    assert_eq!(preview.notion_status, "blocked");
     worker
         .try_send(Intent::ApproveLocal {
             workflow_id: id.clone(),
@@ -624,6 +607,11 @@ fn real_api_worker_previews_approves_and_publishes_local_file() {
         conflict.existing_text.as_deref(),
         Some("existing different text")
     );
+    // Preview never stops at a conflict: the existing file is kept and the
+    // entry is added below it, and the plan can be approved as it stands.
+    assert_eq!(conflict.existing_mode.as_deref(), Some("append"));
+    assert_eq!(conflict.local_status, "pending");
+    assert!(conflict.payload.starts_with("existing different text"));
     worker
         .try_send(Intent::ApproveLocal {
             workflow_id: "wf_20261031".to_owned(),
@@ -632,31 +620,13 @@ fn real_api_worker_previews_approves_and_publishes_local_file() {
         })
         .unwrap();
     assert!(
-        matches!(wait_result(&worker), WorkerResult::LocalApproved(outcome) if matches!(*outcome, ClientOutcome::Problem(_)))
+        matches!(wait_result(&worker), WorkerResult::LocalApproved(outcome) if matches!(*outcome, ClientOutcome::Ok(_)))
     );
     assert_eq!(
         fs::read_to_string(output.target(&conflict_day)).unwrap(),
-        "existing different text"
+        "existing different text",
+        "nothing is written before publication"
     );
-    worker
-        .try_send(Intent::SaveUnderDay {
-            workflow_id: "wf_20261031".to_owned(),
-            revision: conflict.workflow.revision,
-            new_day: "2026-11-01".to_owned(),
-        })
-        .unwrap();
-    match wait_result(&worker) {
-        WorkerResult::SavedUnderDay(outcome) => match *outcome {
-            ClientOutcome::Ok(workflow) => {
-                assert_eq!(workflow.diary_day, "2026-11-01");
-                assert_eq!(workflow.state, "discovered");
-                assert!(!workflow.entry_confirmed);
-                assert_eq!(workflow.entry_text, "Today was quiet.");
-            }
-            _ => panic!("save under another day failed"),
-        },
-        _ => panic!("wrong worker result"),
-    }
     drop(worker);
     runtime.block_on(async {
         server.abort();

@@ -478,6 +478,33 @@ fn overwrite_replaces_the_body_and_keeps_the_heading() {
 }
 
 #[test]
+fn a_section_this_app_wrote_is_recognised_until_it_is_edited() {
+    let fx = Fixture::new();
+    fx.notion.seed(&["heading", "theirs"]);
+    let local = fx.local_published();
+    // Someone else's section is never treated as ours.
+    assert!(!fx.service.notion_section_is_ours(&fx.day));
+    let preview = fx
+        .service
+        .preview_notion_with(&fx.day, local.revision(), ExistingEntryMode::Append)
+        .unwrap();
+    let digest = preview.plan_digest.clone().unwrap();
+    let approved = fx
+        .service
+        .approve_notion(&fx.day, preview.workflow.revision(), &digest)
+        .unwrap();
+    fx.service
+        .publish_notion(&fx.day, approved.revision())
+        .unwrap();
+    // After this app's own write the section is ours, so a later push updates
+    // it in place without asking.
+    assert!(fx.service.notion_section_is_ours(&fx.day));
+    // Anything added by hand makes it someone else's again.
+    fx.notion.edit("added by hand");
+    assert!(!fx.service.notion_section_is_ours(&fx.day));
+}
+
+#[test]
 fn a_section_edited_after_the_preview_voids_the_plan_for_both_modes() {
     for mode in [ExistingEntryMode::Append, ExistingEntryMode::Overwrite] {
         let fx = Fixture::new();

@@ -1,37 +1,21 @@
-//! When Preview offers Append and Overwrite for an entry that already exists.
+//! When Preview offers Append and Overwrite for a local file that already
+//! exists. Remotes offer the same choice in their own menu (`remote_view`).
 
-use diary_control_contract::{LocalPreviewDto, NotionPreviewDto};
+use diary_control_contract::LocalPreviewDto;
 
-/// Control indices after the three standing Preview controls.
-pub const APPEND_CONTROL: usize = 3;
-pub const OVERWRITE_CONTROL: usize = 4;
+/// Control indices after the two standing Preview controls.
+pub const APPEND_CONTROL: usize = 2;
+pub const OVERWRITE_CONTROL: usize = 3;
 /// Controls the commands add to Preview when they are offered.
 pub const EXTRA_CONTROLS: usize = 2;
 
-/// Append and Overwrite appear only while the preview of the current phase
-/// shows an entry that already exists, or after one was chosen so the person
-/// can switch. Before the local file is verified that is the local preview (a
-/// local or iCloud conflict); afterwards it is the Notion preview (a
-/// same-day section conflict).
+/// Append and Overwrite appear only while the preview shows a local file that
+/// already exists. The preview already defaults to Append, which keeps what is
+/// there, so this is a choice to switch, never a block.
 #[must_use]
-pub fn offered(
-    local_verified: bool,
-    preview: Option<&LocalPreviewDto>,
-    notion: Option<&NotionPreviewDto>,
-) -> bool {
-    if local_verified {
-        notion.is_some_and(|notion| {
-            (notion.status == "conflict"
-                && notion.reason.as_deref() == Some("notion-same-day-conflict"))
-                || notion.existing_mode.is_some()
-        })
-    } else {
-        preview.is_some_and(|preview| {
-            preview.local_status == "conflict"
-                || preview.icloud_status.as_deref() == Some("conflict")
-                || preview.existing_mode.is_some()
-        })
-    }
+pub fn offered(preview: Option<&LocalPreviewDto>) -> bool {
+    preview
+        .is_some_and(|preview| preview.existing_text.is_some() || preview.existing_mode.is_some())
 }
 
 /// The mode word the Control API takes.

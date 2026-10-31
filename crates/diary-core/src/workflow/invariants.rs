@@ -313,10 +313,9 @@ impl Workflow {
                     || (self.entry.confirmed.is_some()
                         && self.output_plan.is_some()
                         && self.all_verified_at.is_some()
-                        && self
-                            .destination_progress
-                            .iter()
-                            .all(|progress| progress.status == DestinationStatus::Verified))
+                        && self.output_plan.as_ref().is_some_and(|plan| {
+                            ensure_every_local_verified(plan, &self.destination_progress).is_ok()
+                        }))
             }
             WorkflowState::Partial => {
                 self.entry.confirmed.is_some()

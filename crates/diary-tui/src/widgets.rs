@@ -350,7 +350,7 @@ mod tests {
             "composition_path": backend_id.map(|_| "hosted"),
             "selection_digest": null, "explicit_empty_selection": false,
             "invalidation_code": null, "entry_text": "", "entry_confirmed": false,
-            "local_status": null, "notion_status": null, "icloud_status": null,
+            "local_status": null, "notion_status": null,
             "amendment": null, "candidates": []
         }))
         .expect("workflow fixture");

@@ -761,7 +761,7 @@ fn local_first_and_blocked_remote_retry_require_exact_new_approval() {
             time(25),
         )
         .unwrap();
-    assert_eq!(workflow.state(), WorkflowState::Partial);
+    assert_eq!(workflow.state(), WorkflowState::Completed);
     let retry_plan = workflow
         .preview_blocked_retry(
             workflow.revision(),
@@ -1038,13 +1038,13 @@ fn mirror_conflict_preview_still_allows_approval() {
 }
 
 #[test]
-fn mirror_conflict_leaves_local_verified_and_day_partial() {
+fn mirror_conflict_leaves_local_verified_and_day_completed() {
     let workflow = mirror_publishing(
         DestinationStatus::Verified,
         DestinationStatus::Conflict,
         DestinationStatus::Verified,
     );
-    assert_eq!(workflow.state(), WorkflowState::Partial);
+    assert_eq!(workflow.state(), WorkflowState::Completed);
     assert!(
         workflow.destination_progress().iter().any(|item| {
             item.destination == "local" && item.status == DestinationStatus::Verified
@@ -1063,7 +1063,7 @@ fn finish_mirror_retry_completes_when_all_verified() {
         .finish_mirror_retry(workflow.revision(), DestinationStatus::Verified, time(30))
         .unwrap();
     assert_eq!(workflow.state(), WorkflowState::Completed);
-    assert_eq!(workflow.all_verified_at(), Some(time(30)));
+    assert_eq!(workflow.all_verified_at(), Some(time(24)));
 
     let mut still_partial = mirror_publishing(
         DestinationStatus::Verified,
@@ -1077,7 +1077,7 @@ fn finish_mirror_retry_completes_when_all_verified() {
             time(30),
         )
         .unwrap();
-    assert_eq!(still_partial.state(), WorkflowState::Partial);
+    assert_eq!(still_partial.state(), WorkflowState::Completed);
 }
 
 #[test]
@@ -1240,70 +1240,6 @@ fn rebinding_keeps_text_and_requires_reconfirmation() {
         completed
             .rebind_amendment(completed.revision(), newer, time(14))
             .is_err()
-    );
-}
-
-#[test]
-fn an_amendment_notion_conflict_can_be_reread_into_a_pending_preview() {
-    let mut workflow = completed_workflow();
-    workflow
-        .seed_amendment(workflow.revision(), "Mine.".to_owned(), seed(), time(11))
-        .unwrap();
-    workflow
-        .confirm_entry(workflow.revision(), workflow.entry().version, time(12))
-        .unwrap();
-    let plan = OutputPlan::new(
-        "amend-plan",
-        workflow
-            .entry()
-            .confirmed
-            .as_ref()
-            .unwrap()
-            .entry_digest
-            .clone(),
-        workflow.selection_digest().unwrap().clone(),
-        vec![
-            target_kind("local", DestinationKind::Local),
-            target_kind("remote", DestinationKind::Remote),
-        ],
-        time(13),
-    )
-    .unwrap();
-    workflow
-        .preview_output(workflow.revision(), plan.clone(), time(14))
-        .unwrap();
-    workflow
-        .approve(workflow.revision(), &plan.plan_digest, time(15))
-        .unwrap();
-    workflow
-        .begin_publication(workflow.revision(), time(16))
-        .unwrap();
-    workflow
-        .finish_publication(
-            workflow.revision(),
-            progress_of(&[
-                ("local", DestinationStatus::Verified),
-                ("remote", DestinationStatus::Conflict),
-            ]),
-            time(17),
-        )
-        .unwrap();
-    assert_eq!(workflow.state(), WorkflowState::Partial);
-    let replacement = target_kind("remote", DestinationKind::Remote);
-    workflow
-        .preview_blocked_retry(
-            workflow.revision(),
-            "remote",
-            replacement,
-            "reread",
-            time(18),
-        )
-        .unwrap();
-    assert_eq!(workflow.state(), WorkflowState::OutputPlanned);
-    assert!(workflow.approval().is_none());
-    assert_eq!(
-        workflow.destination_progress()[1].status,
-        DestinationStatus::Pending
     );
 }
 

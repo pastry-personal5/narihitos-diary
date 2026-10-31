@@ -6,6 +6,22 @@ This changelog records owner decisions and material plan changes for Phase 1.
 
 ## Entries
 
+- 2026-10-31 — P1-M22 remote publication stages — The tail of the workflow is
+  now Preview (the local file only), Publish Local, and Publish Remote. A
+  verified local write completes the day (a day with a verified local file and
+  an unpublished remote used to be `Partial`; existing ones restore as
+  `Completed`, keeping every receipt). iCloud is no longer an automatic mirror:
+  it is a remote, listed with Notion in the Resources Sidebar, previewed,
+  readiness-checked, and pushed on request. A push is its own approval of the
+  exact plan shown. Content already at a remote is shown automatically and
+  resolved with Append or Overwrite, never a dead-end conflict; a Notion page
+  that cannot be changed safely shows a warning and a URL to fix it by hand.
+  Contract version 9 adds `GET /v1/workflows/{id}/remotes` and
+  `POST .../remotes/{name}/readiness|previews|pushes`, and removes the
+  Notion-only preview/approval/publication routes, the combined readiness route,
+  and the mirror fields of the local preview. The amendment routes (including
+  `amendments/notion-retries`) are unchanged: an amendment replaces the local
+  file and Notion's section as before and never writes iCloud. No schema change.
 - 2026-10-30 — P1-M13 Notion receipt collision fix — Notion reports the month
   page as its receipt ID, and receipt IDs are primary keys, so the second diary
   day published into the same month wrote to Notion but failed to save its

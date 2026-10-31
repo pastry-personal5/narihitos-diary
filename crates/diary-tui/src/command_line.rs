@@ -237,7 +237,8 @@ pub fn parse(normalized: &str) -> Result<Command, CommandLineError> {
                 "compose" => Stage::Compose,
                 "review" => Stage::Review,
                 "preview" => Stage::Preview,
-                "publish" => Stage::Publish,
+                "publish" | "publish-local" | "local" => Stage::PublishLocal,
+                "publish-remote" | "remote" => Stage::PublishRemote,
                 _ => return Err(CommandLineError::MalformedArgument),
             };
             Command::Stage(stage)

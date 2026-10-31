@@ -18,7 +18,7 @@ use diary_core::{
 use crate::lifecycle::random_id;
 
 mod amendment;
-pub use amendment::{AmendmentNotionPreview, AmendmentPreview, AmendmentSeeded, local_body};
+pub use amendment::{AmendmentPreview, AmendmentSeeded, local_body};
 
 /// An explicitly requested day is the Mac-local calendar day, while Ayumi
 /// files are dated in UTC. A note whose name carries no readable UTC time
@@ -39,8 +39,6 @@ pub struct LocalPreview {
     pub existing_text: Option<String>,
     pub intended_changes: Vec<String>,
     pub mode: ExistingEntryMode,
-    pub mirror_target: Option<String>,
-    pub mirror_status: Option<DestinationStatus>,
 }
 
 #[derive(Clone, Debug)]
@@ -126,6 +124,12 @@ impl CommandService {
     pub fn with_mirror_output(mut self, mirror_output: Arc<dyn LocalOutputPort>) -> Self {
         self.mirror_output = Some(mirror_output);
         self
+    }
+
+    /// Whether an iCloud folder is configured as a remote.
+    #[must_use]
+    pub fn icloud_configured(&self) -> bool {
+        self.mirror_output.is_some()
     }
 
     pub fn with_notion_output(mut self, notion_output: Arc<dyn NotionOutputPort>) -> Self {
@@ -236,7 +240,9 @@ mod local_publication;
 mod mirror_publication;
 mod notion_publication;
 mod readiness;
+mod remote_publication;
 pub use readiness::{DestinationReadiness, PublishReadiness, Readiness};
+pub use remote_publication::{RemoteStatus, RemoteSummary};
 mod reconciliation;
 mod sources;
 

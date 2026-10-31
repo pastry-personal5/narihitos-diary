@@ -36,11 +36,11 @@ mod dto;
 mod event_routes;
 mod jobs;
 mod publication_routes;
+mod remote_routes;
 mod source_routes;
 mod workflow_routes;
 use crate::diagnostics::{
-    AssistantSnapshot, DiagnosticEvent, DiagnosticLevel, DiagnosticLog, NOTION_PREVIEW_REASONS,
-    NOTION_PREVIEW_STATUSES, PublicationSnapshot,
+    AssistantSnapshot, DiagnosticEvent, DiagnosticLevel, DiagnosticLog, PublicationSnapshot,
 };
 use crate::lifecycle::random_id;
 use assistant_routes::*;
@@ -48,6 +48,7 @@ use dto::*;
 use event_routes::*;
 use jobs::*;
 use publication_routes::*;
+use remote_routes::*;
 use source_routes::*;
 use workflow_routes::*;
 
@@ -171,21 +172,18 @@ pub fn build_router(config: ServerConfig) -> ServerHandle {
             "/v1/workflows/{id}/local-publications",
             post(publish_local_output),
         )
+        .route("/v1/workflows/{id}/remotes", get(list_remotes))
         .route(
-            "/v1/workflows/{id}/readiness",
-            post(check_publish_readiness),
+            "/v1/workflows/{id}/remotes/{name}/readiness",
+            post(check_remote_readiness),
         )
         .route(
-            "/v1/workflows/{id}/notion-previews",
-            post(preview_notion_output),
+            "/v1/workflows/{id}/remotes/{name}/previews",
+            post(preview_remote),
         )
         .route(
-            "/v1/workflows/{id}/notion-approvals",
-            post(approve_notion_output),
-        )
-        .route(
-            "/v1/workflows/{id}/notion-publications",
-            post(publish_notion_output),
+            "/v1/workflows/{id}/remotes/{name}/pushes",
+            post(push_remote),
         )
         .route("/v1/workflows/{id}/amendments", post(seed_amendment))
         .route(
@@ -199,10 +197,6 @@ pub fn build_router(config: ServerConfig) -> ServerHandle {
         .route(
             "/v1/workflows/{id}/amendments/publications",
             post(publish_amendment),
-        )
-        .route(
-            "/v1/workflows/{id}/amendments/notion-retries",
-            post(retry_amendment_notion),
         )
         .route(
             "/v1/workflows/{id}/amendments/rereads",

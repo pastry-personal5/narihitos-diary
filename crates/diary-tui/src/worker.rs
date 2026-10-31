@@ -13,8 +13,8 @@ use std::thread::{self, JoinHandle};
 
 use diary_control_contract::{
     AmendmentPreviewDto, AssistantBackendListDto, CapabilitiesDto, DraftResultDto, JobAcceptedDto,
-    JobDto, LocalPreviewDto, MemoryReviewDto, NotionPreviewDto, ParagraphSuggestionDto,
-    ParagraphSuggestionListDto, PreferencesDto, PublishReadinessDto,
+    JobDto, LocalPreviewDto, MemoryReviewDto, ParagraphSuggestionDto, ParagraphSuggestionListDto,
+    PreferencesDto, RemoteListDto, RemotePreviewDto, RemoteReadinessDto,
     ResolveParagraphSuggestionRequest, SetupCheckDto, SourceListDto, SourceRefineSuggestionDto,
     StartParagraphReviewRequest, WorkflowDto, WorkflowListDto,
 };
@@ -142,7 +142,7 @@ pub enum Intent {
         workflow_id: String,
         revision: u64,
     },
-    /// Previews the local file and iCloud mirror for an entry that already
+    /// Previews the local file for an entry that already
     /// exists, as `append` or `overwrite`.
     PreviewExisting {
         workflow_id: String,
@@ -158,34 +158,28 @@ pub enum Intent {
         workflow_id: String,
         revision: u64,
     },
-    CheckReadiness {
+    ListRemotes {
         workflow_id: String,
-        revision: u64,
     },
-    PreviewNotion {
+    /// Previews one remote; `existing_mode` is `append` or `overwrite` once
+    /// the person chose what to do with content already there.
+    PreviewRemote {
         workflow_id: String,
         revision: u64,
+        remote: String,
+        existing_mode: Option<String>,
     },
-    /// Previews a Notion section that already exists, as `append` or
-    /// `overwrite`.
-    PreviewNotionExisting {
+    CheckRemote {
         workflow_id: String,
         revision: u64,
-        existing_mode: String,
+        remote: String,
     },
-    ApproveNotion {
+    PushRemote {
         workflow_id: String,
         revision: u64,
+        remote: String,
         plan_digest: String,
-    },
-    PublishNotion {
-        workflow_id: String,
-        revision: u64,
-    },
-    SaveUnderDay {
-        workflow_id: String,
-        revision: u64,
-        new_day: String,
+        existing_mode: Option<String>,
     },
     SeedAmendment {
         workflow_id: String,
@@ -201,10 +195,6 @@ pub enum Intent {
         plan_digest: String,
     },
     PublishAmendment {
-        workflow_id: String,
-        revision: u64,
-    },
-    RetryAmendmentNotion {
         workflow_id: String,
         revision: u64,
     },
@@ -297,16 +287,14 @@ pub enum WorkerResult {
     LocalPreviewed(Box<ClientOutcome<LocalPreviewDto>>),
     LocalApproved(Box<ClientOutcome<WorkflowDto>>),
     LocalPublished(ClientOutcome<JobAcceptedDto>),
-    ReadinessChecked(Box<ClientOutcome<PublishReadinessDto>>),
-    NotionPreviewed(Box<ClientOutcome<NotionPreviewDto>>),
-    NotionApproved(Box<ClientOutcome<WorkflowDto>>),
-    NotionPublished(ClientOutcome<JobAcceptedDto>),
-    SavedUnderDay(Box<ClientOutcome<WorkflowDto>>),
+    RemotesListed(Box<ClientOutcome<RemoteListDto>>),
+    RemotePreviewed(Box<ClientOutcome<RemotePreviewDto>>),
+    RemoteChecked(Box<ClientOutcome<RemoteReadinessDto>>),
+    RemotePushed(ClientOutcome<JobAcceptedDto>),
     AmendmentSeeded(Box<ClientOutcome<WorkflowDto>>),
     AmendmentPreviewed(Box<ClientOutcome<AmendmentPreviewDto>>),
     AmendmentApproved(Box<ClientOutcome<WorkflowDto>>),
     AmendmentPublished(ClientOutcome<JobAcceptedDto>),
-    AmendmentNotionRetried(ClientOutcome<JobAcceptedDto>),
     AmendmentReread(Box<ClientOutcome<WorkflowDto>>),
     AmendmentAbandoned(Box<ClientOutcome<WorkflowDto>>),
     AssistantBackends(ClientOutcome<AssistantBackendListDto>),
@@ -623,49 +611,44 @@ impl Worker {
                 &workflow_id,
                 revision,
             )),
-            Intent::CheckReadiness {
+            Intent::ListRemotes { workflow_id } => {
+                WorkerResult::RemotesListed(Box::new(client.list_remotes(attachment, &workflow_id)))
+            }
+            Intent::PreviewRemote {
                 workflow_id,
                 revision,
-            } => WorkerResult::ReadinessChecked(Box::new(client.check_readiness(
-                attachment,
-                &workflow_id,
-                revision,
-            ))),
-            Intent::PreviewNotion {
-                workflow_id,
-                revision,
-            } => WorkerResult::NotionPreviewed(Box::new(client.preview_notion(
-                attachment,
-                &workflow_id,
-                revision,
-            ))),
-            Intent::PreviewNotionExisting {
-                workflow_id,
-                revision,
+                remote,
                 existing_mode,
-            } => WorkerResult::NotionPreviewed(Box::new(client.preview_notion_existing(
+            } => WorkerResult::RemotePreviewed(Box::new(client.preview_remote(
                 attachment,
                 &workflow_id,
                 revision,
-                &existing_mode,
+                &remote,
+                existing_mode.as_deref(),
             ))),
-            Intent::ApproveNotion {
+            Intent::CheckRemote {
                 workflow_id,
                 revision,
+                remote,
+            } => WorkerResult::RemoteChecked(Box::new(client.check_remote_readiness(
+                attachment,
+                &workflow_id,
+                revision,
+                &remote,
+            ))),
+            Intent::PushRemote {
+                workflow_id,
+                revision,
+                remote,
                 plan_digest,
-            } => WorkerResult::NotionApproved(Box::new(client.approve_notion(
+                existing_mode,
+            } => WorkerResult::RemotePushed(client.push_remote(
                 attachment,
                 &workflow_id,
                 revision,
+                &remote,
                 &plan_digest,
-            ))),
-            Intent::PublishNotion {
-                workflow_id,
-                revision,
-            } => WorkerResult::NotionPublished(client.publish_notion(
-                attachment,
-                &workflow_id,
-                revision,
+                existing_mode.as_deref(),
             )),
             Intent::SeedAmendment {
                 workflow_id,
@@ -701,14 +684,6 @@ impl Worker {
                 &workflow_id,
                 revision,
             )),
-            Intent::RetryAmendmentNotion {
-                workflow_id,
-                revision,
-            } => WorkerResult::AmendmentNotionRetried(client.retry_amendment_notion(
-                attachment,
-                &workflow_id,
-                revision,
-            )),
             Intent::RereadAmendment {
                 workflow_id,
                 revision,
@@ -724,16 +699,6 @@ impl Worker {
                 attachment,
                 &workflow_id,
                 revision,
-            ))),
-            Intent::SaveUnderDay {
-                workflow_id,
-                revision,
-                new_day,
-            } => WorkerResult::SavedUnderDay(Box::new(client.save_under_day(
-                attachment,
-                &workflow_id,
-                revision,
-                &new_day,
             ))),
             Intent::SelectAssistant {
                 workflow_id,

@@ -20,7 +20,7 @@ pub const UTILITY_SIDEBAR_WIDTH: u16 = 24;
 pub const MIN_MAIN_PANE_WIDTH: u16 = 50;
 /// Narrowest terminal that keeps all four columns inline without the Main
 /// Pane dropping below [`MIN_MAIN_PANE_WIDTH`].
-pub const FULL_COLUMNS: u16 = 151;
+pub const FULL_COLUMNS: u16 = 161;
 /// Extra Resources Sidebar columns so a `YYYY-MM-DD HH:MM:SS` source label fits.
 pub const RESOURCES_EXTRA_WIDTH: u16 = 16;
 
@@ -230,7 +230,7 @@ mod tests {
 
     #[test]
     fn full_layout_keeps_all_four_columns_inline() {
-        let areas = adaptive_areas(Rect::new(0, 0, 160, 30), FocusZone::Main);
+        let areas = adaptive_areas(Rect::new(0, 0, FULL_COLUMNS, 30), FocusZone::Main);
         assert_eq!(areas.band, WidthBand::Full);
         assert_eq!(
             areas.workflow_sidebar.map(|area| area.width),

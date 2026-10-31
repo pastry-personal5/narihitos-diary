@@ -200,6 +200,13 @@ impl NotionOutputPort for NotionClient {
             .map_err(remote_reason)
     }
 
+    fn month_page_url(&self, day: &DiaryDay) -> Option<String> {
+        let plan = render_notion(day, "").ok()?;
+        let path = self.resolve_path(&plan, &AtomicBool::new(false)).ok()?;
+        let id = path.month?.id.replace('-', "");
+        Some(format!("https://www.notion.so/{id}"))
+    }
+
     fn write(
         &self,
         request: &NotionRequest,

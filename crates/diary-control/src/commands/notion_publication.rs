@@ -224,7 +224,12 @@ impl CommandService {
             }
             None
         };
-        if workflow.state() == diary_core::WorkflowState::Partial {
+        // A pending Notion retry re-enters publishing from a completed day: the
+        // verified local write completed it, and Notion is a remote.
+        if matches!(
+            workflow.state(),
+            diary_core::WorkflowState::Partial | diary_core::WorkflowState::Completed
+        ) {
             workflow
                 .begin_pending_retry(
                     expected_revision,

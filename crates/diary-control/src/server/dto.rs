@@ -63,11 +63,6 @@ pub(super) fn workflow_dto(workflow: &Workflow) -> WorkflowDto {
             .iter()
             .find(|item| item.destination == "notion")
             .map(|item| item.status.as_str().to_owned()),
-        icloud_status: workflow
-            .destination_progress()
-            .iter()
-            .find(|item| item.destination == "icloud")
-            .map(|item| item.status.as_str().to_owned()),
         amendment: workflow.amendment().map(|seed| AmendmentDto {
             hand_edited: seed.hand_edited,
         }),

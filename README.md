@@ -31,20 +31,27 @@ configured explicitly and each call
 uses a fresh confined `codex app-server` process; Apple assistance is available
 only when Foundation Models reports ready. Manual editing remains available.
 P1-M9 (local publication and recovery) is done. P1-M10 is in progress: after
-the local file is verified, Preview can inspect the configured Notion
-`Root → YYYY → YYYY-MM` path and show the exact native-block projection for a
-separate approval. Publish creates only missing canonical pages, appends the
+the local file is verified, Publish Remote can inspect the configured Notion
+`Root → YYYY → YYYY-MM` path and show the exact native-block projection; Push
+creates only missing canonical pages, adds the
 daily section in bounded chunks, and reads it back before completing. The live
 configured-root compatibility check and disposable-hierarchy acceptance remain
 owner-authorized gates; synthetic tests never access a contributor's Notion.
 
-A completed day can be amended from its Publish stage: the editor opens with the
-saved text, and approving the replacement plan replaces only the local file and
-Notion section the app itself wrote (the iCloud copy is not updated).
+The workflow ends with **Preview** (the local file only), **Publish Local**
+(saving it completes the day), and **Publish Remote**, where iCloud and Notion
+are listed and each is pushed on request. Nothing is sent to a remote
+automatically, and an entry already there is shown and resolved with Append or
+Overwrite.
+
+A completed day can be amended from its Publish Local stage: the editor opens
+with the saved text, and approving the replacement plan replaces only the local
+file and Notion section the app itself wrote (a remote is never changed by an
+amendment; push again to update iCloud).
 
 Set the optional `paths.icloud_entries_root` (under
-`~/Library/Mobile Documents/`) to also save each entry to iCloud Drive as an
-identical Markdown file; see `config/global_config.example.yaml`.
+`~/Library/Mobile Documents/`) to make iCloud a remote you can push an identical
+Markdown file to; see `config/global_config.example.yaml`.
 
 ## Quick start
 

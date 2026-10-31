@@ -268,6 +268,13 @@ pub trait NotionOutputPort: Send + Sync {
     fn write(&self, request: &NotionRequest, cancelled: &AtomicBool) -> WriteOutcome;
     fn inspect(&self, request: &NotionRequest) -> InspectionOutcome;
 
+    /// Read-only: the web URL of the day's Notion month page, for a person to
+    /// open and fix a page this app cannot safely change. `None` when the
+    /// page cannot be resolved. Never logged and never placed in a diagnostic.
+    fn month_page_url(&self, _day: &DiaryDay) -> Option<String> {
+        None
+    }
+
     /// Read-only: verifies the owned section against its receipt.
     fn preflight_replace(
         &self,

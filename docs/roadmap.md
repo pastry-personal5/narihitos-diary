@@ -7,7 +7,7 @@ only active phase; later phases remain unplanned until their goals are defined.
 
 | Phase | Title | Status | Goal | Plan |
 |---|---|---|---|---|
-| 1 | macOS TUI MVP | Active | Turn Markdown source notes from a mounted iCloud directory into a finished diary entry and publish its body to a daily section in a Notion month page, with an optional iCloud Drive Markdown mirror (P1-M14). | [Phase 1](phase-1/phase-1.md) |
+| 1 | macOS TUI MVP | Active | Turn Markdown source notes from a mounted iCloud directory into a finished diary entry and publish its body to a daily section in a Notion month page, with an optional iCloud Drive Markdown copy pushed on request (P1-M14, P1-M22). | [Phase 1](phase-1/phase-1.md) |
 | 2 | TBD | Planned | — | Not yet created |
 | 3 | TBD | Planned | — | Not yet created |
 | 4 | TBD | Planned | — | Not yet created |

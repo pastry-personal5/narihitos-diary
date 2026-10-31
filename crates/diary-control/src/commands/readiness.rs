@@ -144,15 +144,10 @@ impl CommandService {
                 "check-icloud-folder",
                 "mirror-inspect",
             ),
-            Ok(LocalOutputState::Different(_)) => DestinationReadiness {
-                destination: MIRROR_DESTINATION,
-                readiness: Readiness::Conflict,
-                reason: "icloud-different-file-exists",
-                next_step: "resolve-icloud-file",
-                decided_by: "mirror-inspect",
-                duration_ms: 0,
-            },
-            Ok(LocalOutputState::Absent | LocalOutputState::Identical) => {
+            // Existing iCloud content is not an obstacle: the Remote menu
+            // offers Append and Overwrite for it.
+            Ok(LocalOutputState::Identical) => published(MIRROR_DESTINATION),
+            Ok(LocalOutputState::Absent | LocalOutputState::Different(_)) => {
                 ready(MIRROR_DESTINATION, status, "mirror-inspect")
             }
         }
@@ -171,7 +166,7 @@ fn timed(check: impl FnOnce() -> DestinationReadiness) -> DestinationReadiness {
     item
 }
 
-fn progress_of(workflow: &Workflow, destination: &str) -> Option<DestinationStatus> {
+pub(super) fn progress_of(workflow: &Workflow, destination: &str) -> Option<DestinationStatus> {
     workflow
         .destination_progress()
         .iter()

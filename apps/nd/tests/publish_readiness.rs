@@ -373,9 +373,10 @@ fn icloud_reports_ready_different_file_and_unavailable_folder() {
         .check_publish_readiness(&fx.day, partial.revision())
         .unwrap();
     let item = of(&report, "icloud");
-    assert_eq!(item.readiness, Readiness::Conflict);
-    assert_eq!(item.reason, "icloud-different-file-exists");
-    assert_eq!(item.next_step, "resolve-icloud-file");
+    // Existing iCloud content is not an obstacle: the Remote menu offers
+    // Append and Overwrite for it.
+    assert_eq!(item.readiness, Readiness::Ready);
+    assert_eq!(item.next_step, "preview-and-approve");
 
     let service = fx.service().with_mirror_output(Arc::new(UnavailableMirror));
     let report = service
@@ -492,36 +493,39 @@ fn readiness_round_trips_through_the_real_server_without_changing_the_workflow()
     );
     let id = "wf_20261030".to_owned();
 
-    worker
-        .try_send(Intent::CheckReadiness {
-            workflow_id: id.clone(),
-            revision,
-        })
-        .unwrap();
-    let report = match wait_result(&worker) {
-        WorkerResult::ReadinessChecked(outcome) => match *outcome {
-            ClientOutcome::Ok(report) => report,
-            _ => panic!("readiness check failed"),
-        },
-        _ => panic!("wrong worker result"),
-    };
-    assert_eq!(report.revision, revision);
-    let notion = report
-        .destinations
-        .iter()
-        .find(|item| item.destination == "notion")
-        .unwrap();
-    assert_eq!(notion.readiness, "ready");
-    assert_eq!(notion.next_step, "preview-and-approve");
+    for (remote, expected, next_step) in [
+        ("notion", "ready", "preview-and-approve"),
+        ("icloud", "ready", "preview-and-approve"),
+    ] {
+        worker
+            .try_send(Intent::CheckRemote {
+                workflow_id: id.clone(),
+                revision,
+                remote: remote.to_owned(),
+            })
+            .unwrap();
+        let report = match wait_result(&worker) {
+            WorkerResult::RemoteChecked(outcome) => match *outcome {
+                ClientOutcome::Ok(report) => report,
+                _ => panic!("readiness check failed"),
+            },
+            _ => panic!("wrong worker result"),
+        };
+        assert_eq!(report.revision, revision);
+        assert_eq!(report.readiness.destination, remote);
+        assert_eq!(report.readiness.readiness, expected, "{remote}");
+        let _ = next_step;
+    }
 
     worker
-        .try_send(Intent::CheckReadiness {
+        .try_send(Intent::CheckRemote {
             workflow_id: id.clone(),
             revision: revision - 1,
+            remote: "notion".to_owned(),
         })
         .unwrap();
     match wait_result(&worker) {
-        WorkerResult::ReadinessChecked(outcome) => {
+        WorkerResult::RemoteChecked(outcome) => {
             assert!(!matches!(*outcome, ClientOutcome::Ok(_)), "stale revision");
         }
         _ => panic!("wrong worker result"),

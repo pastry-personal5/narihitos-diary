@@ -11,7 +11,7 @@ use crate::stage::{ALL_STAGES, Progress, Stage, StageModel};
 use crate::theme::Palette;
 
 /// Two border columns plus the longest focused stage/progress row.
-pub const MINIMUM_WORKFLOW_SIDEBAR_WIDTH: u16 = 24;
+pub const MINIMUM_WORKFLOW_SIDEBAR_WIDTH: u16 = 31;
 
 #[must_use]
 pub const fn stage_label(stage: Stage) -> &'static str {
@@ -21,7 +21,8 @@ pub const fn stage_label(stage: Stage) -> &'static str {
         Stage::Compose => "Compose",
         Stage::Review => "Review",
         Stage::Preview => "Preview",
-        Stage::Publish => "Publish",
+        Stage::PublishLocal => "Publish Local",
+        Stage::PublishRemote => "Publish Remote",
     }
 }
 
@@ -77,8 +78,8 @@ impl<'a> WorkflowSidebarWidget<'a> {
     /// for the current stage, `"  Sources (available)"` otherwise. The
     /// marker is presentation-only and never affects `progress_label`.
     #[must_use]
-    pub fn lines(&self) -> [String; 6] {
-        let mut lines: [String; 6] = Default::default();
+    pub fn lines(&self) -> [String; 7] {
+        let mut lines: [String; 7] = Default::default();
         for (index, stage) in ALL_STAGES.into_iter().enumerate() {
             let marker = if stage == self.current { ">" } else { " " };
             let line = format!(
@@ -143,7 +144,8 @@ mod tests {
         let lines = widget.lines();
         assert_eq!(lines[0], "> Start (available)");
         assert_eq!(lines[1], "  Sources (locked)");
-        assert_eq!(lines[5], "  Publish (locked)");
+        assert_eq!(lines[5], "  Publish Local (locked)");
+        assert_eq!(lines[6], "  Publish Remote (locked)");
     }
 
     #[test]
@@ -178,12 +180,12 @@ mod tests {
     #[test]
     fn the_minimum_width_fits_the_longest_focused_row_exactly() {
         let model = StageModel {
-            progress: [Progress::Available; 6],
+            progress: [Progress::Available; 7],
             default_current: Stage::Sources,
         };
-        let widget = WorkflowSidebarWidget::new(&model, Stage::Sources)
+        let widget = WorkflowSidebarWidget::new(&model, Stage::PublishRemote)
             .focused(true)
-            .focused_stage(Some(Stage::Sources));
+            .focused_stage(Some(Stage::PublishRemote));
         let longest_row = widget
             .lines()
             .into_iter()
@@ -200,8 +202,8 @@ mod tests {
             .unwrap();
         let buffer = terminal.backend().buffer();
         let row: String = (1..buffer.area.width - 1)
-            .map(|x| buffer[(x, 2)].symbol())
+            .map(|x| buffer[(x, 7)].symbol())
             .collect();
-        assert_eq!(row, "*> Sources (available)");
+        assert_eq!(row, "*> Publish Remote (available)");
     }
 }

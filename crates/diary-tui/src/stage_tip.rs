@@ -50,17 +50,31 @@ pub fn next_step_tip(input: &TipInput<'_>) -> String {
         }
         (Stage::Preview, Some(workflow)) => match workflow.state.as_str() {
             "entry-confirmed" => {
-                "Select Generate/refresh preview to see exactly what will be written.".to_owned()
+                "Select Generate/refresh preview to see exactly what will be saved on this Mac."
+                    .to_owned()
             }
             "output-planned" => {
-                "Check the preview, then select Approve exact plan to unlock Publish.".to_owned()
+                "Check the preview, then select Approve exact plan to unlock Publish Local."
+                    .to_owned()
             }
-            _ => "The plan is approved. Press Ctrl-N to go to Publish.".to_owned(),
+            _ => "The plan is approved. Press Ctrl-N to go to Publish Local.".to_owned(),
         },
-        (Stage::Publish, Some(workflow)) => match workflow.state.as_str() {
-            "completed" => "Published. Press Ctrl-P to revisit a stage, or amend from here.".to_owned(),
-            "partial" => "Part of the output is still pending. Select Publish to finish it.".to_owned(),
-            _ => "Select Publish approved destination to write the entry.".to_owned(),
+        (Stage::PublishLocal, Some(workflow)) => match workflow.state.as_str() {
+            "completed" => {
+                "Saved. Press Ctrl-N to push to iCloud or Notion, or amend from here.".to_owned()
+            }
+            "partial" => {
+                "The local save did not finish. Open Preview to see the file again, then approve and publish."
+                    .to_owned()
+            }
+            _ => "Select Publish approved local file to save the entry.".to_owned(),
+        },
+        (Stage::PublishRemote, Some(workflow)) => match workflow.state.as_str() {
+            "completed" => {
+                "Pick a remote in the list, then select Push. Nothing is sent until you push."
+                    .to_owned()
+            }
+            _ => "Publish the local file first; remotes unlock after it is saved.".to_owned(),
         },
     };
     format!("Tip: {tip}")
@@ -104,7 +118,7 @@ mod tests {
             "entry_confirmed": entry_confirmed,
             "local_status": null,
             "notion_status": null,
-            "icloud_status": null,
+
             "amendment": null,
             "candidates": []
         }))
@@ -187,7 +201,8 @@ mod tests {
         );
         let approved = workflow("approved", true);
         assert!(
-            tip(Stage::Publish, Some(&approved), 0, 0, false, true).contains("Publish approved")
+            tip(Stage::PublishLocal, Some(&approved), 0, 0, false, true)
+                .contains("Publish approved local file")
         );
     }
 }

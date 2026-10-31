@@ -14,16 +14,17 @@ and [ux-tui.md](ux-tui.md); this doc does not duplicate their detail.
    running" state with the `nd serve` command.
 3. On **Start**, choose a diary day. A new workflow defaults to today in the
    Mac's local time zone; unfinished drafts are listed first. Choosing a day
-   with a completed entry offers to amend it: open the Publish stage and choose
+   with a completed entry offers to amend it: open the Publish Local stage and choose
    **Amend this entry**. The editor opens with the saved text, then you confirm,
-   preview current against replacement content, approve, and publish. If the file
-   was edited by hand since publication, a banner says so.
+   preview the current file against its replacement, approve, and publish. If the
+   file was edited by hand since publication, a banner says so. An amendment
+   changes the local file only; push the remotes again afterward.
 
 ## Moving around
 
 - Tab / Shift-Tab and the arrow keys move focus between the Workflow
   Sidebar, Resources Sidebar, Main Pane, and Utility Sidebar (left to right),
-  and between controls inside the Main Pane. On terminals narrower than 151
+  and between controls inside the Main Pane. On terminals narrower than 161
   columns the Utility Sidebar is hidden until focused, then opens over the
   right edge. Enter activates the focused control. There are no bare-letter
   hotkeys (Korean IME composes bare letters) except the Sources note-list
@@ -126,56 +127,74 @@ remove the whole span) and then "Confirm complete entry". A blank entry
 can't be confirmed, and confirmation is blocked while any reserved delimiter
 remains.
 
-## Preview and Publish
+## Preview, Publish Local, and Publish Remote
 
 After confirming the entry, open Preview and generate the local output plan.
-It shows the target path, exact Markdown with `date` and `language` front
-matter, SHA-256 digest, and initially blocked Notion status. Review the file before
-approving the plan. Publish then starts a local publication job; an existing
-different file is never replaced. The job can be cancelled before it commits,
+Preview is only about the file on this Mac: it shows the target path, exact
+Markdown with `date` and `language` front matter, and SHA-256 digest, and says
+nothing about iCloud or Notion. Review the file before approving the plan.
+Publish Local then starts a local publication job; an existing different file
+is never replaced without your explicit choice. The job can be cancelled before it commits,
 and an uncertain write is read back in the same job. If that read-back is
 unavailable, restart inspects it again before that diary day can act. A
-conflict shows the existing and planned text. Reread with Preview,
-discard the workflow from Start, or choose another day in Preview; carried
-text must be confirmed again.
+file that changes after you approved it is shown again in Preview, with the
+existing and planned text.
 
-When a file already exists for the day, Preview also offers **Append to the
-existing entry** and **Overwrite the existing entry**. Append keeps what is
-there and adds a `---` line, `*Appended 2026-10-30 21:14*`, and your new text
+When a file already exists for the day, Preview never stops at a conflict: the
+plan defaults to Append, so it can be approved as it stands, and the menu also
+offers **Overwrite the existing entry**. Append keeps what is there and adds a `---` line, `*Appended 2026-10-30 21:14*`, and your new text
 below it. Overwrite replaces the file after saving a copy beside it as
 `<date>.md.bak-<digest>` and asks you to press Enter a second time. Either way
 Preview shows the exact result, and nothing is written until you approve; if the
-file changes in between, the plan is refused and you preview again. The same two
-controls appear for a Notion section that already exists, in the Notion
-preview. The iCloud copy always ends identical to the final local file.
+file changes in between, the approval is refused and Preview shows it again. The
+same two choices appear in a remote's menu when iCloud or Notion already holds an
+entry.
 
-If `paths.icloud_entries_root` is set, the same approval also saves an
-identical copy to that iCloud Drive folder, which must already exist under
-`~/Library/Mobile Documents/`. Preview shows an `iCloud mirror` line, and
-Publish shows a mirror row only if the copy is pending, blocked (for example
-the folder is missing or the file is still an iCloud placeholder), or in
-conflict. Local and Notion are unaffected either way.
-An amendment replaces that copy too, but only while it still holds the text the
-app saved there; a file you edited in iCloud stays untouched and shows a conflict.
+Saving the local file completes the day. Nothing is sent to iCloud or Notion
+automatically.
 
-After the local receipt and read-back are verified, return to Preview and
-generate the Notion-only plan. It shows the human-readable
+### Publish Remote
+
+Once the local file is saved, open **Publish Remote** (any time, including after
+reopening the day later). The Resources Sidebar lists the remotes, iCloud and
+Notion, each with a status: `Not pushed`, `Exists` (it already holds content that
+is not this app's), `Pushed`, or `Blocked`. Pick one to open its menu in the Main
+Pane:
+
+- **Show what will be pushed** refreshes the read-only plan.
+- **Check readiness** asks why the remote is or is not ready. Nothing is checked
+  until you choose it, and the check never writes anything. It shows `READY`,
+  `NOT READY`, `CONFLICT`, or `PUBLISHED`, a plain reason, and the next step.
+- **Push** sends exactly the plan shown. Pushing is the approval; there is no
+  separate approve step.
+
+The remote is looked at as soon as you pick it. If it already holds an entry for
+the day, that entry is shown and the menu offers **Append to the existing entry**
+and **Overwrite the existing entry**; choose one to see the exact result, then
+Push. Append keeps what is there; Overwrite saves a copy of an iCloud file first
+(a Notion section's old blocks go to Notion's trash) and asks you to press Enter a
+second time. If the remote changes while you decide, the push is refused and the
+screen shows what is there now instead of leaving you stuck.
+
+iCloud needs `paths.icloud_entries_root` under `~/Library/Mobile Documents/`; the
+folder must already exist. Its copy is the saved local file's exact text. An
+amendment never changes a remote on its own: push again, and iCloud updates the
+copy this app saved earlier without asking (your own edits there are shown as
+`Exists`).
+
+For Notion, the menu shows the human-readable
 `Notion root → YYYY → YYYY-MM` path, whether the year and month already exist,
 the renderer/API versions, digest, and every ordered native block beginning
-with `heading_2: YYYY-MM-DD (DDD)`. Inspect that projection and approve it;
-Publish then creates only missing canonical pages and appends the section at
-its place in ascending date order on the month page (the preview's `Position`
-line says where; sections already out of order stay as they are). A duplicate or wrong-weekday same-day heading stops
-Notion without changing the verified local file. A blocked retry needs a new
-preview and approval, while an uncertain append is inspected before any new
-write. The token, page IDs, and unrelated Notion prose are never shown.
-On Publish, choose **Check Notion and iCloud readiness** to ask why each
-destination is or is not ready. Nothing is checked until you choose it, and the
-check never writes anything. Each destination shows `READY`, `NOT READY`,
-`CONFLICT`, or `PUBLISHED`, a plain reason (for example, Notion denied access to
-the configured page, or iCloud already has a different file for this day), and
-the next step. A ready Notion still needs its own preview and approval in the
-Preview stage before it can publish. An answer applies to the workflow as it
-was when you asked, so it returns to `Not checked` after anything changes.
+with `heading_2: YYYY-MM-DD (DDD)`. Inspect that projection, then Push;
+the push creates only missing canonical pages and adds the section at
+its place in ascending date order on the month page (the `Position`
+line says where; sections already out of order stay as they are). If the month
+page has two sections for the same day or a wrong-weekday heading, this app
+cannot change it safely: the screen shows a warning and a link to that Notion
+page so you can fix it by hand in the Notion app or on Notion Web, then choose
+Check readiness again. An uncertain append is inspected before any new write.
+The token, page IDs, and unrelated Notion prose are never shown, except that
+one page link. A readiness answer applies to the workflow as it was when you
+asked, so it returns to `Not checked` after anything changes.
 The `paths.entries_root` setting may be absolute, relative to the directory
 where `nd` starts, or begin with `~/` to resolve from the current user's home.

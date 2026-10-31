@@ -21,10 +21,10 @@ use diary_control_contract::{
     ConfirmSelectionRequest, DeleteSourceRequest, DiscoveryRequest, DraftResultDto,
     EditSourceBodyRequest, HealthDto, JobAcceptedDto, JobDto, LocalApprovalRequest,
     LocalPreviewDto, LocalPreviewRequest, MAX_RESPONSE_BYTES, MAX_SOURCE_BYTES, MemoryReviewDto,
-    NotionPreviewDto, ParagraphSuggestionDto, ParagraphSuggestionListDto, PreferencesDto,
-    PrepareSourcesRequest, PublishReadinessDto, PutAssistantSelectionRequest,
-    PutMemoryReviewRequest, RefineSourceRequest, ResolveParagraphSuggestionRequest,
-    ResolveSourceRefineRequest, SaveEntryRequest, SaveUnderDayRequest, SetupCheckDto,
+    ParagraphSuggestionDto, ParagraphSuggestionListDto, PreferencesDto, PrepareSourcesRequest,
+    PutAssistantSelectionRequest, PutMemoryReviewRequest, RefineSourceRequest, RemoteListDto,
+    RemotePreviewDto, RemotePreviewRequest, RemotePushRequest, RemoteReadinessDto,
+    ResolveParagraphSuggestionRequest, ResolveSourceRefineRequest, SaveEntryRequest, SetupCheckDto,
     SourceDetailDto, SourceListDto, SourceRefineSuggestionDto, StartDraftRequest,
     StartMemoryExtractionRequest, StartParagraphReviewRequest, WorkflowDto, WorkflowListDto,
     WritingSettingsRequest, buffer_etag, workflow_etag,
@@ -650,39 +650,39 @@ impl<T: Transport> ApiClient<T> {
         )
     }
 
-    /// Read-only: asks why Notion and the iCloud mirror are or are not ready.
-    pub fn check_readiness(
+    /// Lists the remotes of a completed day and where each stands.
+    pub fn list_remotes(
         &self,
         attachment: &Attachment,
         workflow_id: &str,
-        revision: u64,
-    ) -> ClientOutcome<PublishReadinessDto> {
+    ) -> ClientOutcome<RemoteListDto> {
         self.send_json(
-            "POST",
-            &format!("/v1/workflows/{workflow_id}/readiness"),
-            Some(b"{}".to_vec()),
-            Some(workflow_etag(revision)),
+            "GET",
+            &format!("/v1/workflows/{workflow_id}/remotes"),
+            None,
+            None,
             MAX_RESPONSE_BYTES,
             attachment,
         )
     }
 
-    /// Previews a Notion section that already exists as `append` or
-    /// `overwrite`.
-    pub fn preview_notion_existing(
+    /// Previews what a push would do. Existing remote content is returned
+    /// without asking; `existing_mode` (`append` or `overwrite`) plans it.
+    pub fn preview_remote(
         &self,
         attachment: &Attachment,
         workflow_id: &str,
         revision: u64,
-        existing_mode: &str,
-    ) -> ClientOutcome<NotionPreviewDto> {
-        let body = serde_json::to_vec(&LocalPreviewRequest {
-            existing_mode: Some(existing_mode.to_owned()),
+        remote: &str,
+        existing_mode: Option<&str>,
+    ) -> ClientOutcome<RemotePreviewDto> {
+        let body = serde_json::to_vec(&RemotePreviewRequest {
+            existing_mode: existing_mode.map(str::to_owned),
         })
         .unwrap_or_else(|_| b"{}".to_vec());
         self.send_json(
             "POST",
-            &format!("/v1/workflows/{workflow_id}/notion-previews"),
+            &format!("/v1/workflows/{workflow_id}/remotes/{remote}/previews"),
             Some(body),
             Some(workflow_etag(revision)),
             MAX_RESPONSE_BYTES,
@@ -690,15 +690,17 @@ impl<T: Transport> ApiClient<T> {
         )
     }
 
-    pub fn preview_notion(
+    /// Read-only: asks why one remote is or is not ready.
+    pub fn check_remote_readiness(
         &self,
         attachment: &Attachment,
         workflow_id: &str,
         revision: u64,
-    ) -> ClientOutcome<NotionPreviewDto> {
+        remote: &str,
+    ) -> ClientOutcome<RemoteReadinessDto> {
         self.send_json(
             "POST",
-            &format!("/v1/workflows/{workflow_id}/notion-previews"),
+            &format!("/v1/workflows/{workflow_id}/remotes/{remote}/readiness"),
             Some(b"{}".to_vec()),
             Some(workflow_etag(revision)),
             MAX_RESPONSE_BYTES,
@@ -706,37 +708,25 @@ impl<T: Transport> ApiClient<T> {
         )
     }
 
-    pub fn approve_notion(
+    /// Pushes the previewed plan; the push is the approval.
+    pub fn push_remote(
         &self,
         attachment: &Attachment,
         workflow_id: &str,
         revision: u64,
+        remote: &str,
         plan_digest: &str,
-    ) -> ClientOutcome<WorkflowDto> {
-        let body = serde_json::to_vec(&LocalApprovalRequest {
+        existing_mode: Option<&str>,
+    ) -> ClientOutcome<JobAcceptedDto> {
+        let body = serde_json::to_vec(&RemotePushRequest {
             plan_digest: plan_digest.to_owned(),
+            existing_mode: existing_mode.map(str::to_owned),
         })
         .unwrap_or_default();
         self.send_json(
             "POST",
-            &format!("/v1/workflows/{workflow_id}/notion-approvals"),
+            &format!("/v1/workflows/{workflow_id}/remotes/{remote}/pushes"),
             Some(body),
-            Some(workflow_etag(revision)),
-            MAX_RESPONSE_BYTES,
-            attachment,
-        )
-    }
-
-    pub fn publish_notion(
-        &self,
-        attachment: &Attachment,
-        workflow_id: &str,
-        revision: u64,
-    ) -> ClientOutcome<JobAcceptedDto> {
-        self.send_json(
-            "POST",
-            &format!("/v1/workflows/{workflow_id}/notion-publications"),
-            Some(b"{}".to_vec()),
             Some(workflow_etag(revision)),
             MAX_RESPONSE_BYTES,
             attachment,
@@ -812,22 +802,6 @@ impl<T: Transport> ApiClient<T> {
         )
     }
 
-    pub fn retry_amendment_notion(
-        &self,
-        attachment: &Attachment,
-        workflow_id: &str,
-        revision: u64,
-    ) -> ClientOutcome<JobAcceptedDto> {
-        self.send_json(
-            "POST",
-            &format!("/v1/workflows/{workflow_id}/amendments/notion-retries"),
-            Some(b"{}".to_vec()),
-            Some(workflow_etag(revision)),
-            MAX_RESPONSE_BYTES,
-            attachment,
-        )
-    }
-
     pub fn reread_amendment(
         &self,
         attachment: &Attachment,
@@ -854,27 +828,6 @@ impl<T: Transport> ApiClient<T> {
             "POST",
             &format!("/v1/workflows/{workflow_id}/amendments/abandonments"),
             Some(b"{}".to_vec()),
-            Some(workflow_etag(revision)),
-            MAX_RESPONSE_BYTES,
-            attachment,
-        )
-    }
-
-    pub fn save_under_day(
-        &self,
-        attachment: &Attachment,
-        workflow_id: &str,
-        revision: u64,
-        new_day: &str,
-    ) -> ClientOutcome<WorkflowDto> {
-        let body = serde_json::to_vec(&SaveUnderDayRequest {
-            diary_day: new_day.to_owned(),
-        })
-        .unwrap_or_default();
-        self.send_json(
-            "POST",
-            &format!("/v1/workflows/{workflow_id}/save-under-day"),
-            Some(body),
             Some(workflow_etag(revision)),
             MAX_RESPONSE_BYTES,
             attachment,

@@ -7,8 +7,8 @@ sources:
 paths:
   entries_root: "~/Documents/narihitos-diary/entries"
   # Optional. Omit to disable. Must be under ~/Library/Mobile Documents/ and the
-  # folder must already exist. Each confirmed day is also saved there as the
-  # same Markdown file.
+  # folder must already exist. Makes iCloud a remote: a saved day is copied
+  # there as the same Markdown file only when you push it in Publish Remote.
   # icloud_entries_root: "~/Library/Mobile Documents/com~apple~CloudDocs/narihitos-diary/entries"
 
 notion:

@@ -1,31 +1,38 @@
-//! Publish-stage readiness: plain-language wording for the closed reason and
+//! Remote readiness: plain-language wording for the closed reason and
 //! next-step tokens the server returns, and the block that shows them.
 
-use diary_control_contract::{DestinationReadinessDto, PublishReadinessDto, WorkflowDto};
+use diary_control_contract::{DestinationReadinessDto, RemoteReadinessDto, WorkflowDto};
 
-/// What the Publish stage knows about readiness right now.
+/// What a remote's menu knows about its readiness right now.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ReadinessView {
     NotChecked,
     Checking,
-    Checked(PublishReadinessDto),
+    Checked(RemoteReadinessDto),
 }
 
+/// A readiness answer: the workflow it was asked for and the remote.
+pub type CheckedReadiness = (String, String, RemoteReadinessDto);
+
 impl ReadinessView {
-    /// A result describes one workflow revision only; once the workflow moves
-    /// on (or another day is open) the answer is stale and shows as not checked.
+    /// A result describes one remote of one workflow revision only; once the
+    /// workflow moves on (or another remote or day is open) the answer is stale
+    /// and shows as not checked.
     #[must_use]
     pub fn resolve(
         pending: bool,
-        checked: Option<&(String, PublishReadinessDto)>,
+        checked: Option<&CheckedReadiness>,
         workflow: Option<&WorkflowDto>,
+        remote: &str,
     ) -> Self {
         if pending {
             return Self::Checking;
         }
         match (checked, workflow) {
-            (Some((id, report)), Some(workflow))
-                if *id == workflow.id && report.revision == workflow.revision =>
+            (Some((id, checked_remote, report)), Some(workflow))
+                if *id == workflow.id
+                    && checked_remote == remote
+                    && report.revision == workflow.revision =>
             {
                 Self::Checked(report.clone())
             }
@@ -34,44 +41,21 @@ impl ReadinessView {
     }
 }
 
-/// A partial workflow whose local file is saved can publish Notion directly
-/// only while the Notion plan is `pending` (previewed and approved). Anything
-/// else needs the Preview stage first; sending a publish anyway fails the
-/// server's binding check and leaves the person with no explanation.
-#[must_use]
-pub fn needs_notion_approval(workflow: &WorkflowDto) -> bool {
-    workflow.local_status.as_deref() == Some("verified")
-        && workflow.state == "partial"
-        && workflow.notion_status.as_deref() != Some("pending")
-}
-
-const DESTINATIONS: [&str; 2] = ["notion", "icloud"];
-
-/// The readiness block shown under the Publish status lines.
+/// The readiness lines shown in a remote's menu.
 #[must_use]
 pub fn readiness_block(view: &ReadinessView) -> String {
-    let mut lines = vec!["Readiness".to_owned()];
-    for destination in DESTINATIONS {
-        let label = destination_label(destination);
-        match view {
-            ReadinessView::NotChecked => lines.push(format!("  {label:<7} Not checked")),
-            ReadinessView::Checking => lines.push(format!("  {label:<7} Checking...")),
-            ReadinessView::Checked(report) => {
-                match report
-                    .destinations
-                    .iter()
-                    .find(|d| d.destination == destination)
-                {
-                    Some(item) => lines.extend(destination_lines(label, item)),
-                    None => lines.push(format!("  {label:<7} Not checked")),
-                }
-            }
+    match view {
+        ReadinessView::NotChecked => "Readiness: Not checked".to_owned(),
+        ReadinessView::Checking => "Readiness: Checking...".to_owned(),
+        ReadinessView::Checked(report) => {
+            let mut lines = vec!["Readiness".to_owned()];
+            lines.extend(destination_lines(&report.readiness));
+            lines.join("\n")
         }
     }
-    lines.join("\n")
 }
 
-fn destination_lines(label: &str, item: &DestinationReadinessDto) -> Vec<String> {
+fn destination_lines(item: &DestinationReadinessDto) -> Vec<String> {
     let state = match item.readiness.as_str() {
         "ready" => "READY",
         "not-ready" => "NOT READY",
@@ -80,21 +64,13 @@ fn destination_lines(label: &str, item: &DestinationReadinessDto) -> Vec<String>
         _ => "UNKNOWN",
     };
     let mut lines = vec![format!(
-        "  {label:<7} {state:<9}  {}",
+        "  {state:<9}  {}",
         reason_text(&item.reason, &item.readiness)
     )];
     if let Some(next) = next_step_text(&item.next_step) {
-        lines.push(format!("{:<20}Next: {next}", ""));
+        lines.push(format!("  Next: {next}"));
     }
     lines
-}
-
-fn destination_label(destination: &str) -> &str {
-    match destination {
-        "notion" => "Notion",
-        "icloud" => "iCloud",
-        other => other,
-    }
 }
 
 /// One sentence per reason token. An unlisted token is shown as-is: tokens
@@ -127,7 +103,8 @@ pub fn reason_text(reason: &str, readiness: &str) -> String {
             "An earlier Notion write may or may not have landed.".to_owned()
         }
         "notion-unavailable" => "Notion could not be checked.".to_owned(),
-        "icloud-not-configured" => "The iCloud mirror is not set up.".to_owned(),
+        "icloud-not-configured" => "iCloud is not set up.".to_owned(),
+        "local-not-published" => "The local file has not been saved yet.".to_owned(),
         "icloud-folder-unavailable" => "The iCloud folder could not be read.".to_owned(),
         "icloud-different-file-exists" => {
             "iCloud already has a different file for this day.".to_owned()
@@ -151,17 +128,15 @@ pub fn next_step_text(step: &str) -> Option<String> {
             "Look for duplicate or existing pages in Notion, then check again.".to_owned()
         }
         "retry-later" => "Try again in a moment.".to_owned(),
-        "configure-icloud" => "Set an iCloud folder if you want a mirror.".to_owned(),
+        "configure-icloud" => "Set an iCloud folder if you want to use iCloud.".to_owned(),
         "check-icloud-folder" => {
             "Make sure iCloud Drive is available, then check again.".to_owned()
         }
         "resolve-icloud-file" => {
             "Move or compare the existing iCloud file, then check again.".to_owned()
         }
-        "preview-and-approve" => {
-            "Preview and approve it in the Preview stage to publish.".to_owned()
-        }
-        "publish-approved" => "Approved. Choose Publish approved destination.".to_owned(),
+        "preview-and-approve" => "Review the plan, then Push.".to_owned(),
+        "publish-approved" => "Choose Push.".to_owned(),
         other => format!("Next step: {other}"),
     })
 }
@@ -170,54 +145,79 @@ pub fn next_step_text(step: &str) -> Option<String> {
 mod tests {
     use super::*;
 
-    fn item(
-        destination: &str,
-        readiness: &str,
-        reason: &str,
-        next: &str,
-    ) -> DestinationReadinessDto {
-        DestinationReadinessDto {
-            destination: destination.to_owned(),
-            readiness: readiness.to_owned(),
-            reason: reason.to_owned(),
-            next_step: next.to_owned(),
-        }
-    }
-
-    fn report(revision: u64) -> PublishReadinessDto {
-        PublishReadinessDto {
+    fn report(revision: u64, readiness: &str, reason: &str, next: &str) -> RemoteReadinessDto {
+        RemoteReadinessDto {
             revision,
-            destinations: vec![
-                item(
-                    "notion",
-                    "not-ready",
-                    "notion-permission-denied",
-                    "fix-notion-access",
-                ),
-                item("icloud", "ready", "none", "preview-and-approve"),
-            ],
+            readiness: DestinationReadinessDto {
+                destination: "notion".to_owned(),
+                readiness: readiness.to_owned(),
+                reason: reason.to_owned(),
+                next_step: next.to_owned(),
+            },
         }
     }
 
     #[test]
-    fn unchecked_and_checking_name_both_destinations() {
-        let text = readiness_block(&ReadinessView::NotChecked);
-        assert!(text.contains("Notion  Not checked"));
-        assert!(text.contains("iCloud  Not checked"));
-        let text = readiness_block(&ReadinessView::Checking);
-        assert!(text.contains("Notion  Checking..."));
-        assert!(text.contains("iCloud  Checking..."));
+    fn unchecked_and_checking_are_plain() {
+        assert_eq!(
+            readiness_block(&ReadinessView::NotChecked),
+            "Readiness: Not checked"
+        );
+        assert_eq!(
+            readiness_block(&ReadinessView::Checking),
+            "Readiness: Checking..."
+        );
     }
 
     #[test]
-    fn a_result_shows_state_reason_and_next_step_per_destination() {
-        let text = readiness_block(&ReadinessView::Checked(report(7)));
+    fn a_result_shows_state_reason_and_next_step() {
+        let text = readiness_block(&ReadinessView::Checked(report(
+            7,
+            "not-ready",
+            "notion-permission-denied",
+            "fix-notion-access",
+        )));
         assert!(text.contains("NOT READY"));
         assert!(text.contains("Notion denied access to the configured page."));
         assert!(text.contains("Next: Share the Notion page"));
+        let text = readiness_block(&ReadinessView::Checked(report(
+            7,
+            "ready",
+            "none",
+            "preview-and-approve",
+        )));
         assert!(text.contains("READY"));
         assert!(text.contains("Nothing is blocking this destination."));
-        assert!(text.contains("Next: Preview and approve it in the Preview stage"));
+        assert!(text.contains("Next: Review the plan, then Push."));
+    }
+
+    #[test]
+    fn a_result_applies_to_one_remote_and_one_revision() {
+        let workflow: WorkflowDto = serde_json::from_value(serde_json::json!({
+            "id": "wf_20261029", "diary_day": "2026-10-29", "state": "completed",
+            "revision": 7, "buffer_version": 0, "language": null, "style": "concise",
+            "assistant_backend_id": null, "composition_path": null, "selection_digest": null,
+            "explicit_empty_selection": false, "invalidation_code": null, "entry_text": "",
+            "entry_confirmed": true, "candidates": []
+        }))
+        .unwrap();
+        let checked = (
+            "wf_20261029".to_owned(),
+            "notion".to_owned(),
+            report(7, "ready", "none", "none"),
+        );
+        assert!(matches!(
+            ReadinessView::resolve(false, Some(&checked), Some(&workflow), "notion"),
+            ReadinessView::Checked(_)
+        ));
+        assert_eq!(
+            ReadinessView::resolve(false, Some(&checked), Some(&workflow), "icloud"),
+            ReadinessView::NotChecked
+        );
+        assert_eq!(
+            ReadinessView::resolve(true, None, Some(&workflow), "notion"),
+            ReadinessView::Checking
+        );
     }
 
     #[test]
@@ -228,94 +228,5 @@ mod tests {
             Some("Next step: new-step")
         );
         assert_eq!(next_step_text("none"), None);
-    }
-
-    fn workflow(id: &str, revision: u64) -> WorkflowDto {
-        serde_json::from_value(serde_json::json!({
-            "id": id,
-            "diary_day": "2026-10-30",
-            "state": "partial",
-            "revision": revision,
-            "buffer_version": 0,
-            "language": null,
-            "style": "concise",
-            "assistant_backend_id": null,
-            "composition_path": null,
-            "selection_digest": null,
-            "explicit_empty_selection": false,
-            "invalidation_code": null,
-            "entry_text": "",
-            "entry_confirmed": true,
-            "local_status": "verified",
-            "notion_status": "blocked",
-            "icloud_status": null,
-            "amendment": null,
-            "candidates": []
-        }))
-        .expect("synthetic workflow")
-    }
-
-    #[test]
-    fn publish_waits_for_a_notion_plan_that_is_previewed_and_approved() {
-        let with = |state: &str, local: Option<&str>, notion: Option<&str>| {
-            let mut dto = workflow("2026-10-30", 1);
-            dto.state = state.to_owned();
-            dto.local_status = local.map(str::to_owned);
-            dto.notion_status = notion.map(str::to_owned);
-            dto
-        };
-        // Local saved, Notion still blocked or conflicted: preview first.
-        for notion in [Some("blocked"), Some("conflict"), None] {
-            assert!(needs_notion_approval(&with(
-                "partial",
-                Some("verified"),
-                notion
-            )));
-        }
-        // An approved, unchanged Notion plan publishes directly.
-        assert!(!needs_notion_approval(&with(
-            "partial",
-            Some("verified"),
-            Some("pending")
-        )));
-        // Other states are not this guard's concern.
-        assert!(!needs_notion_approval(&with(
-            "approved",
-            Some("verified"),
-            Some("pending")
-        )));
-        assert!(!needs_notion_approval(&with(
-            "partial",
-            Some("pending"),
-            Some("blocked")
-        )));
-    }
-
-    #[test]
-    fn a_result_is_stale_after_the_revision_or_day_changes() {
-        let checked = ("2026-10-30".to_owned(), report(7));
-        let current = workflow("2026-10-30", 7);
-        assert!(matches!(
-            ReadinessView::resolve(false, Some(&checked), Some(&current)),
-            ReadinessView::Checked(_)
-        ));
-        let moved = workflow("2026-10-30", 8);
-        assert_eq!(
-            ReadinessView::resolve(false, Some(&checked), Some(&moved)),
-            ReadinessView::NotChecked
-        );
-        let other_day = workflow("2026-10-31", 7);
-        assert_eq!(
-            ReadinessView::resolve(false, Some(&checked), Some(&other_day)),
-            ReadinessView::NotChecked
-        );
-        assert_eq!(
-            ReadinessView::resolve(true, Some(&checked), Some(&current)),
-            ReadinessView::Checking
-        );
-        assert_eq!(
-            ReadinessView::resolve(false, None, Some(&current)),
-            ReadinessView::NotChecked
-        );
     }
 }

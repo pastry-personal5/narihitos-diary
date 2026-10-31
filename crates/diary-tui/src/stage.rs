@@ -1,4 +1,4 @@
-//! Pure mapping from server workflow state to the six canonical user-facing
+//! Pure mapping from server workflow state to the seven canonical user-facing
 //! stages. See `docs/ux-tui.md`
 //! ("Canonical stages in M7") for the table this implements.
 
@@ -11,16 +11,18 @@ pub enum Stage {
     Compose,
     Review,
     Preview,
-    Publish,
+    PublishLocal,
+    PublishRemote,
 }
 
-pub const ALL_STAGES: [Stage; 6] = [
+pub const ALL_STAGES: [Stage; 7] = [
     Stage::Start,
     Stage::Sources,
     Stage::Compose,
     Stage::Review,
     Stage::Preview,
-    Stage::Publish,
+    Stage::PublishLocal,
+    Stage::PublishRemote,
 ];
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -36,7 +38,7 @@ pub enum Progress {
 /// `current`; it never derives from or mutates server state itself.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct StageModel {
-    pub progress: [Progress; 6],
+    pub progress: [Progress; 7],
     pub default_current: Stage,
 }
 
@@ -74,7 +76,8 @@ const fn stage_index(stage: Stage) -> usize {
         Stage::Compose => 2,
         Stage::Review => 3,
         Stage::Preview => 4,
-        Stage::Publish => 5,
+        Stage::PublishLocal => 5,
+        Stage::PublishRemote => 6,
     }
 }
 
@@ -116,7 +119,7 @@ pub fn map_workflow(
 
     let Some(workflow) = workflow else {
         return StageModel {
-            progress: [Available, Locked, Locked, Locked, Locked, Locked],
+            progress: [Available, Locked, Locked, Locked, Locked, Locked, Locked],
             default_current: Stage::Start,
         };
     };
@@ -131,7 +134,7 @@ pub fn map_workflow(
             ) =>
         {
             StageModel {
-                progress: [Done, Available, Locked, Locked, Locked, Locked],
+                progress: [Done, Available, Locked, Locked, Locked, Locked, Locked],
                 default_current: Stage::Sources,
             }
         }
@@ -149,12 +152,12 @@ pub fn map_workflow(
                 Locked
             };
             StageModel {
-                progress: [Done, Stale, compose, Locked, Locked, Locked],
+                progress: [Done, Stale, compose, Locked, Locked, Locked, Locked],
                 default_current: Stage::Sources,
             }
         }
         "sources-confirmed" => StageModel {
-            progress: [Done, Done, Available, Locked, Locked, Locked],
+            progress: [Done, Done, Available, Locked, Locked, Locked, Locked],
             default_current: Stage::Compose,
         },
         "composing"
@@ -164,25 +167,31 @@ pub fn map_workflow(
             ) =>
         {
             StageModel {
-                progress: [Done, Done, Available, Stale, Locked, Locked],
+                progress: [Done, Done, Available, Stale, Locked, Locked, Locked],
                 default_current: Stage::Compose,
             }
         }
         "composing" => StageModel {
-            progress: [Done, Done, Available, Available, Locked, Locked],
+            progress: [Done, Done, Available, Available, Locked, Locked, Locked],
             default_current: Stage::Compose,
         },
         "entry-confirmed" | "output-planned" => StageModel {
-            progress: [Done, Done, Done, Done, Available, Locked],
+            progress: [Done, Done, Done, Done, Available, Locked, Locked],
             default_current: Stage::Preview,
         },
-        "approved" | "publishing" | "partial" | "completed" => StageModel {
-            progress: [Done, Done, Done, Done, Done, Available],
-            default_current: Stage::Publish,
+        "approved" | "publishing" | "partial" => StageModel {
+            progress: [Done, Done, Done, Done, Done, Available, Locked],
+            default_current: Stage::PublishLocal,
+        },
+        // The verified local write completes the day; remotes are optional
+        // and can be pushed any time afterward.
+        "completed" => StageModel {
+            progress: [Done, Done, Done, Done, Done, Done, Available],
+            default_current: Stage::PublishLocal,
         },
         _ => StageModel {
             // Fail closed: an unknown state is never treated as Start.
-            progress: [Locked, Locked, Locked, Locked, Locked, Locked],
+            progress: [Locked, Locked, Locked, Locked, Locked, Locked, Locked],
             default_current: Stage::Start,
         },
     }
@@ -198,6 +207,7 @@ mod tests {
             progress: [
                 Progress::Done,
                 Progress::Available,
+                Progress::Locked,
                 Progress::Locked,
                 Progress::Locked,
                 Progress::Locked,
@@ -300,7 +310,7 @@ mod tests {
     }
 
     #[test]
-    fn later_states_unlock_preview_then_publish() {
+    fn later_states_unlock_preview_then_publish_local_then_remote() {
         for state in [
             "entry-confirmed",
             "output-planned",
@@ -317,8 +327,14 @@ mod tests {
                 "{state}"
             );
             assert_eq!(
-                model.progress_of(Stage::Publish) == Progress::Locked,
+                model.progress_of(Stage::PublishLocal) == Progress::Locked,
                 matches!(state, "entry-confirmed" | "output-planned"),
+                "{state}"
+            );
+            // Remotes unlock only once the verified local write completed the day.
+            assert_eq!(
+                model.progress_of(Stage::PublishRemote) == Progress::Locked,
+                state != "completed",
                 "{state}"
             );
         }

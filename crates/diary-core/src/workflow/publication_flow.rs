@@ -197,7 +197,7 @@ impl Workflow {
         // A stale, unapproved preview (`OutputPlanned`) may be re-previewed.
         if !matches!(
             self.state,
-            WorkflowState::Partial | WorkflowState::OutputPlanned
+            WorkflowState::Partial | WorkflowState::Completed | WorkflowState::OutputPlanned
         ) {
             return Err(WorkflowError::WrongState);
         }
@@ -209,15 +209,10 @@ impl Workflow {
             .iter()
             .find(|item| item.destination == destination)
             .ok_or(WorkflowError::UnknownDestination)?;
-        // An amendment's Notion conflict is resolved by rereading: the section
-        // is previewed again against its receipt and needs a fresh approval.
-        let rereading_amendment =
-            self.amendment.is_some() && progress.status == DestinationStatus::Conflict;
         if !matches!(
             progress.status,
             DestinationStatus::Blocked | DestinationStatus::Pending
-        ) && !rereading_amendment
-        {
+        ) {
             return Err(WorkflowError::RetryNeedsPreview);
         }
         let old_plan = self
@@ -241,13 +236,9 @@ impl Workflow {
         .map_err(|_| WorkflowError::PlanBindingMismatch)?;
         self.output_plan = Some(plan.clone());
         self.approval = None;
-        if rereading_amendment {
-            for item in &mut self.destination_progress {
-                if item.destination == destination {
-                    item.status = DestinationStatus::Pending;
-                }
-            }
-        }
+        // A completed day leaves `Completed` for the remote preview; the
+        // completing publication sets the timestamp again.
+        self.all_verified_at = None;
         self.advance(WorkflowState::OutputPlanned, now);
         Ok(plan)
     }
@@ -257,7 +248,10 @@ impl Workflow {
         destination: &str,
         rechecked_plan_digest: &Digest,
     ) -> bool {
-        if self.state != WorkflowState::Partial {
+        if !matches!(
+            self.state,
+            WorkflowState::Partial | WorkflowState::Completed
+        ) {
             return false;
         }
         let locals_verified = self.output_plan.as_ref().is_some_and(|plan| {
@@ -290,6 +284,7 @@ impl Workflow {
             .ok_or(WorkflowError::MissingApproval)?
             .destination_only = Some(destination.to_owned());
         self.job_status = Some(JobStatus::Running);
+        self.all_verified_at = None;
         self.advance(WorkflowState::Publishing, now);
         Ok(())
     }
@@ -421,9 +416,9 @@ impl Workflow {
         if remote_verified && !every_local_verified {
             return Err(WorkflowError::LocalMustBeVerified);
         }
-        let all_verified = progress
-            .iter()
-            .all(|item| item.status == DestinationStatus::Verified);
+        // P1-M22: the verified local write completes the day. Remote rows keep
+        // their own status and never hold the day open.
+        let all_verified = every_local_verified;
         self.destination_progress = progress;
         self.job_status = Some(JobStatus::Completed);
         self.all_verified_at = all_verified.then_some(now);
@@ -450,7 +445,11 @@ impl Workflow {
         now: Timestamp,
     ) -> Result<(), WorkflowError> {
         self.expect_revision(expected_revision)?;
-        if self.state != WorkflowState::Partial || self.approval.is_none() {
+        if !matches!(
+            self.state,
+            WorkflowState::Partial | WorkflowState::Completed
+        ) || self.approval.is_none()
+        {
             return Err(WorkflowError::WrongState);
         }
         let status_of = |destination: &str| {
@@ -475,12 +474,17 @@ impl Workflow {
             }
         }
         self.job_status = Some(JobStatus::Completed);
-        let all_verified = self
-            .destination_progress
-            .iter()
-            .all(|item| item.status == DestinationStatus::Verified);
-        self.all_verified_at = all_verified.then_some(now);
-        if all_verified {
+        if self.state == WorkflowState::Completed {
+            // The day was completed by its local write; only the remote row
+            // changed.
+            self.bump(now);
+            return Ok(());
+        }
+        let locals_verified = self.output_plan.as_ref().is_some_and(|plan| {
+            ensure_every_local_verified(plan, &self.destination_progress).is_ok()
+        });
+        self.all_verified_at = locals_verified.then_some(now);
+        if locals_verified {
             self.amendment = None;
             self.advance(WorkflowState::Completed, now);
         } else {

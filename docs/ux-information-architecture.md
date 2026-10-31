@@ -18,7 +18,8 @@ Terminal client
 │   │   ├── Compose
 │   │   ├── Review
 │   │   ├── Preview
-│   │   └── Publish
+│   │   ├── Publish Local
+│   │   └── Publish Remote
 │   ├── Resources Sidebar (middle)
 │   │   └── Contextual source notes, draft, assistant suggestions, or destinations
 │   └── Main Pane (right)
@@ -46,7 +47,8 @@ containment wireframe, not a final pixel specification:
 │ available Compose │ [ ] note-c  warning  │ Read-only sanitized source text  │
 │ locked Review     │                      │                                  │
 │ locked Preview    │ Include  Exclude     │                                  │
-│ locked Publish    │ Prepare  Confirm     │                                  │
+│ locked Publish L… │ Prepare  Confirm     │                                  │
+│ locked Publish R… │                      │                                  │
 ├───────────────────┴──────────────────────┴──────────────────────────────────┤
 │ Command Line                                                                │
 ├─────────────────────────────────────────────────────────────────────────────┤
@@ -172,7 +174,7 @@ Status Line.
   action. It is read-only and non-focusable. A condition requiring a decision
   still uses a Banner and focused controls in the Main Pane.
 - **Workflow Sidebar** is the left sidebar zone and always represents the canonical
-  `Start`, `Sources`, `Compose`, `Review`, `Preview`, and `Publish` sequence. It
+  `Start`, `Sources`, `Compose`, `Review`, `Preview`, `Publish Local`, and `Publish Remote` sequence. It
   marks each stage `done`, `available`, `locked`, or `stale`, plus exactly one
   accessible stage as `current`, and supports jump-to-stage navigation where
   the state permits it. It does not
