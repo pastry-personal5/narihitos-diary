@@ -59,7 +59,6 @@ fn destination_lines(item: &DestinationReadinessDto) -> Vec<String> {
     let state = match item.readiness.as_str() {
         "ready" => "READY",
         "not-ready" => "NOT READY",
-        "conflict" => "CONFLICT",
         "published" => "PUBLISHED",
         _ => "UNKNOWN",
     };
@@ -97,7 +96,7 @@ pub fn reason_text(reason: &str, readiness: &str) -> String {
         "notion-retry-deferred" => "Notion asked to try again later.".to_owned(),
         "notion-render-invalid" => "The entry could not be converted to Notion blocks.".to_owned(),
         "notion-same-day-conflict" => {
-            "Notion already has different content for this day.".to_owned()
+            "Notion has duplicate or malformed sections for this day.".to_owned()
         }
         "notion-write-ambiguous" => {
             "An earlier Notion write may or may not have landed.".to_owned()

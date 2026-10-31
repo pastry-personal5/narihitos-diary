@@ -34,10 +34,10 @@ source preparation and confirmation, explicit no-notes continuation, writing
 settings, assistant backend selection, memory extraction/review, draft
 requests/results, paragraph-review suggestions/resolution, opening the Draft
 editor for manual composition, entry save/confirmation, jobs, and events.
-P1-M9 exposes local output preview/approval/publication resources; P1-M10 adds
-separate Notion-only preview/approval/publication resources after a verified
-local receipt. Notion previews contain safe path labels and exact projected
-blocks, never credentials or remote IDs.
+P1-M9 exposes local output preview/approval/publication resources; P1-M10
+originally added separate Notion-only preview/approval/publication resources
+after a verified local receipt. Notion previews contain safe path labels and
+exact projected blocks, never credentials or remote IDs.
 P1-M11 adds amendment resources under
 `/v1/workflows/{id}/amendments`: `POST` seeds an amendment on a `Completed` day
 (`201`, workflow with an `amendment` object whose `hand_edited` flag drives the
@@ -64,7 +64,11 @@ read-only per-remote check; `POST .../remotes/{name}/pushes` takes the previewed
 approval. A remote that changed since its preview fails the job with
 `precondition-failed`, and the client shows the preview again. A blocked Notion
 month page carries `page_url` in its preview, only in that state. The local
-preview no longer carries any iCloud or Notion field, and the earlier
+file and Notion accept `append` or `overwrite` for existing content; iCloud
+accepts only `overwrite`, keeping its copy byte-identical to the local file.
+Persisted destination `conflict` values from earlier versions load as `changed`;
+readiness returns `ready`, `not-ready`, or `published`.
+The local preview no longer carries any iCloud or Notion field, and the earlier
 `notion-previews`, `notion-approvals`, `notion-publications`, and `readiness`
 routes are gone. See the
 [remote publication design](superpowers/specs/2026-10-31-remote-publication-stages-design.md).

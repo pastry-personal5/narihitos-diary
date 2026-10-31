@@ -304,9 +304,9 @@ fn notion_blocked_and_conflict_name_their_reason_and_next_step() {
             "retry-later",
         ),
         (
-            NotionPreflightStatus::Conflict,
+            NotionPreflightStatus::Existing,
             "notion-same-day-conflict",
-            Readiness::Conflict,
+            Readiness::NotReady,
             "check-notion-page",
         ),
     ];

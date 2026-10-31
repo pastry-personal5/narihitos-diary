@@ -728,7 +728,7 @@ pub struct Approval {
 pub enum DestinationStatus {
     Pending,
     Blocked,
-    Conflict,
+    Changed,
     Verified,
     Reconciling,
 }
@@ -739,7 +739,7 @@ impl DestinationStatus {
         match self {
             Self::Pending => "pending",
             Self::Blocked => "blocked",
-            Self::Conflict => "conflict",
+            Self::Changed => "changed",
             Self::Verified => "verified",
             Self::Reconciling => "reconciling",
         }
@@ -749,7 +749,9 @@ impl DestinationStatus {
         match value {
             "pending" => Ok(Self::Pending),
             "blocked" => Ok(Self::Blocked),
-            "conflict" => Ok(Self::Conflict),
+            // Older workflow rows used `conflict`; reopen them as changed so
+            // the next preview can bind to the content now on disk.
+            "conflict" | "changed" => Ok(Self::Changed),
             "verified" => Ok(Self::Verified),
             "reconciling" => Ok(Self::Reconciling),
             _ => Err(ValueError::new("unknown destination status")),
@@ -965,6 +967,19 @@ fn nonempty(value: String, name: &'static str) -> Result<String, ValueError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn old_conflict_rows_reopen_as_changed() {
+        assert_eq!(
+            DestinationStatus::parse("conflict"),
+            Ok(DestinationStatus::Changed)
+        );
+        assert_eq!(
+            DestinationStatus::parse("changed"),
+            Ok(DestinationStatus::Changed)
+        );
+        assert_eq!(DestinationStatus::Changed.as_str(), "changed");
+    }
 
     #[test]
     fn refine_source_action_as_str_is_refine_source() {

@@ -82,7 +82,7 @@ pub trait WorkflowStore {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum IntentTerminal {
     DefiniteNoEffect,
-    Conflict,
+    Changed,
 }
 
 impl IntentTerminal {
@@ -90,7 +90,7 @@ impl IntentTerminal {
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::DefiniteNoEffect => "definite-no-effect",
-            Self::Conflict => "conflict",
+            Self::Changed => "changed",
         }
     }
 }
@@ -174,7 +174,9 @@ pub struct NotionBlockPreview {
 pub enum NotionPreflightStatus {
     Ready,
     Blocked,
-    Conflict,
+    /// A same-day section is already present; inspect it before choosing a
+    /// safe update or showing a page repair path.
+    Existing,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -256,7 +258,7 @@ pub struct NotionExtendRequest {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct NotionReplacePreflight {
     /// `observed_state_digest` is the digest of the verified owned section.
-    /// A mismatch reports `Conflict` with the reason.
+    /// A mismatch reports `Existing` with the reason.
     pub preflight: NotionPreflight,
     pub current_blocks: Vec<NotionBlockPreview>,
 }

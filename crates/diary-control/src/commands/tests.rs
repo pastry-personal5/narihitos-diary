@@ -144,11 +144,11 @@ fn notion_binding_refusal_names_the_first_departure() {
     );
     assert_eq!(
         notion_binding_refusal(
-            &preflight(NotionPreflightStatus::Conflict, "root", "payload", "state"),
+            &preflight(NotionPreflightStatus::Existing, "root", "payload", "state"),
             &target,
             true
         ),
-        Some("notion-preflight-conflict")
+        Some("notion-preflight-existing")
     );
     assert_eq!(
         notion_binding_refusal(

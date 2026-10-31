@@ -91,7 +91,7 @@ impl CommandService {
             })?;
             let status = match result {
                 PublicationResult::Verified(_) => DestinationStatus::Verified,
-                PublicationResult::Conflict => DestinationStatus::Conflict,
+                PublicationResult::Conflict => DestinationStatus::Changed,
                 PublicationResult::SafeToRetry => DestinationStatus::Pending,
                 _ => continue,
             };
@@ -165,7 +165,7 @@ impl CommandService {
             let status = match output.inspect(&day, &payload) {
                 Ok(LocalOutputState::Identical) if receipted => DestinationStatus::Verified,
                 Ok(LocalOutputState::Absent) if !receipted => DestinationStatus::Pending,
-                Ok(_) => DestinationStatus::Conflict,
+                Ok(_) => DestinationStatus::Changed,
                 Err(_) => continue,
             };
             let revision = workflow.revision();
@@ -243,7 +243,7 @@ impl CommandService {
             .map_err(|_| CommandError::NotionUnavailable)?;
             let status = match result {
                 PublicationResult::Verified(_) => DestinationStatus::Verified,
-                PublicationResult::Conflict => DestinationStatus::Conflict,
+                PublicationResult::Conflict => DestinationStatus::Changed,
                 PublicationResult::SafeToRetry => DestinationStatus::Pending,
                 _ => continue,
             };

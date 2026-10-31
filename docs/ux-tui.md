@@ -11,9 +11,10 @@ component vocabulary is in [ux-terms.md](ux-terms.md).
 The `nd` terminal client implements Start → Sources → Compose → Review,
 including M8 backend selection, two-pass memory review and drafting, paragraph
 suggestions, assistant job progress/cancellation, and manual fallback. P1-M9
-adds the local Preview and Publish controls. P1-M10 now adds the separate
-Notion-only preview, approval, and publication controls after local read-back
-is verified; live hierarchy qualification remains pending owner authorization.
+adds the local Preview and Publish controls. P1-M22 splits the tail into
+local-only Preview, Publish Local, and Publish Remote, with iCloud and Notion
+listed and pushed independently after local read-back is verified; live Notion
+hierarchy qualification remains pending owner authorization.
 The adaptive shell keeps both sidebars inline at 120 columns or wider, overlays
 Resources from 100 through 119, and opens either focused sidebar over the Main
 Pane from 80 through 99. Work Status keeps its four content rows, while Command
@@ -100,18 +101,25 @@ second row carries a `Tip:` naming the next step to the following stage. See
   the ordered native blocks produced by lossless Markdown conversion. Show
   conflicts and partial success plainly.
 - Preview shows only the local file and never mentions a remote. Publish Local
-  shows the local save and, once the day is completed, points to Publish Remote.
+  shows the confirmed diary entry in a distinct foreground color, the local
+  save, and, once the day is completed, points to Publish Remote.
   Publish Remote lists the remotes (iCloud, Notion) in the Resources Sidebar with
   a status (`Not pushed`, `Exists`, `Pushed`, `Blocked`); the Main Pane shows the
-  selected remote's menu: Show what will be pushed, Check readiness, Append and
-  Overwrite (only while it holds content, which is shown automatically), and Push.
+  selected remote's menu: Show what will be pushed, Check readiness, and Push.
+  The confirmed diary entry to be pushed is shown there in the same distinct
+  foreground color.
+  Existing content is shown automatically; Notion offers Append and Overwrite,
+  while iCloud offers only Overwrite to preserve byte identity with the local file.
+  Existing local or remote content uses a second distinct foreground color, so
+  it is visually separate from both controls and the entry to publish. Both
+  existing and proposed diary prose are indented beneath their headings.
   Push is the approval; Overwrite asks for a second Enter and Esc cancels. A
   blocked Notion month page shows a warning and a URL to fix it by hand. A remote
   failure never raises a modal and never
   fails the local publication.
 - Each remote's menu offers a manual `Check readiness` control. Nothing runs
   automatically. It shows `Not checked` before a check and `Checking...` during
-  one, then `READY`, `NOT READY`, `CONFLICT`, or `PUBLISHED` with a
+  one, then `READY`, `NOT READY`, or `PUBLISHED` with a
   plain-language reason and next step. The check is read-only, needs no mutation
   authority, and its answer clears when the workflow revision, day, or remote
   changes.
@@ -122,8 +130,8 @@ second row carries a `Tip:` naming the next step to the following stage. See
   local file already holds something else, the plan defaults to **Append**, which
   keeps what is there and adds the entry below it, so it can be approved as it
   stands. **Overwrite** stays an explicit choice and never happens on its own.
-  Content already at a remote is shown in that remote's menu with the same two
-  choices. If a file changes after it was previewed or approved, the screen says
+  Content already at a remote is shown in that remote's menu: Notion offers both
+  choices, and iCloud offers Overwrite. If a file changes after it was previewed or approved, the screen says
   so in plain words and shows it again (an approval that is refused previews the
   file again automatically), as described in
   [Publication and recovery](architecture.md#publication-and-recovery).
@@ -133,15 +141,12 @@ second row carries a `Tip:` naming the next step to the following stage. See
   the preview shows an existing entry. Choosing one re-previews the exact plan: a
   `Mode:` line, the existing content, and the resulting content (for a file, the
   planned backup name). Overwrite asks for a second Enter and Esc cancels;
-  Append needs none because the existing text is kept. Remotes offer the same
-  two in their own menu.
-- When Notion is unconfigured, unreachable, or fails its preflight, show it as
-  blocked in the preview and still allow the local entry to be approved and
-  written. Notion can be retried later: a blocked destination needs a new
-  Notion-only preview and approval, and a pending one reuses the approval only
-  while its plan is unchanged. The Preview and Publish controls are shared:
-  once the local file is verified, the same preview, approve, and publish
-  actions target Notion only and never rewrite the local file.
+  Append needs none because the existing text is kept. Notion offers both
+  choices in its own menu; iCloud offers only Overwrite.
+- When Notion is unconfigured, unreachable, or has a page that cannot be
+  changed safely, show it as Blocked in its remote menu without affecting the
+  local file. Check readiness after repairing the page to refresh the preview;
+  a push uses only the plan shown there.
 - Offer to amend a completed day. The editor opens with the saved text and, if
   the file was hand-edited, a banner saying it changed since publication. The
   amendment preview shows the current file against its replacement, nothing

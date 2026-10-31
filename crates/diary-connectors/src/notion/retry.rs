@@ -8,7 +8,7 @@ pub enum RetryAction {
     Pending,
     InspectAmbiguousWrite,
     Blocked,
-    Conflict,
+    Changed,
     Exhausted,
 }
 
@@ -53,7 +53,7 @@ impl RetryPolicy {
             )),
             Some(401 | 403 | 404) => RetryAction::Blocked,
             Some(400) => RetryAction::Blocked,
-            Some(409) => RetryAction::Conflict,
+            Some(409) => RetryAction::Changed,
             None if is_write => RetryAction::InspectAmbiguousWrite,
             None => RetryAction::RetryAfter(Duration::from_secs(
                 1_u64 << u32::from(self.attempts.saturating_sub(1)),

@@ -488,7 +488,7 @@ fn notion_binding_refusal(
     match preflight.status {
         NotionPreflightStatus::Ready => {}
         NotionPreflightStatus::Blocked => return Some("notion-preflight-blocked"),
-        NotionPreflightStatus::Conflict => return Some("notion-preflight-conflict"),
+        NotionPreflightStatus::Existing => return Some("notion-preflight-existing"),
     }
     if check_target && preflight.target_identity != target.target_identity {
         Some("notion-target-changed")

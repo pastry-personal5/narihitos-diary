@@ -9,8 +9,8 @@ use diary_connectors::{LocalOutput, SqliteStore};
 use diary_control::CommandService;
 use diary_control::ServerConfig;
 use diary_core::{
-    CatalogRequest, Clock, DiaryDay, Digest, DraftAssistantRegistry, FreshnessOutcome,
-    InspectionOutcome, NotionBlockPreview, NotionOutputPort, NotionPreflight,
+    CatalogRequest, Clock, DestinationStatus, DiaryDay, Digest, DraftAssistantRegistry,
+    FreshnessOutcome, InspectionOutcome, NotionBlockPreview, NotionOutputPort, NotionPreflight,
     NotionPreflightStatus, NotionRequest, OperationLog, SourceAccessError, SourceCatalog,
     SourceDiscovery, SourceReadOutcome, SourceReader, SourceRef, SourceSnapshot, StartOutcome,
     Timestamp, Workflow, WriteOutcome, WritingLanguage, WritingStyle,
@@ -135,6 +135,7 @@ enum Mode {
 
 struct Inner {
     status: NotionPreflightStatus,
+    reason: Option<&'static str>,
     observed: &'static [u8],
     mode: Mode,
     inspect: InspectionOutcome,
@@ -147,6 +148,7 @@ impl Scripted {
     fn new() -> Arc<Self> {
         Arc::new(Self(Mutex::new(Inner {
             status: NotionPreflightStatus::Ready,
+            reason: None,
             observed: b"empty",
             mode: Mode::Verify,
             inspect: InspectionOutcome::Absent,
@@ -182,9 +184,17 @@ impl NotionOutputPort for Scripted {
                 depth: 0,
             }],
             status: inner.status,
-            reason: (inner.status != NotionPreflightStatus::Ready)
-                .then(|| "notion-permission-denied".to_owned()),
+            reason: (inner.status != NotionPreflightStatus::Ready).then(|| {
+                inner
+                    .reason
+                    .unwrap_or("notion-permission-denied")
+                    .to_owned()
+            }),
         })
+    }
+
+    fn month_page_url(&self, _: &DiaryDay) -> Option<String> {
+        Some("https://www.notion.so/0123456789abcdef0123456789abcdef".to_owned())
     }
 
     fn write(&self, _: &NotionRequest, cancelled: &AtomicBool) -> WriteOutcome {
@@ -349,7 +359,7 @@ fn blocked_and_conflict_previews_carry_no_plan_and_need_a_new_approval() {
     let partial = partial(&service, &day);
     for status in [
         NotionPreflightStatus::Blocked,
-        NotionPreflightStatus::Conflict,
+        NotionPreflightStatus::Existing,
     ] {
         notion.set(|inner| inner.status = status);
         let preview = service.preview_notion(&day, partial.revision()).unwrap();
@@ -446,16 +456,21 @@ fn conflicting_remote_stops_only_notion_and_keeps_local_verified() {
     let approved = approved(&service, &day);
     notion.set(|inner| inner.mode = Mode::Conflict);
     let conflicted = service.publish_notion(&day, approved.revision()).unwrap();
-    assert_eq!(notion_status(&conflicted), "conflict");
+    assert_eq!(notion_status(&conflicted), "changed");
     assert_eq!(
         conflicted.destination_progress()[0].status.as_str(),
         "verified"
     );
+    // A changed remote outcome must leave the day open to a fresh preview.
+    notion.set(|inner| inner.mode = Mode::Verify);
+    let refreshed = service.preview_notion(&day, conflicted.revision()).unwrap();
+    assert!(refreshed.plan_digest.is_some());
+    assert_eq!(refreshed.status, DestinationStatus::Pending);
 }
 
 #[test]
 fn real_api_worker_runs_the_notion_only_flow_through_restart() {
-    let (scratch, store, _notion, service) = setup();
+    let (scratch, store, notion, service) = setup();
     let day = DiaryDay::parse("2026-10-30").unwrap();
     let partial = partial(&service, &day);
     let runtime = tokio::runtime::Builder::new_multi_thread()
@@ -546,15 +561,135 @@ fn real_api_worker_runs_the_notion_only_flow_through_restart() {
         }
     }
     worker
-        .try_send(Intent::GetWorkflow { workflow_id: id })
+        .try_send(Intent::GetWorkflow {
+            workflow_id: id.clone(),
+        })
         .unwrap();
-    match wait_result(&worker) {
+    let completed_revision = match wait_result(&worker) {
         WorkerResult::WorkflowFetched(outcome) => match *outcome {
             ClientOutcome::Ok(workflow) => {
                 assert_eq!(workflow.state, "completed");
                 assert_eq!(workflow.notion_status.as_deref(), Some("verified"));
+                workflow.revision
             }
             _ => panic!("reload failed"),
+        },
+        _ => panic!("wrong worker result"),
+    };
+    notion.set(|inner| {
+        inner.status = NotionPreflightStatus::Existing;
+        inner.reason = Some("notion-same-day-conflict");
+    });
+    worker
+        .try_send(Intent::PreviewRemote {
+            workflow_id: id.clone(),
+            revision: completed_revision,
+            remote: "notion".to_owned(),
+            existing_mode: None,
+        })
+        .unwrap();
+    match wait_result(&worker) {
+        WorkerResult::RemotePreviewed(outcome) => match *outcome {
+            ClientOutcome::Ok(preview) => {
+                assert_eq!(preview.status, "blocked");
+                assert!(preview.plan_digest.is_none());
+                assert_eq!(
+                    preview.page_url.as_deref(),
+                    Some("https://www.notion.so/0123456789abcdef0123456789abcdef")
+                );
+            }
+            _ => panic!("blocked preview failed"),
+        },
+        _ => panic!("wrong worker result"),
+    }
+    notion.set(|inner| {
+        inner.status = NotionPreflightStatus::Ready;
+        inner.reason = None;
+    });
+    worker
+        .try_send(Intent::CheckRemote {
+            workflow_id: id.clone(),
+            revision: completed_revision,
+            remote: "notion".to_owned(),
+        })
+        .unwrap();
+    match wait_result(&worker) {
+        WorkerResult::RemoteChecked(outcome) => match *outcome {
+            ClientOutcome::Ok(report) => assert_eq!(report.readiness.readiness, "ready"),
+            _ => panic!("readiness failed"),
+        },
+        _ => panic!("wrong worker result"),
+    }
+    worker
+        .try_send(Intent::PreviewRemote {
+            workflow_id: id.clone(),
+            revision: completed_revision,
+            remote: "notion".to_owned(),
+            existing_mode: None,
+        })
+        .unwrap();
+    let repaired = match wait_result(&worker) {
+        WorkerResult::RemotePreviewed(outcome) => match *outcome {
+            ClientOutcome::Ok(preview) => preview,
+            _ => panic!("repaired preview failed"),
+        },
+        _ => panic!("wrong worker result"),
+    };
+    assert_eq!(repaired.status, "not-pushed");
+    let stale_digest = repaired.plan_digest.clone().unwrap();
+
+    // The remote moves after the preview. The asynchronous job exposes the
+    // v9 precondition token, and another preview binds a fresh plan instead of
+    // leaving the day in a conflict/stall state.
+    notion.set(|inner| inner.observed = b"remote-changed");
+    worker
+        .try_send(Intent::PushRemote {
+            workflow_id: id.clone(),
+            revision: repaired.workflow.revision,
+            remote: "notion".to_owned(),
+            plan_digest: stale_digest.clone(),
+            existing_mode: None,
+        })
+        .unwrap();
+    let job_id = match wait_result(&worker) {
+        WorkerResult::RemotePushed(ClientOutcome::Ok(job)) => job.job_id,
+        _ => panic!("changed-remote job not accepted"),
+    };
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        worker
+            .try_send(Intent::PollJob {
+                job_id: job_id.clone(),
+            })
+            .unwrap();
+        match wait_result(&worker) {
+            WorkerResult::JobStatus(ClientOutcome::Ok(job))
+                if job.status == diary_control_contract::job_status::FAILED =>
+            {
+                assert_eq!(job.error_code.as_deref(), Some("precondition-failed"));
+                break;
+            }
+            WorkerResult::JobStatus(ClientOutcome::Ok(_)) if Instant::now() < deadline => {
+                std::thread::sleep(Duration::from_millis(20));
+            }
+            _ => panic!("changed-remote job did not fail safely"),
+        }
+    }
+    worker
+        .try_send(Intent::PreviewRemote {
+            workflow_id: id.clone(),
+            revision: repaired.workflow.revision,
+            remote: "notion".to_owned(),
+            existing_mode: None,
+        })
+        .unwrap();
+    match wait_result(&worker) {
+        WorkerResult::RemotePreviewed(outcome) => match *outcome {
+            ClientOutcome::Ok(preview) => {
+                assert_eq!(preview.status, "not-pushed");
+                assert_ne!(preview.plan_digest.as_deref(), Some(stale_digest.as_str()));
+            }
+            _ => panic!("changed-remote refresh failed"),
         },
         _ => panic!("wrong worker result"),
     }

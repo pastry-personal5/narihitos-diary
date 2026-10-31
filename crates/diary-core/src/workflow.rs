@@ -123,7 +123,7 @@ impl Workflow {
         ) || !self
             .destination_progress
             .iter()
-            .any(|item| item.destination == "local" && item.status == DestinationStatus::Conflict)
+            .any(|item| item.destination == "local" && item.status == DestinationStatus::Changed)
         {
             return Err(WorkflowError::WrongState);
         }

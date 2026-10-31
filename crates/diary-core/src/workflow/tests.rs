@@ -885,7 +885,7 @@ fn pending_remote_reuses_approval_only_after_local_verifies_and_digest_matches()
             vec![
                 DestinationProgress {
                     destination: "local".to_owned(),
-                    status: DestinationStatus::Conflict,
+                    status: DestinationStatus::Changed,
                 },
                 DestinationProgress {
                     destination: "remote".to_owned(),
@@ -1026,7 +1026,7 @@ fn mirror_conflict_preview_still_allows_approval() {
             plan.clone(),
             progress_of(&[
                 ("local", DestinationStatus::Pending),
-                ("icloud", DestinationStatus::Conflict),
+                ("icloud", DestinationStatus::Changed),
                 ("notion", DestinationStatus::Blocked),
             ]),
             time(21),
@@ -1041,7 +1041,7 @@ fn mirror_conflict_preview_still_allows_approval() {
 fn mirror_conflict_leaves_local_verified_and_day_completed() {
     let workflow = mirror_publishing(
         DestinationStatus::Verified,
-        DestinationStatus::Conflict,
+        DestinationStatus::Changed,
         DestinationStatus::Verified,
     );
     assert_eq!(workflow.state(), WorkflowState::Completed);

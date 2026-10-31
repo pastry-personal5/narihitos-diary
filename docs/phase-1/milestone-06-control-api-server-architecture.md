@@ -276,7 +276,7 @@ and `duration_ms`. `event=readiness-check` summarizes the request with
 `reason` (`stale-revision`, `reconciling`, `not-found`, or `state-unavailable`)
 when the request was rejected before any destination ran. A failed
 `notion-publication` job now logs the exact binding that changed
-(`notion-preflight-blocked`, `notion-preflight-conflict`, `notion-target-changed`,
+(`notion-preflight-blocked`, `notion-preflight-existing`, `notion-target-changed`,
 `notion-payload-changed`, or `notion-state-changed`) as its `reason`.
 
 **Log compatibility contract.** The writer is strict: it emits only the closed

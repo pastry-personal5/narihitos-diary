@@ -3,11 +3,12 @@
 //! Remotes (iCloud, Notion) are listed in the Resources Sidebar. Selecting one
 //! shows what it already holds without asking, and a menu to see what would be
 //! pushed, check readiness, and push. Content already at the remote is never a
-//! dead end: Append and Overwrite are offered in place.
+//! dead end: Notion offers Append and Overwrite; iCloud offers Overwrite.
 
 use diary_control_contract::{RemoteDto, RemotePreviewDto};
 
 use crate::focus::{FocusModel, FocusZone};
+use crate::main_pane::indent_diary_block;
 use crate::readiness_view::{ReadinessView, readiness_block, reason_text};
 
 /// One entry of a remote's menu, in display order.
@@ -44,7 +45,9 @@ pub fn controls(preview: Option<&RemotePreviewDto>) -> Vec<RemoteControl> {
     let mut controls = vec![RemoteControl::ShowPlan, RemoteControl::CheckReadiness];
     if let Some(preview) = preview {
         if preview.status == "exists" {
-            controls.push(RemoteControl::Append);
+            if preview.id == "notion" {
+                controls.push(RemoteControl::Append);
+            }
             controls.push(RemoteControl::Overwrite);
         }
         if preview.plan_digest.is_some() {
@@ -82,11 +85,13 @@ pub fn mode_line(mode: &str) -> &'static str {
 
 /// The Main Pane body for the selected remote.
 #[must_use]
+#[allow(clippy::too_many_arguments)]
 pub fn remote_screen_body(
     focus: &FocusModel,
     completed: bool,
     remote: Option<&RemoteDto>,
     preview: Option<&RemotePreviewDto>,
+    diary_entry: Option<&str>,
     readiness: &ReadinessView,
     loading: bool,
     overwrite_pending: bool,
@@ -95,7 +100,9 @@ pub fn remote_screen_body(
         return "Publish to Local first. Remotes unlock once the local file is saved.\n".to_owned();
     }
     let Some(remote) = remote else {
-        return "No remotes yet.\n".to_owned();
+        let mut text = "No remotes yet.\n".to_owned();
+        push_diary_entry(&mut text, diary_entry);
+        return text;
     };
     let marker = |index: usize| {
         if focus.zone == FocusZone::Main && focus.main_control_index == index {
@@ -128,6 +135,7 @@ pub fn remote_screen_body(
         });
         text.push('\n');
         text.push_str(&readiness_block(readiness));
+        push_diary_entry(&mut text, diary_entry);
         return text;
     };
     if preview.status == "blocked" {
@@ -153,15 +161,12 @@ pub fn remote_screen_body(
     for change in &preview.intended_changes {
         text.push_str(&format!("Planned: {change}\n"));
     }
-    if let Some(existing) = &preview.existing_text {
+    if let Some(existing) = existing_entry_text(preview) {
         text.push_str(&format!(
-            "\nAlready there ({}):\n{existing}\n",
-            label_for(preview)
+            "\nAlready there ({}):\n{}\n",
+            label_for(preview),
+            indent_diary_block(&existing)
         ));
-    }
-    if !preview.current_blocks.is_empty() {
-        text.push_str(&format!("\nAlready there ({}):\n", label_for(preview)));
-        push_blocks(&mut text, &preview.current_blocks);
     }
     if let Some(payload) = &preview.payload
         && preview.status != "pushed"
@@ -174,7 +179,31 @@ pub fn remote_screen_body(
     }
     text.push('\n');
     text.push_str(&readiness_block(readiness));
+    push_diary_entry(&mut text, diary_entry);
     text
+}
+
+/// The exact existing-content rendering used by the Main Pane and its
+/// semantic foreground accent.
+#[must_use]
+pub fn existing_entry_text(preview: &RemotePreviewDto) -> Option<String> {
+    if let Some(existing) = &preview.existing_text {
+        return Some(existing.clone());
+    }
+    if preview.current_blocks.is_empty() {
+        return None;
+    }
+    let mut text = String::new();
+    push_blocks(&mut text, &preview.current_blocks);
+    text.pop();
+    Some(text)
+}
+
+fn push_diary_entry(text: &mut String, diary_entry: Option<&str>) {
+    if let Some(entry) = diary_entry {
+        text.push_str("\n\nDiary entry to publish:\n");
+        text.push_str(&indent_diary_block(entry));
+    }
 }
 
 fn label_for(preview: &RemotePreviewDto) -> &'static str {
@@ -184,6 +213,7 @@ fn label_for(preview: &RemotePreviewDto) -> &'static str {
     match preview.existing_mode.as_deref() {
         Some("append") => "will be appended to",
         Some("overwrite") => "will be replaced",
+        _ if preview.id == "icloud" => "choose Overwrite to back up and replace this file",
         _ => "choose Append or Overwrite",
     }
 }
@@ -274,6 +304,7 @@ mod tests {
     #[test]
     fn existing_content_offers_append_and_overwrite_and_never_a_conflict_dead_end() {
         let mut preview = preview("exists", None);
+        preview.id = "notion".to_owned();
         preview.existing_text = Some("old entry".to_owned());
         assert_eq!(
             controls(Some(&preview)),
@@ -289,18 +320,46 @@ mod tests {
             true,
             Some(&remote("exists")),
             Some(&preview),
+            Some("Today was clear.\nIt stayed quiet."),
             &ReadinessView::NotChecked,
             false,
             false,
         );
         assert!(body.contains("iCloud: Exists"));
         assert!(body.contains("old entry"));
+        assert!(body.contains("Diary entry to publish:\n  Today was clear.\n  It stayed quiet."));
         assert!(body.contains("choose Append or Overwrite"));
         assert!(!body.to_lowercase().contains("conflict"));
         // Choosing a mode adds a plan, and Push appears.
         preview.existing_mode = Some("append".to_owned());
         preview.plan_digest = Some("sha256:b".to_owned());
         assert_eq!(controls(Some(&preview)).last(), Some(&RemoteControl::Push));
+    }
+
+    #[test]
+    fn icloud_existing_content_only_offers_backup_and_overwrite() {
+        let mut preview = preview("exists", None);
+        preview.existing_text = Some("another entry".to_owned());
+        assert_eq!(
+            controls(Some(&preview)),
+            vec![
+                RemoteControl::ShowPlan,
+                RemoteControl::CheckReadiness,
+                RemoteControl::Overwrite,
+            ]
+        );
+        let body = remote_screen_body(
+            &FocusModel::default(),
+            true,
+            Some(&remote("exists")),
+            Some(&preview),
+            None,
+            &ReadinessView::NotChecked,
+            false,
+            false,
+        );
+        assert!(body.contains("choose Overwrite"));
+        assert!(!body.contains("Append"));
     }
 
     #[test]
@@ -313,6 +372,7 @@ mod tests {
             true,
             Some(&remote("blocked")),
             Some(&preview),
+            None,
             &ReadinessView::NotChecked,
             false,
             false,
@@ -330,6 +390,7 @@ mod tests {
             false,
             None,
             None,
+            None,
             &ReadinessView::NotChecked,
             false,
             false,
@@ -344,6 +405,7 @@ mod tests {
             true,
             Some(&remote("exists")),
             Some(&preview("exists", Some("sha256:c"))),
+            None,
             &ReadinessView::NotChecked,
             false,
             true,

@@ -372,7 +372,7 @@ nothing; only a mutation voids states.
 | `OutputPlanned` | The read-only preflight has run and exact per-destination previews and digests exist. | A changed entry, source digest, target, destination state, or output setting. |
 | `Approved` | An approve-capable client approves the plan digest at the current workflow revision. | Anything that voids `OutputPlanned`; a new plan. |
 | `Publishing` | The first write intent is recorded. | Nothing. Cancellation reconciles instead of undoing. |
-| `Completed` or `Partial` | Every destination is verified, or at least one is pending, blocked, or conflicting. | A retry re-enters `Publishing` for unfinished destinations only. An amendment of a `Completed` day re-enters `Composing` with its buffer seeded from the local file; source freshness checks are waived. |
+| `Completed` or `Partial` | The local destination is verified (`Completed`), or an attempted local publication still needs attention (`Partial`). Remote status never holds the day open. | A local retry re-enters `Publishing`; a remote push uses its own preview and approval after completion. An amendment of a `Completed` day re-enters `Composing` with its buffer seeded from the local file; source freshness checks are waived. |
 
 ### Publication and recovery
 
@@ -385,7 +385,7 @@ The local adapter targets configurable
 front matter with diary day and language plus the confirmed Markdown body. It
 creates a temporary file in the destination directory, flushes it, and uses a
 no-clobber finalization strategy. Same-path identical content resumes; different
-content is a conflict and is never overwritten automatically; only an
+content is differing and is never overwritten automatically; only an
 approved amendment, or an explicitly chosen and previewed Append or Overwrite
 (see [Append and Overwrite](#append-and-overwrite-of-an-existing-entry)),
 replaces a file. The local file
@@ -403,8 +403,9 @@ state, the local bytes, and the chosen mode. A push is the approval and acts
 only on a plan digest that still matches; a changed folder fails the push with
 `precondition-failed` so the client shows the preview again. Absent or identical
 content, or the copy this app wrote earlier (its latest `icloud` receipt),
-needs no choice; other existing content is `Exists` and is pushed only with
-Append (the entry added under a dated separator) or Overwrite (backed up first).
+needs no choice; other existing content is `Exists` and is pushed only with a
+backed-up Overwrite. iCloud never appends, so its bytes stay identical to the
+verified local file.
 A missing folder or an evicted (`.<name>.icloud` placeholder) file is `Blocked`.
 An uncertain write keeps its intent; `reconcile_mirror_intents` (not run at
 `nd serve` startup) resolves it by inspection before any retry. Local
@@ -463,17 +464,15 @@ payload digest) in the operation log and replaces it with the receipt
 afterward. After startup, an intent without a terminal receipt is reconciled
 in the background by reading the destination; commands for that diary day get a
 typed `Reconciling` outcome until it finishes, and other days are unaffected.
-Local success followed by remote failure is reported as `local_written,
-remote_pending`. A Notion destination that is unconfigured, unreachable, or
-fails preflight is `remote_blocked`; the preview shows it before approval, and
-the local entry can still be approved and written. A later retry reads the
-entry from the local file and requires its digest to match the receipt. A
-mismatch means the file was edited, so the entry needs reconfirmation. The
-retry then reconciles the destination before writing. A blocked Notion
-destination was never previewed, so its retry needs a new Notion-only preview
-and approval; a pending one reuses the original approval only while the
-re-checked plan digest is unchanged. No multi-destination transaction is
-claimed. See [operational constraints](research/mvp-operational-constraints.md).
+Local success completes the day regardless of remote availability. Each
+remote is then listed independently as `Not pushed`, `Exists`, `Pushed`, or
+`Blocked`; selecting it reads the verified local file, observes the remote, and
+builds a remote-only plan. A push is the approval of that exact digest. If the
+remote changes first, the push returns `precondition-failed` and the client
+shows a fresh preview. A malformed or ambiguous Notion month page is `Blocked`
+with its repair URL and can be checked again after a manual fix. No
+multi-destination transaction is claimed. See
+[operational constraints](research/mvp-operational-constraints.md).
 
 No state is a dead end (P1-M22). A local preview never reports a conflict: an
 existing different file is previewed as an Append plan (the default) or, by
@@ -493,32 +492,33 @@ amendment, not a conflict.
 
 ### Append and Overwrite of an existing entry
 
-P1-M21 lets the person resolve a differing destination without losing either
-side. The choice is a request field on the two preview routes
-(`output-previews` for the local file, and `remotes/{name}/previews` for iCloud
-and Notion), `existing_mode` of `append` or `overwrite`; without it a differing
-destination is the conflict described above. Reread, discard, and save under a
-different day are unchanged. The choice is made in the phase where the
-conflict shows and changes nothing until that exact plan is approved.
+P1-M21 lets the person resolve differing content without losing either side.
+The choice is the `existing_mode` request field on `output-previews` for the
+local file and `remotes/{name}/previews` for Notion. The local preview defaults
+to Append; Notion shows the existing section and waits for Append or Overwrite.
+iCloud accepts Overwrite only. Reread, discard, and save under a different day
+remain compatibility paths for an older local plan. The choice is made where
+the content is shown and changes nothing until that exact plan is approved.
 
 No mode is stored and there is no schema change. A plan target built to
 replace existing content sets its intended-state digest to a replacement marker
-derived from the existing and planned digests, so a plan that merely met a
-conflict can never replace anything, even on a retry. The planned local bytes
+derived from the existing and planned digests, so a plan without an approved
+choice can never replace anything, even on a retry. The planned local bytes
 are re-derived from the plan: the plain rendering (Overwrite), the file itself
 once it holds the planned bytes, or the existing file plus the Append block
 built from the plan's creation time. Existing content is bound by the
 observed-state digest, so any change since the preview voids the plan.
 
-- **Local and iCloud.** Append is the existing bytes, a newline if missing, a
+- **Local.** Append is the existing bytes, a newline if missing, a
   blank line, `---`, a blank line, `*Appended YYYY-MM-DD HH:MM*`, a blank line,
   and the new body. Overwrite first copies the file to
   `<name>.md.bak-<12 hex of its digest>`, reads the copy back, then replaces it
   atomically through the digest-guarded `replace`; a failed backup blocks the
-  write. An iCloud push receives the final local bytes (Overwrite) or the
-  existing file plus the Append block, and replaces the file the same way. Because the file may no
-  longer equal a plain rendering, `verify_local_receipt` compares it with the
-  receipt's own payload digest.
+  write. Because the file may no longer equal a plain rendering,
+  `verify_local_receipt` compares it with the receipt's own payload digest.
+- **iCloud.** A push always receives the verified local file's exact bytes.
+  Differing content can only be Overwritten after a digest-bound preview; the
+  existing file is backed up first with the same local replacement machinery.
 - **Notion.** The adapter exposes `observe_existing` (the single canonical
   same-day section with its block IDs and digest), `preflight_extend`, and
   `extend_section`; Overwrite reuses the amendment `replace_section` with a
@@ -532,7 +532,7 @@ observed-state digest, so any change since the preview voids the plan.
   (atomic rename). An interrupted Notion Append resumes without duplicates; an
   interrupted Overwrite leaves duplicate content rather than lost content, and
   a repeat Overwrite after a new preview clears it. A crash before the file
-  replace resolves as a conflict that needs a new preview.
+  replace resolves as changed content that needs a new preview.
 
 ### Amendments
 
@@ -543,31 +543,21 @@ source digests stay in the receipt, and source freshness checks are waived
 because no source text is read. If the file's digest no longer matches the
 receipt, the person hand-edited it: the editor opens with that text and a
 banner saying it changed since publication. The person edits, confirms the
-entry, and previews a replacement plan that shows, per destination, the current
-and replacement content. Approval binds the plan as usual.
+entry, and previews a local replacement plan showing the current and replacement
+file. Approval binds the plan as usual.
 
 The local replacement is atomic: write a temporary file in the destination
 directory, flush it, and rename it over the target, but only when the current
 file digest equals the digest recorded when the editor was seeded, rechecked
-immediately before the rename. For Notion, the adapter reads the month page,
-finds the section by the receipt's heading block ID, and requires the heading
-and body blocks to match the receipt's digests; otherwise the section is a
-Conflict with the usual resolutions. It then inserts the new body blocks after
-the heading block using the append-children `position` of type `after_block`
-(at most 100 blocks per request), reads them back, and only then trashes the
-old body blocks. Notion's delete moves blocks to the trash rather than
-destroying them, and blocks cannot be moved, so an interruption leaves
-duplicate content instead of lost content. The intent records the old block
-IDs, and the next reconciliation trashes whichever set is stale. A completed
-amendment writes a new receipt version (one above the highest existing version,
-at both destinations; amendment receipt IDs carry a `#v<n>` suffix because
-receipt IDs are primary keys) and restarts the 7-day purge. The seed digest,
-receipt version, and hand-edited flag persist on the workflow (schema
-migration 6). Local-first: a Notion failure after the local replace leaves the
-day `Partial` with Notion pending, retried alone. Abandoning returns the day to
-its text-stripped `Completed` form, keeping receipts and files. The
-[Notion research](research/notion-diary-section.md#amending-an-owned-section)
-records the API facts.
+immediately before the rename. A completed amendment writes a new local receipt
+version and restarts the 7-day purge. The seed digest, receipt version, and
+hand-edited flag persist on the workflow (schema migration 6). It never writes
+iCloud or Notion. Their earlier copies become `Not pushed`; the person opens
+Publish Remote and pushes each one explicitly. A Notion section still matching
+the app's latest receipt is updated in place by that later push. Abandoning
+returns the day to its text-stripped `Completed` form, keeping receipts and
+files. The [Notion research](research/notion-diary-section.md#amending-an-owned-section)
+records the replacement API facts reused by a later Notion push.
 
 ## Files and configuration
 
@@ -808,7 +798,8 @@ backend/path, confirmed source links, inferred reflections, paragraph-review
 suggestions, language and style, and the full multiline editor. Switching the
 Main Pane from the draft to a source or suggestion preserves the unsent editor
 buffer and cursor. The publication ViewModel displays exact destination paths
-and text, pending page creation, conflicts, and per-output results. An IME indicator
+and text, changed-content choices, blocked-page repair guidance, and per-remote
+results. An IME indicator
 in the TUI process, not the server, uses macOS Text Input Source Services
 notifications delivered on its own run-loop thread, falls back to 500 ms
 polling when registration fails, shows `IME: EN` or `IME: KO` for the two

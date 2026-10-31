@@ -120,37 +120,51 @@ fn notion_preview(
     mode: ExistingEntryMode,
 ) -> Result<RemotePreviewDto, CommandError> {
     let mut preview = service.preview_notion_with(day, revision, mode)?;
-    let mut exists = false;
-    let entry_blocks = preview.blocks.clone();
-    if preview.status == diary_core::DestinationStatus::Conflict
+    let mut owned_update = false;
+    if preview.status == diary_core::DestinationStatus::Changed
         && !mode.chosen()
         && preview.reason.as_deref() == Some("notion-same-day-conflict")
+        && let Ok(Some(section)) = service.notion_existing_section(day)
     {
-        // Show the existing section without asking: an Append preview reads
-        // it. A page that cannot be appended to stays blocked below.
-        let next = service.preview_notion_with(
-            day,
-            preview.workflow.revision(),
-            ExistingEntryMode::Append,
-        )?;
-        if next.status == diary_core::DestinationStatus::Pending {
-            exists = true;
-            preview = next;
-        }
-    }
-    // A section this app wrote itself is updated in place: no choice, no
-    // prompt. Anything else already there is shown for Append or Overwrite.
-    let mut owned_update = false;
-    if exists && service.notion_section_is_ours(day) {
-        let over = service.preview_notion_with(
-            day,
-            preview.workflow.revision(),
-            ExistingEntryMode::Overwrite,
-        )?;
-        if over.status == diary_core::DestinationStatus::Pending {
-            preview = over;
-            owned_update = true;
-            exists = false;
+        let ours = service.notion_section_is_ours(day);
+        if ours && !service.notion_receipt_matches_entry(day, &preview.workflow) {
+            // An earlier copy written by this app can be updated in place.
+            preview = service.preview_notion_with(
+                day,
+                preview.workflow.revision(),
+                ExistingEntryMode::Overwrite,
+            )?;
+            owned_update = preview.status == diary_core::DestinationStatus::Pending;
+        } else {
+            // Merely opening a remote is read-only. A foreign section gets
+            // an Append or Overwrite choice; an unchanged owned one is done.
+            return Ok(RemotePreviewDto {
+                id: NOTION.to_owned(),
+                label: "Notion".to_owned(),
+                status: if ours {
+                    RemoteStatus::Pushed
+                } else {
+                    RemoteStatus::Exists
+                }
+                .as_str()
+                .to_owned(),
+                reason: None,
+                workflow: workflow_dto(&preview.workflow),
+                target: vec![preview.root_label, preview.year_title, preview.month_title],
+                payload: None,
+                existing_text: None,
+                intended_changes: Vec::new(),
+                placement: preview.placement,
+                blocks: if ours {
+                    Vec::new()
+                } else {
+                    blocks(preview.blocks)
+                },
+                current_blocks: blocks(section.blocks),
+                existing_mode: None,
+                plan_digest: None,
+                page_url: None,
+            });
         }
     }
     let (status, plan_digest, page_url) = match preview.status {
@@ -159,7 +173,6 @@ fn notion_preview(
             preview.plan_digest.clone().map(|d| d.as_str().to_owned()),
             None,
         ),
-        diary_core::DestinationStatus::Pending if exists => (RemoteStatus::Exists, None, None),
         diary_core::DestinationStatus::Pending if mode.chosen() => (
             RemoteStatus::Exists,
             preview.plan_digest.clone().map(|d| d.as_str().to_owned()),
@@ -193,11 +206,7 @@ fn notion_preview(
         existing_text: None,
         intended_changes: Vec::new(),
         placement: preview.placement,
-        blocks: if exists {
-            blocks(entry_blocks)
-        } else {
-            blocks(preview.blocks)
-        },
+        blocks: blocks(preview.blocks),
         current_blocks: blocks(preview.current_blocks),
         existing_mode: (preview.mode != ExistingEntryMode::Refuse && !owned_update)
             .then(|| preview.mode.as_str().to_owned()),
@@ -222,6 +231,12 @@ pub(super) async fn preview_remote(
             .map_err(|_| ApiError::new(StatusCode::BAD_REQUEST, "invalid-request"))?
     };
     let mode = mode_from(request.existing_mode.as_deref())?;
+    if remote == ICLOUD && mode == ExistingEntryMode::Append {
+        return Err(ApiError::new(
+            StatusCode::BAD_REQUEST,
+            "invalid-existing-mode",
+        ));
+    }
     let service = state.0.config.commands.clone();
     let preview = blocking(move || {
         if remote == ICLOUD {
@@ -329,6 +344,12 @@ pub(super) async fn push_remote(
     let revision = workflow_precondition(&headers)?;
     let remote = known_remote(&name)?;
     let mode = mode_from(request.existing_mode.as_deref())?;
+    if remote == ICLOUD && mode == ExistingEntryMode::Append {
+        return Err(ApiError::new(
+            StatusCode::BAD_REQUEST,
+            "invalid-existing-mode",
+        ));
+    }
     let digest = Digest::parse(request.plan_digest)
         .map_err(|_| ApiError::new(StatusCode::BAD_REQUEST, "invalid-plan-digest"))?;
     let job_id = new_job(&state, "remote-push", &id)?;
@@ -412,9 +433,7 @@ async fn run_remote_push_job(
             };
             if !verified {
                 let code = match pushed {
-                    Pushed::Icloud(diary_core::DestinationStatus::Conflict) => {
-                        "precondition-failed"
-                    }
+                    Pushed::Icloud(diary_core::DestinationStatus::Changed) => "precondition-failed",
                     Pushed::Icloud(diary_core::DestinationStatus::Blocked) => "remote-unavailable",
                     _ => "remote-not-verified",
                 };
@@ -435,7 +454,16 @@ async fn run_remote_push_job(
         }
         Ok(Err(error)) => {
             log_publication_snapshot(&state, "remote-push", "failed", &snapshot_day).await;
-            fail_job(&state, &job_id, error.diagnostic_code());
+            // A Notion binding can change only after the preview the person
+            // approved. Keep that indistinguishable from the same iCloud race
+            // at the v9 boundary so every client knows to refresh the remote.
+            let code = match &error {
+                CommandError::PreconditionFailed | CommandError::NotionBindingChanged(_) => {
+                    "precondition-failed"
+                }
+                _ => error.diagnostic_code(),
+            };
+            fail_job(&state, &job_id, code);
         }
         Err(_) => fail_job(&state, &job_id, "internal-failure"),
     }

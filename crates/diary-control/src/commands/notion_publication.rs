@@ -52,7 +52,7 @@ impl CommandService {
             }
         };
         if mode.chosen()
-            && preflight.status == NotionPreflightStatus::Conflict
+            && preflight.status == NotionPreflightStatus::Existing
             && preflight.reason.as_deref() == Some("notion-same-day-conflict")
         {
             return self.preview_notion_existing(
@@ -67,7 +67,7 @@ impl CommandService {
         let status = match preflight.status {
             NotionPreflightStatus::Ready => DestinationStatus::Pending,
             NotionPreflightStatus::Blocked => DestinationStatus::Blocked,
-            NotionPreflightStatus::Conflict => DestinationStatus::Conflict,
+            NotionPreflightStatus::Existing => DestinationStatus::Changed,
         };
         if status != DestinationStatus::Pending {
             return Ok(NotionPreview {
@@ -285,7 +285,7 @@ impl CommandService {
         .map_err(|_| CommandError::NotionUnavailable)?;
         let status = match result {
             PublicationResult::Verified(_) => DestinationStatus::Verified,
-            PublicationResult::Conflict => DestinationStatus::Conflict,
+            PublicationResult::Conflict => DestinationStatus::Changed,
             PublicationResult::DefiniteNoEffect | PublicationResult::SafeToRetry => {
                 DestinationStatus::Pending
             }

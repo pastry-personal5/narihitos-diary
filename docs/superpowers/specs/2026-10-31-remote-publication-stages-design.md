@@ -1,6 +1,6 @@
 # Remote publication stages design
 
-Status: Draft (proposed P1-M22).
+Status: Active (P1-M22).
 
 Splits the Preview/Publish tail of the workflow into a local-only Preview, a Publish to Local stage, and a Publish to Remote stage that lists remotes (iCloud, Notion), shows what each already holds, and pushes on request. The iCloud copy is no longer an automatic mirror.
 
@@ -15,7 +15,7 @@ Splits the Preview/Publish tail of the workflow into a local-only Preview, a Pub
   - Push is the approval; there is no separate approve step and remotes are not approved in Preview.
   - The iCloud copy is never made automatically.
   - A day is completed by the verified local write; remotes can be pushed at any time afterward, including in later sessions.
-  - When the remote already holds an entry, the Main Pane shows it automatically and the menu offers **Append** and **Overwrite**. A person is never stalled in "Conflict".
+  - When a remote already holds an entry, the Main Pane shows it automatically. Notion offers **Append** and **Overwrite**; iCloud offers **Overwrite** only (owner clarification, 2026-10-31), preserving byte identity with the local file.
 - **Success:** local publish never touches a remote; every remote action starts from the menu; an existing remote entry is visible without asking and resolvable in one choice; nothing reaches a remote without a push.
 
 ## Design
@@ -36,7 +36,7 @@ The Resources Sidebar lists remotes, each with a status: `Not pushed`, `Exists` 
 2. **Check readiness.** Manual, read-only (P1-M19 behavior, now per remote).
 3. **Push to <remote>.**
 
-On selection the TUI runs a preview automatically (read-only). If the remote already holds an entry for the day, the Main Pane shows the existing content above the planned result, and the menu gains **Append** and **Overwrite** (P1-M21 rules) in place of a bare Push. Choosing one re-previews the exact result; Enter pushes; Overwrite needs a second Enter and Esc cancels. When nothing exists, only Push is offered. Push is the approval of the shown plan.
+On selection the TUI runs a preview automatically (read-only). If the remote already holds an entry for the day, the Main Pane shows the existing content above the planned result. Notion offers **Append** and **Overwrite** (P1-M21 rules); iCloud offers only **Overwrite**, because its copy must match the local file byte for byte. Choosing a mode re-previews the exact result; Enter pushes; Overwrite needs a second Enter and Esc cancels. When nothing exists, only Push is offered. Push is the approval of the shown plan.
 
 "Conflict" no longer exists as a stalling state. If the remote changed between preview and push, the push does not fail: the TUI refreshes the preview, shows the new existing content, keeps the chosen mode if still valid, and asks again. Duplicate or malformed Notion sections (P1-M20) cannot be appended to or overwritten safely, so that remote shows `Blocked`. The Main Pane then shows a warning that names the problem (for example, two sections for the same day) and a URL to the Notion month page, so the person can fix it by hand in the Notion app or on Notion Web (owner decision, 2026-10-31); the menu offers only Check readiness, and a re-check after the fix unblocks it. The URL is derived from the page the connector already resolved. It appears only in this blocked state, as a single Notion page URL, and is never logged. This narrows the earlier rule that Notion previews never carry remote IDs, because a page URL contains the page ID. It is the only blocked-by-content case.
 
@@ -57,6 +57,6 @@ Update `AGENTS.md` (iCloud mirror, Notion publication, Product behavior, Termina
 
 - Local publish never writes to iCloud or contacts Notion.
 - Stage gating: Remote locked until the day is completed; reachable after reopening.
-- Per-remote readiness, preview, and push, including an existing remote entry, Append, Overwrite, and a remote changed between preview and push (refresh, no stall).
+- Per-remote readiness, preview, and push, including an existing remote entry, Notion Append, Overwrite, and a remote changed between preview and push (refresh, no stall).
 - TUI: sidebar remote list and statuses, automatic existing-content display, menu controls, Overwrite second Enter and Esc (closes P1-M21's open item).
 - Gate: `cargo fmt --all -- --check`, `cargo clippy --all-targets --all-features -- -D warnings`, `cargo test --all-features`, plus `swift build` and `swift test`.

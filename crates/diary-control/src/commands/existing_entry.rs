@@ -406,7 +406,7 @@ impl CommandService {
                 blocks: preflight.blocks,
                 current_blocks: Vec::new(),
                 mode,
-                status: DestinationStatus::Conflict,
+                status: DestinationStatus::Changed,
                 reason: Some(reason),
             }
         }

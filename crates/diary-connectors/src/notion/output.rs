@@ -88,7 +88,7 @@ impl NotionClient {
             }
             let bare: Vec<_> = blocks.iter().map(|item| item.block.clone()).collect();
             if !matches!(classify_same_day(&bare, plan), SameDayState::Absent) {
-                status = NotionPreflightStatus::Conflict;
+                status = NotionPreflightStatus::Existing;
                 reason = Some("notion-same-day-conflict".to_owned());
             } else {
                 placement = plan_insertion(&bare, plan).label;
@@ -352,7 +352,7 @@ impl NotionOutputPort for NotionClient {
                 }
                 Ok(_) => (NotionPreflightStatus::Ready, None, true, Vec::new()),
                 Err(RemoteError::Invalid) => (
-                    NotionPreflightStatus::Conflict,
+                    NotionPreflightStatus::Existing,
                     Some("notion-section-not-owned".to_owned()),
                     false,
                     Vec::new(),

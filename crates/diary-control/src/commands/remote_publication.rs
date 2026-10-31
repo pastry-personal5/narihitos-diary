@@ -61,7 +61,7 @@ pub struct IcloudPreview {
 
 impl CommandService {
     /// The verified local file's exact bytes: what every remote receives.
-    fn local_final_text(&self, workflow: &Workflow) -> Result<String, CommandError> {
+    pub(super) fn local_final_text(&self, workflow: &Workflow) -> Result<String, CommandError> {
         self.verify_local_receipt(workflow)?;
         let output = self
             .local_output
@@ -109,35 +109,56 @@ impl CommandService {
                 reason: Some("icloud-unavailable".to_owned()),
             },
         };
-        let notion = if self.notion_output.is_none() {
+        let notion = if let Some(notion) = self.notion_output.as_ref() {
+            let (status, reason) = match notion.observe_existing(day) {
+                Ok(Some(_)) if self.notion_section_is_ours(day) => {
+                    if self.notion_receipt_matches_entry(day, &workflow) {
+                        (RemoteStatus::Pushed, None)
+                    } else {
+                        (RemoteStatus::NotPushed, None)
+                    }
+                }
+                Ok(Some(_)) => (RemoteStatus::Exists, None),
+                Ok(None) => (RemoteStatus::NotPushed, None),
+                Err(error) => (
+                    RemoteStatus::Blocked,
+                    Some(
+                        match error.as_str() {
+                            "notion-same-day-conflict" => "notion-same-day-conflict",
+                            "notion-hierarchy-ambiguous" => "notion-hierarchy-ambiguous",
+                            _ => "notion-unavailable",
+                        }
+                        .to_owned(),
+                    ),
+                ),
+            };
+            RemoteSummary {
+                id: "notion",
+                label: "Notion",
+                status,
+                reason,
+            }
+        } else {
             RemoteSummary {
                 id: "notion",
                 label: "Notion",
                 status: RemoteStatus::Blocked,
                 reason: Some("notion-not-configured".to_owned()),
             }
-        } else {
-            RemoteSummary {
-                id: "notion",
-                label: "Notion",
-                status: if progress_of(&workflow, "notion") == Some(DestinationStatus::Verified) {
-                    RemoteStatus::Pushed
-                } else {
-                    RemoteStatus::NotPushed
-                },
-                reason: None,
-            }
         };
         Ok(vec![icloud, notion])
     }
 
-    /// Previews the iCloud copy. A chosen `mode` plans an Append or an
-    /// Overwrite of content this app did not write; nothing is stored.
+    /// Previews the iCloud copy. A chosen `mode` plans an Overwrite of
+    /// content this app did not write; nothing is stored.
     pub fn preview_icloud(
         &self,
         day: &DiaryDay,
         mode: ExistingEntryMode,
     ) -> Result<IcloudPreview, CommandError> {
+        if mode == ExistingEntryMode::Append {
+            return Err(CommandError::PreconditionFailed);
+        }
         self.ensure_clear(day)?;
         let mirror = self
             .mirror_output
@@ -149,7 +170,7 @@ impl CommandService {
         let target = mirror.target(day);
         let owned = Self::owned_receipt(&self.receipts_of(day)?, MIRROR_DESTINATION, u32::MAX)
             .map(|receipt| receipt.payload_digest);
-        let mut payload = local.clone();
+        let payload = local.clone();
         let mut existing_text = None;
         let mut replacing = false;
         let mut reason = None;
@@ -177,17 +198,7 @@ impl CommandService {
                 } else {
                     existing_text = Some(text.clone());
                     match mode {
-                        ExistingEntryMode::Append => {
-                            replacing = true;
-                            payload = diary_core::append_to_existing(
-                                &text,
-                                &workflow.entry().text,
-                                &existing_entry::append_stamp(self.clock.now()),
-                            );
-                            intended_changes.push(format!(
-                                "Append a dated separator and the entry to {target}; the existing text stays above it"
-                            ));
-                        }
+                        ExistingEntryMode::Append => unreachable!("rejected above"),
                         ExistingEntryMode::Overwrite => {
                             replacing = true;
                             intended_changes.push(format!(
@@ -291,6 +302,18 @@ impl CommandService {
         self.notion_output.as_ref()?.month_page_url(day)
     }
 
+    /// Read-only observation for the remote menu. A bare selection must not
+    /// save an Append plan or change the completed workflow state.
+    pub fn notion_existing_section(
+        &self,
+        day: &DiaryDay,
+    ) -> Result<Option<diary_core::NotionExistingSection>, String> {
+        self.notion_output
+            .as_ref()
+            .ok_or_else(|| "notion-not-configured".to_owned())?
+            .observe_existing(day)
+    }
+
     /// Whether the Notion section for this day is the one this app wrote: the
     /// same page and blocks as its latest Notion receipt, still unedited. Such
     /// a section is updated in place by a push, with no choice to make.
@@ -311,6 +334,18 @@ impl CommandService {
         owned.receipt_id.split('#').next() == Some(section.month_id.as_str())
             && owned.returned_ids == section.block_ids
             && owned.payload_digest == section.section_digest
+    }
+
+    #[must_use]
+    pub fn notion_receipt_matches_entry(&self, day: &DiaryDay, workflow: &Workflow) -> bool {
+        let Some(entry_digest) = workflow.entry().confirmed.as_ref().map(|c| &c.entry_digest)
+        else {
+            return false;
+        };
+        self.receipts_of(day)
+            .ok()
+            .and_then(|receipts| Self::owned_receipt(&receipts, "notion", u32::MAX))
+            .is_some_and(|receipt| &receipt.entry_digest == entry_digest)
     }
 
     /// Pushes Notion: approves the stored preview plan and publishes it.

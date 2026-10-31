@@ -187,7 +187,7 @@ fn publish_readiness_records_closed_tokens_and_rejects_free_text() {
         DiagnosticLevel::Debug,
         DiagnosticEvent::PublishReadiness {
             destination: "icloud",
-            readiness: "conflict",
+            readiness: "not-ready",
             reason: "icloud-different-file-exists",
             next_step: "resolve-icloud-file",
             decided_by: "mirror-inspect",
@@ -218,7 +218,7 @@ fn publish_readiness_records_closed_tokens_and_rejects_free_text() {
     assert!(text.contains("component=publish event=readiness "));
     assert!(text.contains(
         "decided_by=mirror-inspect destination=icloud duration_ms=3 \
-         next_step=resolve-icloud-file readiness=conflict reason=icloud-different-file-exists"
+         next_step=resolve-icloud-file readiness=not-ready reason=icloud-different-file-exists"
     ));
     assert!(text.contains("component=publish event=readiness-check "));
     assert!(text.contains(

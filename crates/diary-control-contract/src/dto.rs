@@ -19,7 +19,7 @@ pub struct LocalPreviewDto {
 }
 
 /// Optional body of an output preview. Without `existing_mode`, differing
-/// existing content is reported as a conflict.
+/// existing content is shown and the preview defaults to Append.
 #[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct LocalPreviewRequest {

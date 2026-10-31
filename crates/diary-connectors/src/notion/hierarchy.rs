@@ -78,7 +78,7 @@ pub fn resolve_child(
 pub enum SameDayState {
     Absent,
     Canonical { index: usize },
-    Conflict { indices: Vec<usize> },
+    Ambiguous { indices: Vec<usize> },
 }
 
 /// Finds canonical, ISO-only, and wrong-weekday headings for the target day.
@@ -110,7 +110,7 @@ pub fn classify_same_day(blocks: &[NotionBlock], plan: &NotionPlan) -> SameDaySt
     } else {
         collision.extend(canonical);
         collision.sort_unstable();
-        SameDayState::Conflict { indices: collision }
+        SameDayState::Ambiguous { indices: collision }
     }
 }
 

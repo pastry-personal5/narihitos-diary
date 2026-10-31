@@ -139,6 +139,12 @@ and an uncertain write is read back in the same job. If that read-back is
 unavailable, restart inspects it again before that diary day can act. A
 file that changes after you approved it is shown again in Preview, with the
 existing and planned text.
+Publish Local also keeps the confirmed diary entry visible under **Diary entry
+to publish**. Its different foreground color separates the prose from status
+and controls, and the prose is indented beneath the heading; the heading keeps
+the distinction when `NO_COLOR` is set.
+When another entry already exists, **Existing local entry** shows that content
+in a second foreground color, separate from the entry you are publishing.
 
 When a file already exists for the day, Preview never stops at a conflict: the
 plan defaults to Append, so it can be approved as it stands, and the menu also
@@ -147,8 +153,8 @@ below it. Overwrite replaces the file after saving a copy beside it as
 `<date>.md.bak-<digest>` and asks you to press Enter a second time. Either way
 Preview shows the exact result, and nothing is written until you approve; if the
 file changes in between, the approval is refused and Preview shows it again. The
-same two choices appear in a remote's menu when iCloud or Notion already holds an
-entry.
+same two choices appear in Notion's menu when it already holds an entry. iCloud
+offers only Overwrite so its copy matches the local file byte for byte.
 
 Saving the local file completes the day. Nothing is sent to iCloud or Notion
 automatically.
@@ -161,17 +167,24 @@ Notion, each with a status: `Not pushed`, `Exists` (it already holds content tha
 is not this app's), `Pushed`, or `Blocked`. Pick one to open its menu in the Main
 Pane:
 
+The Main Pane keeps the confirmed **Diary entry to publish** visible in a
+different foreground color while you inspect each remote.
+If the remote already contains an entry, **Already there** shows it in a second
+foreground color so the existing and proposed prose remain easy to compare.
+Both prose blocks are indented beneath their headings.
+
 - **Show what will be pushed** refreshes the read-only plan.
 - **Check readiness** asks why the remote is or is not ready. Nothing is checked
   until you choose it, and the check never writes anything. It shows `READY`,
-  `NOT READY`, `CONFLICT`, or `PUBLISHED`, a plain reason, and the next step.
+  `NOT READY`, or `PUBLISHED`, a plain reason, and the next step.
 - **Push** sends exactly the plan shown. Pushing is the approval; there is no
   separate approve step.
 
 The remote is looked at as soon as you pick it. If it already holds an entry for
-the day, that entry is shown and the menu offers **Append to the existing entry**
-and **Overwrite the existing entry**; choose one to see the exact result, then
-Push. Append keeps what is there; Overwrite saves a copy of an iCloud file first
+the day, that entry is shown. Notion offers **Append to the existing entry** and
+**Overwrite the existing entry**; iCloud offers only **Overwrite the existing entry**.
+Choose a mode to see the exact result, then Push. Append keeps what is there;
+Overwrite saves a copy of an iCloud file first
 (a Notion section's old blocks go to Notion's trash) and asks you to press Enter a
 second time. If the remote changes while you decide, the push is refused and the
 screen shows what is there now instead of leaving you stuck.

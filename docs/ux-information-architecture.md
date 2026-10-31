@@ -188,7 +188,7 @@ Status Line.
   text is read-only. Later stages use the same region for entry review state and
   output resources such as the local file and Notion section.
   A resource can be `ready`, `active`, `included`, `preparing`, `unavailable`,
-  `warning`, `blocked`, `conflict`, or `stale`; words or symbols convey state
+  `warning`, `blocked`, `changed`, or `stale`; words or symbols convey state
   without relying on color. A hierarchy such as local output
   `year / month / entry` or
   the Notion `root / year / month / section` is rendered as an indented tree.

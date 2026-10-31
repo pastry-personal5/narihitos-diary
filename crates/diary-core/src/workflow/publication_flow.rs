@@ -32,7 +32,7 @@ impl Workflow {
         self.expect_revision(expected_revision)?;
         let rereading_local_conflict = self.state == WorkflowState::Partial
             && self.destination_progress.iter().any(|item| {
-                item.status == DestinationStatus::Conflict
+                item.status == DestinationStatus::Changed
                     && self.output_plan.as_ref().is_some_and(|plan| {
                         plan.targets.iter().any(|target| {
                             target.kind == DestinationKind::Local
@@ -98,7 +98,7 @@ impl Workflow {
             })
         };
         if self.destination_progress.iter().any(|progress| {
-            progress.status == DestinationStatus::Conflict && !is_mirror(&progress.destination)
+            progress.status == DestinationStatus::Changed && !is_mirror(&progress.destination)
         }) || plan
             .targets
             .iter()
@@ -148,7 +148,10 @@ impl Workflow {
             .ok_or(WorkflowError::UnknownDestination)?;
         if !matches!(
             progress.status,
-            DestinationStatus::Blocked | DestinationStatus::Pending
+            DestinationStatus::Blocked
+                | DestinationStatus::Pending
+                | DestinationStatus::Changed
+                | DestinationStatus::Verified
         ) {
             return Err(WorkflowError::RetryNeedsPreview);
         }
@@ -211,7 +214,10 @@ impl Workflow {
             .ok_or(WorkflowError::UnknownDestination)?;
         if !matches!(
             progress.status,
-            DestinationStatus::Blocked | DestinationStatus::Pending
+            DestinationStatus::Blocked
+                | DestinationStatus::Pending
+                | DestinationStatus::Changed
+                | DestinationStatus::Verified
         ) {
             return Err(WorkflowError::RetryNeedsPreview);
         }

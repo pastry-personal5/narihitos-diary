@@ -51,9 +51,9 @@ does not mutate the server's authoritative domain state.
 | Paragraph review | `paragraph_review` | An assistant suggestion for the paragraph focused at the editor cursor. The suggestion never changes the entry until the person accepts it; rejecting it leaves the entry unchanged. |
 | Inferred reflection | `inferred_reflection` | An assistant-suggested interpretation shown in the editor between reserved delimiters. The person accepts it by removing the delimiters, edits it, or removes it. |
 | Entry review | `entry_review` | Review and confirmation of the complete edited diary entry. Refused while any reserved reflection delimiter character remains. |
-| Output preview | `output_preview` | Exact local and Notion payloads and destination paths before approval, including any destination that is blocked. |
-| Publication status | `publication_status` | Per-destination state: verified, pending, blocked, or conflict. |
-| Conflict view | `conflict_view` | Existing destination content beside the planned payload, with the resolutions the person may choose. |
+| Output preview | `output_preview` | Exact local file plan before approval; remote plans appear in their own menus. |
+| Publication status | `publication_status` | Per-destination state: verified, pending, blocked, changed, or reconciling. |
+| Existing entry view | `existing_entry_view` | Existing destination content beside the planned payload, with the available resolution. |
 | Amendment | `amendment` | A new revision of a Completed day, seeded from the saved local file. After approval it replaces only content the app itself wrote and receipted. |
 | Draft proposal | `draft_proposal` | Memories or entry text written by an agent client, shown in a Banner for the person to accept or reject. |
 | Composition path | `composition_path` | The selected assistant backend's execution boundary: hosted (default) or Apple on-device. It is labeled in the UI and is never a consent step. Manual editing is always available and is not an assistant backend. |
@@ -85,7 +85,7 @@ The Utility Sidebar is planned in P1-M15.
 | Workflow Sidebar | `workflow_sidebar` | Left chrome pane listing the six canonical stages and their stage state for jump-to-stage navigation. |
 | Resources Sidebar | `resources_sidebar` | Middle chrome pane listing context-relevant sources, inputs, assistant suggestions, or outputs with explicit resource state; activating an item shows its content in the Main Pane, and it may render an indented tree. |
 | Stage state | `stage_state` | A Workflow Sidebar progress marker: done, available, locked, or stale, plus a separate current marker for the stage open in the Main Pane. Always use text or symbols, never color alone. |
-| Resource state | `resource_state` | One or more Resources Sidebar markers: ready, active, included, preparing, unavailable, warning, blocked, conflict, or stale. `active` controls the Main Pane; `included` controls the prospective source set. Always use text or symbols, never color alone. |
+| Resource state | `resource_state` | One or more Resources Sidebar markers: ready, active, included, preparing, unavailable, warning, blocked, changed, or stale. `active` controls the Main Pane; `included` controls the prospective source set. Always use text or symbols, never color alone. |
 | Main Pane | `main_pane` | Center chrome pane; renders the active stage and active resource. |
 | Utility Sidebar | `utility_sidebar` | Rightmost chrome pane (P1-M15): a vertical stack of Widgets that stay reachable in every stage, independent of the active stage and resource. Widgets are ordered top to bottom and each is a titled box. |
 | Widget | `widget` | One titled box in the Utility Sidebar with a single purpose. It is either read-only or has its own rows, which take focus in order; a read-only Widget is skipped by focus. |

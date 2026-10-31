@@ -24,7 +24,7 @@ impl CommandService {
             Err(_) => return DestinationStatus::Blocked,
             Ok(LocalOutputState::Different(text)) => {
                 if replacing != Some(&Digest::of_bytes(text.as_bytes())) {
-                    return DestinationStatus::Conflict;
+                    return DestinationStatus::Changed;
                 }
             }
             Ok(_) => {}
@@ -60,7 +60,7 @@ impl CommandService {
             self.clock.now(),
         ) {
             Ok(PublicationResult::Verified(_)) => DestinationStatus::Verified,
-            Ok(PublicationResult::Conflict) => DestinationStatus::Conflict,
+            Ok(PublicationResult::Conflict) => DestinationStatus::Changed,
             // An uncertain write keeps its intent; startup reconciliation
             // resolves it before any retry.
             _ => DestinationStatus::Pending,

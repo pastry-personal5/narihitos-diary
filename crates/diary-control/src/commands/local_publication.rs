@@ -369,7 +369,7 @@ impl CommandService {
         };
         let status = match result {
             PublicationResult::Verified(_) => DestinationStatus::Verified,
-            PublicationResult::Conflict => DestinationStatus::Conflict,
+            PublicationResult::Conflict => DestinationStatus::Changed,
             _ => DestinationStatus::Reconciling,
         };
         if status == DestinationStatus::Reconciling {

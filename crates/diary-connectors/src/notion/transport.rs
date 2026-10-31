@@ -174,7 +174,7 @@ impl HttpRemote {
                     RetryAction::Pending | RetryAction::Exhausted => {
                         return Err(RemoteError::Pending);
                     }
-                    RetryAction::Conflict => return Err(RemoteError::Invalid),
+                    RetryAction::Changed => return Err(RemoteError::Invalid),
                     _ => return Err(RemoteError::Blocked(content_free_reason(Some(status)))),
                 }
             }

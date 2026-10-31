@@ -489,7 +489,7 @@ fn a_change_after_preview_voids_approval_and_a_race_after_approval_leaves_the_fi
         .publish_amendment(&f.day, approved.revision(), &AtomicBool::new(false))
         .unwrap();
     assert_eq!(outcome.state(), WorkflowState::Partial);
-    assert_eq!(Fixture::status(&outcome, "local"), "conflict");
+    assert_eq!(Fixture::status(&outcome, "local"), "changed");
     assert_eq!(fs::read_to_string(f.file()).unwrap(), "raced edit");
     assert!(f.notion.replaced().is_empty(), "Notion waits for local");
 

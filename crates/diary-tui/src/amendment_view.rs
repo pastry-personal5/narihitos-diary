@@ -26,11 +26,11 @@ pub enum AmendmentState {
 
 /// The one way out of an amendment that is not "keep going".
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum ConflictChoice {
+pub enum AmendmentChoice {
     AbandonAmendment,
 }
 
-impl ConflictChoice {
+impl AmendmentChoice {
     #[must_use]
     pub const fn label(self) -> &'static str {
         match self {
@@ -60,7 +60,7 @@ pub fn banner(workflow: &WorkflowDto) -> Option<&'static str> {
 pub fn amendment_state(workflow: &WorkflowDto) -> Option<AmendmentState> {
     workflow.amendment.as_ref()?;
     let local = workflow.local_status.as_deref().unwrap_or("none");
-    if local == "conflict" {
+    if local == "changed" {
         return Some(AmendmentState::FileChanged);
     }
     Some(match workflow.state.as_str() {
@@ -76,9 +76,9 @@ pub fn amendment_state(workflow: &WorkflowDto) -> Option<AmendmentState> {
 /// Abandoning is always available once the file has changed under an approved
 /// plan; previewing again is the main control and needs no choice.
 #[must_use]
-pub fn conflict_choices(workflow: &WorkflowDto) -> Option<&'static [ConflictChoice]> {
+pub fn amendment_choices(workflow: &WorkflowDto) -> Option<&'static [AmendmentChoice]> {
     match amendment_state(workflow)? {
-        AmendmentState::FileChanged => Some(&[ConflictChoice::AbandonAmendment]),
+        AmendmentState::FileChanged => Some(&[AmendmentChoice::AbandonAmendment]),
         _ => None,
     }
 }
@@ -169,7 +169,7 @@ mod tests {
         let edited = workflow("composing", None, Some(true));
         assert_eq!(banner(&edited), Some(BANNER));
         assert_eq!(amendment_state(&edited), Some(AmendmentState::Editing));
-        assert!(conflict_choices(&edited).is_none());
+        assert!(amendment_choices(&edited).is_none());
         assert_eq!(banner(&workflow("composing", None, Some(false))), None);
         assert_eq!(banner(&workflow("completed", None, None)), None);
     }
@@ -204,7 +204,7 @@ mod tests {
 
     #[test]
     fn a_changed_file_says_to_preview_again_and_only_offers_abandon() {
-        let changed = workflow("output-planned", Some("conflict"), Some(false));
+        let changed = workflow("output-planned", Some("changed"), Some(false));
         assert_eq!(amendment_state(&changed), Some(AmendmentState::FileChanged));
         assert!(
             status_text(&changed)
@@ -212,11 +212,11 @@ mod tests {
                 .contains("Preview the replacement again")
         );
         assert_eq!(
-            conflict_choices(&changed),
-            Some(&[ConflictChoice::AbandonAmendment][..])
+            amendment_choices(&changed),
+            Some(&[AmendmentChoice::AbandonAmendment][..])
         );
         assert_eq!(
-            ConflictChoice::AbandonAmendment.label(),
+            AmendmentChoice::AbandonAmendment.label(),
             "Abandon the amendment"
         );
     }

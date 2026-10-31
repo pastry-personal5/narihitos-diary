@@ -443,8 +443,8 @@ fn local_preview_with(local: &str, mode: Option<&str>) -> LocalPreviewDto {
 #[test]
 fn preview_shows_only_the_local_file_and_never_mentions_a_remote() {
     let mut workflow = composing_workflow();
-    workflow.local_status = Some("conflict".to_owned());
-    let mut preview = local_preview_with("conflict", None);
+    workflow.local_status = Some("changed".to_owned());
+    let mut preview = local_preview_with("changed", None);
     preview.workflow = workflow.clone();
     preview.payload = "---\ndate: \"2026-10-29\"\n---\n\nplanned".to_owned();
     let focus = FocusModel {
@@ -467,18 +467,22 @@ fn publish_local_shows_the_local_save_and_points_to_the_remote_stage() {
     let mut workflow = workflow_dto_for_publish_tests();
     workflow.state = "completed".to_owned();
     workflow.local_status = Some("verified".to_owned());
-    let body = publish_screen_body(&FocusModel::default(), Some(&workflow));
+    workflow.entry_text = "A visible confirmed diary entry.".to_owned();
+    let preview = local_preview_with("pending", Some("append"));
+    let body = publish_screen_body(&FocusModel::default(), Some(&workflow), Some(&preview));
     assert!(body.contains("Local publication: verified"));
     assert!(body.contains("Go to Publish Remote"));
     assert!(!body.contains("Notion:"));
     assert!(!body.contains("readiness"));
+    assert!(body.contains("Existing local entry:\n  existing content"));
+    assert!(body.contains("Diary entry to publish:\n  A visible confirmed diary entry."));
     let focus = FocusModel {
         zone: FocusZone::Main,
         main_control_index: 1,
         ..FocusModel::default()
     };
     let pending = workflow_dto_for_publish_tests();
-    let body = publish_screen_body(&focus, Some(&pending));
+    let body = publish_screen_body(&focus, Some(&pending), None);
     assert!(body.contains("  Publish approved local file"));
     assert!(body.contains("> Cancel pending publication"));
 }

@@ -38,7 +38,7 @@ impl PublicationCoordinator {
                 Ok(PublicationResult::DefiniteNoEffect)
             }
             WriteOutcome::Conflict => {
-                log.mark_terminal(&intent.attempt_id, IntentTerminal::Conflict)?;
+                log.mark_terminal(&intent.attempt_id, IntentTerminal::Changed)?;
                 Ok(PublicationResult::Conflict)
             }
             WriteOutcome::AmbiguousWrite | WriteOutcome::Unavailable => {
@@ -71,7 +71,7 @@ impl PublicationCoordinator {
                 Ok(PublicationResult::SafeToRetry)
             }
             InspectionOutcome::Conflict => {
-                log.mark_terminal(&intent.attempt_id, IntentTerminal::Conflict)?;
+                log.mark_terminal(&intent.attempt_id, IntentTerminal::Changed)?;
                 Ok(PublicationResult::Conflict)
             }
             InspectionOutcome::Unavailable => Ok(PublicationResult::Reconciling),

@@ -1020,7 +1020,7 @@ const fn optional(name: &'static str, kind: ValueKind) -> KeySpec {
 }
 
 /// Destination statuses a Notion preview can report.
-pub const NOTION_PREVIEW_STATUSES: &[&str] = &["pending", "blocked", "conflict"];
+pub const NOTION_PREVIEW_STATUSES: &[&str] = &["pending", "blocked", "changed"];
 
 /// Closed reason tokens for a Notion preview record; `other` absorbs any
 /// token this build does not list so free text can never reach the log.
@@ -1046,7 +1046,7 @@ pub const NOTION_PREVIEW_REASONS: &[&str] = &[
 pub const READINESS_DESTINATIONS: &[&str] = &["notion", "icloud"];
 
 /// Readiness states a destination can report.
-pub const READINESS_STATES: &[&str] = &["ready", "not-ready", "conflict", "published"];
+pub const READINESS_STATES: &[&str] = &["ready", "not-ready", "published"];
 
 /// Closed reason tokens for a readiness record and response; free text can
 /// never reach the log or the client.
@@ -1165,7 +1165,7 @@ fn vocab_publication_kind(value: &str) -> bool {
 fn vocab_destination_status(value: &str) -> bool {
     matches!(
         value,
-        "absent" | "pending" | "blocked" | "conflict" | "verified" | "reconciling"
+        "absent" | "pending" | "blocked" | "changed" | "verified" | "reconciling"
     )
 }
 

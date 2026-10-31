@@ -10,14 +10,16 @@ P1-M7 implements the manual journey through complete-entry Review. P1-M8 adds
 the optional Codex hosted and Apple Foundation Models assistant paths inside
 Compose. P1-M9 adds local Preview and Publish; P1-M10 adds the local-first
 Notion-only retry flow while keeping live hierarchy qualification gated;
-P1-M11 adds amendments of a completed day.
+P1-M11 adds amendments of a completed day. P1-M22 supersedes the combined
+publication tail with local-only Preview, Publish Local, and per-remote push.
 
 ## Core journey
 
-The left Workflow Sidebar always shows the six stages `Start`, `Sources`,
-`Compose`, `Review`, `Preview`, and `Publish`. The middle Resources Sidebar
-shows the sources, draft, assistant suggestions, or destinations for the active
-stage, and activating one displays its content in the right Main Pane.
+The left Workflow Sidebar always shows the seven stages `Start`, `Sources`,
+`Compose`, `Review`, `Preview`, `Publish Local`, and `Publish Remote`. The
+middle Resources Sidebar shows the sources, draft, assistant suggestions, or
+destinations for the active stage, and activating one displays its content in
+the right Main Pane.
 
 1. **Start:** Start the server by hand with `nd serve` in its own terminal,
    then open the TUI with `nd`. The TUI never starts the server and says so when
@@ -67,11 +69,15 @@ stage, and activating one displays its content in the right Main Pane.
    exact text. Preview says nothing about any remote. Approve the exact output
    plan before writing.
 7. **Publish Local:** Write the local file, at the configurable default path
-   `~/Documents/narihitos-diary/entries/YYYY/MM/YYYY-MM-DD.md`. A verified local
-   write completes the day.
+   `~/Documents/narihitos-diary/entries/YYYY/MM/YYYY-MM-DD.md`. Keep the
+   confirmed diary entry visible in a distinct foreground color while showing
+   local status and controls. If another local entry exists, show it in a
+   second distinct foreground color. Indent both prose blocks beneath their
+   headings. A verified local write completes the day.
 8. **Publish Remote:** The remotes (iCloud, Notion) are listed; the person
-   picks one and sees what it already holds, checks readiness on request, and
-   pushes. A push is its own approval of exactly the plan shown, and nothing is
+   picks one, sees the confirmed diary entry in the same distinct foreground
+   color and what the remote already holds in a second distinct color, checks
+   readiness on request, and pushes. A push is its own approval of exactly the plan shown, and nothing is
    sent to a remote without it, now or later. Push the
    confirmed Markdown body to Notion, with YAML front matter stripped, under a native
    `heading_2: YYYY-MM-DD (DDD)` section, in ascending date order, in the configured Notion
@@ -79,7 +85,7 @@ stage, and activating one displays its content in the right Main Pane.
    English weekday. Convert the body losslessly to native Notion blocks,
    preserving unsupported constructs literally. Allow unrelated hierarchy
    content, create only missing unique canonical subpages, and write only after
-   the read-only preflight and conflict checks. Show each remote's status
+   the read-only preflight and changed-content checks. Show each remote's status
    separately: not pushed, exists, pushed, or blocked.
 
 ### iCloud remote
@@ -130,9 +136,10 @@ is superseded in part.
   explicit, confirmed choice, and nothing ever ends in a dead-end conflict. When
   a diary entry already exists at the local file, Preview defaults to
   **Append**, which keeps what is there, and offers **Overwrite** (P1-M21,
-  P1-M22); at iCloud or Notion, the remote's menu shows the existing content and
-  offers the same two. A file that changes after it was previewed or approved is
-  previewed again, never stuck. Append keeps the existing content and adds a
+  P1-M22); Notion's remote menu offers the same two. iCloud shows existing
+  content and offers only Overwrite, keeping its copy byte-identical to the
+  verified local file (owner decision, 2026-10-31). A file that changes after
+  it was previewed or approved is previewed again, never stuck. Append keeps the existing content and adds a
   `---` separator, an `*Appended YYYY-MM-DD HH:MM*` line (Mac-local time fixed
   when the plan is built), and the new text. Overwrite copies a file to
   `<name>.md.bak-<digest>` beside it first, or replaces a Notion section's body
@@ -140,8 +147,7 @@ is superseded in part.
   per-publication choice that is previewed exactly and applies only while the
   content is still what was previewed; a duplicate or non-canonical Notion
   heading cannot be changed safely: the remote shows a warning with a link to
-  fix the page by hand in Notion. An iCloud push receives the final local
-  bytes (Append adds the entry to what is already there).
+  fix the page by hand in Notion. An iCloud push receives the final local bytes.
 - A completed entry can be amended: the editor opens with the saved text
   (including your own hand edits to the file, flagged). The amendment preview
   shows the file as it is now against its replacement, and approving binds that
@@ -154,11 +160,10 @@ is superseded in part.
   blocks are trashed); anything else already there is shown for Append or
   Overwrite.
 - If Notion is unconfigured, unreachable, or fails its preflight, the local
-  entry can still be approved and written, and Notion shows blocked and can be
-  retried later after a new Notion-only preview and approval. If Notion fails
-  after the local write, the local entry remains available and Notion
-  publication is pending; retrying reuses the approval only if the plan is
-  unchanged. An uncertain Notion write is inspected before any retry.
+  entry can still be approved and written. Notion shows Blocked in Publish
+  Remote; a malformed month page includes a repair URL. After repair, checking
+  readiness refreshes its menu. Each push approves only the plan shown, and an
+  uncertain Notion write is inspected before any retry.
 - Draft and source text is purged 7 days after every output verifies and
   abandoned drafts after 30 days. Receipts and digests stay, and a draft can be
   discarded at any time.

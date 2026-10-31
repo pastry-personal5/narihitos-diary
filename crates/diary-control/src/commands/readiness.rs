@@ -1,4 +1,4 @@
-//! Read-only Publish-stage readiness checks for Notion and the iCloud mirror.
+//! Read-only readiness checks for each remote.
 
 use super::*;
 use std::time::Instant;
@@ -10,7 +10,6 @@ use crate::diagnostics::NOTION_PREVIEW_REASONS;
 pub enum Readiness {
     Ready,
     NotReady,
-    Conflict,
     Published,
 }
 
@@ -20,7 +19,6 @@ impl Readiness {
         match self {
             Self::Ready => "ready",
             Self::NotReady => "not-ready",
-            Self::Conflict => "conflict",
             Self::Published => "published",
         }
     }
@@ -84,9 +82,6 @@ impl CommandService {
 
     fn notion_readiness(&self, day: &DiaryDay, workflow: &Workflow) -> DestinationReadiness {
         let status = progress_of(workflow, "notion");
-        if status == Some(DestinationStatus::Verified) {
-            return published("notion");
-        }
         let Some(notion) = self.notion_output.as_ref() else {
             return not_ready(
                 "notion",
@@ -103,18 +98,21 @@ impl CommandService {
                     preflight.reason.as_deref().unwrap_or("notion-unavailable"),
                     "preflight-status",
                 ),
-                NotionPreflightStatus::Conflict => DestinationReadiness {
-                    destination: "notion",
-                    readiness: Readiness::Conflict,
-                    reason: known_notion_reason(
+                NotionPreflightStatus::Existing => match notion.observe_existing(day) {
+                    Ok(Some(_))
+                        if self.notion_section_is_ours(day)
+                            && self.notion_receipt_matches_entry(day, workflow) =>
+                    {
+                        published("notion")
+                    }
+                    Ok(Some(_)) => ready("notion", None, "preflight-status"),
+                    _ => notion_not_ready(
                         preflight
                             .reason
                             .as_deref()
                             .unwrap_or("notion-same-day-conflict"),
+                        "preflight-status",
                     ),
-                    next_step: "check-notion-page",
-                    decided_by: "preflight-status",
-                    duration_ms: 0,
                 },
             },
         }
@@ -122,9 +120,6 @@ impl CommandService {
 
     fn mirror_readiness(&self, day: &DiaryDay, workflow: &Workflow) -> DestinationReadiness {
         let status = progress_of(workflow, MIRROR_DESTINATION);
-        if status == Some(DestinationStatus::Verified) {
-            return published(MIRROR_DESTINATION);
-        }
         let Some(mirror) = self.mirror_output.as_ref() else {
             return not_ready(
                 MIRROR_DESTINATION,
@@ -133,10 +128,10 @@ impl CommandService {
                 "not-configured",
             );
         };
-        let Some(language) = workflow.language() else {
-            return local_unverified(MIRROR_DESTINATION);
+        let payload = match self.local_final_text(workflow) {
+            Ok(payload) => payload,
+            Err(_) => return local_unverified(MIRROR_DESTINATION),
         };
-        let payload = render_local_markdown(day, language, &workflow.entry().text);
         match mirror.inspect(day, &payload) {
             Err(_) => not_ready(
                 MIRROR_DESTINATION,
@@ -145,7 +140,7 @@ impl CommandService {
                 "mirror-inspect",
             ),
             // Existing iCloud content is not an obstacle: the Remote menu
-            // offers Append and Overwrite for it.
+            // offers a backed-up Overwrite for it.
             Ok(LocalOutputState::Identical) => published(MIRROR_DESTINATION),
             Ok(LocalOutputState::Absent | LocalOutputState::Different(_)) => {
                 ready(MIRROR_DESTINATION, status, "mirror-inspect")

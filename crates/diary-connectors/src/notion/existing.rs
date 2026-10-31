@@ -104,7 +104,7 @@ impl NotionClient {
                     end,
                 }))
             }
-            SameDayState::Conflict { .. } => Err(RemoteError::Invalid),
+            SameDayState::Ambiguous { .. } => Err(RemoteError::Invalid),
         }
     }
 
@@ -155,7 +155,7 @@ impl NotionClient {
                 (NotionPreflightStatus::Ready, None, current, result)
             }
             Ok(_) | Err(RemoteError::Invalid) => (
-                NotionPreflightStatus::Conflict,
+                NotionPreflightStatus::Existing,
                 Some("notion-section-not-owned".to_owned()),
                 Vec::new(),
                 Digest::of_bytes(b"notion-section-not-owned"),

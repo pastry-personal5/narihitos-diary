@@ -138,7 +138,7 @@ impl CommandService {
         .map_err(|_| CommandError::LocalOutput(LocalOutputError::Unavailable))?;
         let local_status = match result {
             PublicationResult::Verified(_) => DestinationStatus::Verified,
-            PublicationResult::Conflict => DestinationStatus::Conflict,
+            PublicationResult::Conflict => DestinationStatus::Changed,
             PublicationResult::DefiniteNoEffect => DestinationStatus::Pending,
             _ => return Ok(workflow),
         };

@@ -7,7 +7,7 @@ use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use diary_connectors::{LocalOutput, SqliteStore};
-use diary_control::{CommandError, CommandService, ExistingEntryMode};
+use diary_control::{CommandError, CommandService, ExistingEntryMode, Readiness, RemoteStatus};
 use diary_core::{
     CatalogRequest, Clock, DestinationStatus, DiaryDay, Digest, FreshnessOutcome,
     InspectionOutcome, NotionBlockPreview, NotionOutputPort, NotionPreflight,
@@ -170,7 +170,7 @@ impl NotionOutputPort for FakeNotion {
             false => self.base(day, payload, Digest::of_bytes(b"empty")),
             true => {
                 let mut conflict = self.base(day, payload, texts_digest(&self.texts()));
-                conflict.status = NotionPreflightStatus::Conflict;
+                conflict.status = NotionPreflightStatus::Existing;
                 conflict.reason = Some("notion-same-day-conflict".into());
                 conflict
             }
@@ -227,7 +227,7 @@ impl NotionOutputPort for FakeNotion {
             request.owned_payload_digest.clone(),
         );
         if !self.matches(&request.owned_block_ids, &request.owned_payload_digest) {
-            preflight.status = NotionPreflightStatus::Conflict;
+            preflight.status = NotionPreflightStatus::Existing;
             preflight.reason = Some("notion-section-not-owned".into());
         }
         preflight.blocks = preview_of(std::slice::from_ref(&request.markdown));
@@ -269,7 +269,7 @@ impl NotionOutputPort for FakeNotion {
             request.owned_section_digest.clone(),
         );
         if !self.matches(&request.owned_block_ids, &request.owned_section_digest) {
-            preflight.status = NotionPreflightStatus::Conflict;
+            preflight.status = NotionPreflightStatus::Existing;
             preflight.reason = Some("notion-section-not-owned".into());
         }
         preflight.blocks = preview_of(&added);
@@ -408,10 +408,19 @@ fn a_foreign_section_is_a_conflict_with_no_commands_taken_until_a_mode_is_chosen
         .service
         .preview_notion(&fx.day, local.revision())
         .unwrap();
-    assert_eq!(preview.status, DestinationStatus::Conflict);
+    assert_eq!(preview.status, DestinationStatus::Changed);
     assert_eq!(preview.reason.as_deref(), Some("notion-same-day-conflict"));
     assert!(preview.plan_digest.is_none());
     assert_eq!(fx.notion.texts(), ["heading", "theirs"]);
+    assert_eq!(
+        fx.service.remotes(&fx.day).unwrap()[1].status,
+        RemoteStatus::Exists
+    );
+    let readiness = fx
+        .service
+        .check_publish_readiness(&fx.day, local.revision())
+        .unwrap();
+    assert_eq!(readiness.destinations[0].readiness, Readiness::Ready);
 }
 
 #[test]
@@ -499,9 +508,87 @@ fn a_section_this_app_wrote_is_recognised_until_it_is_edited() {
     // After this app's own write the section is ours, so a later push updates
     // it in place without asking.
     assert!(fx.service.notion_section_is_ours(&fx.day));
+    assert_eq!(
+        fx.service.remotes(&fx.day).unwrap()[1].status,
+        RemoteStatus::Pushed
+    );
     // Anything added by hand makes it someone else's again.
     fx.notion.edit("added by hand");
     assert!(!fx.service.notion_section_is_ours(&fx.day));
+    assert_eq!(
+        fx.service.remotes(&fx.day).unwrap()[1].status,
+        RemoteStatus::Exists
+    );
+}
+
+#[test]
+fn an_amended_local_entry_marks_the_earlier_notion_copy_not_pushed() {
+    let fx = Fixture::new();
+    fx.notion.seed(&["heading", "theirs"]);
+    let local = fx.local_published();
+    let preview = fx
+        .service
+        .preview_notion_with(&fx.day, local.revision(), ExistingEntryMode::Append)
+        .unwrap();
+    let approved = fx
+        .service
+        .approve_notion(
+            &fx.day,
+            preview.workflow.revision(),
+            preview.plan_digest.as_ref().unwrap(),
+        )
+        .unwrap();
+    let published = fx
+        .service
+        .publish_notion(&fx.day, approved.revision())
+        .unwrap();
+    assert_eq!(
+        fx.service.remotes(&fx.day).unwrap()[1].status,
+        RemoteStatus::Pushed
+    );
+
+    let seeded = fx
+        .service
+        .seed_amendment(&fx.day, published.revision())
+        .unwrap();
+    let edited = fx
+        .service
+        .save_entry(
+            &fx.day,
+            seeded.workflow.entry().version,
+            "A different day.".to_owned(),
+        )
+        .unwrap();
+    let confirmed = fx
+        .service
+        .confirm_entry(&fx.day, edited.revision(), edited.entry().version)
+        .unwrap();
+    let plan = fx
+        .service
+        .preview_amendment(&fx.day, confirmed.revision())
+        .unwrap();
+    let approved = fx
+        .service
+        .approve_amendment(
+            &fx.day,
+            plan.workflow.revision(),
+            &plan.workflow.output_plan().unwrap().plan_digest,
+        )
+        .unwrap();
+    let amended = fx
+        .service
+        .publish_amendment(&fx.day, approved.revision(), &AtomicBool::new(false))
+        .unwrap();
+    assert!(fx.service.notion_section_is_ours(&fx.day));
+    assert_eq!(
+        fx.service.remotes(&fx.day).unwrap()[1].status,
+        RemoteStatus::NotPushed
+    );
+    let readiness = fx
+        .service
+        .check_publish_readiness(&fx.day, amended.revision())
+        .unwrap();
+    assert_eq!(readiness.destinations[0].readiness, Readiness::Ready);
 }
 
 #[test]

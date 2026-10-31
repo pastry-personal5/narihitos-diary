@@ -74,7 +74,7 @@ impl CommandService {
             .map_err(|_| CommandError::LocalOutput(LocalOutputError::Unavailable))?;
             let status = match result {
                 PublicationResult::Verified(_) => DestinationStatus::Verified,
-                PublicationResult::Conflict => DestinationStatus::Conflict,
+                PublicationResult::Conflict => DestinationStatus::Changed,
                 PublicationResult::SafeToRetry => DestinationStatus::Pending,
                 _ => continue,
             };
@@ -126,7 +126,7 @@ impl CommandService {
                 {
                     DestinationStatus::Pending
                 }
-                Ok(_) => DestinationStatus::Conflict,
+                Ok(_) => DestinationStatus::Changed,
                 Err(_) => continue,
             };
             self.finish_amendment(workflow, &[("local", status)])?;

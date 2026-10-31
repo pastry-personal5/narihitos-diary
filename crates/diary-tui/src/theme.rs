@@ -51,6 +51,26 @@ impl Palette {
             Style::new()
         }
     }
+
+    /// Confirmed diary prose shown separately from controls and status text.
+    #[must_use]
+    pub fn diary_entry(self) -> Style {
+        if self.colors_enabled {
+            Style::new().fg(Color::Magenta)
+        } else {
+            Style::new()
+        }
+    }
+
+    /// Content already present at a local or remote destination.
+    #[must_use]
+    pub fn existing_entry(self) -> Style {
+        if self.colors_enabled {
+            Style::new().fg(Color::Cyan)
+        } else {
+            Style::new()
+        }
+    }
 }
 
 impl Default for Palette {
@@ -69,6 +89,8 @@ mod tests {
         assert_eq!(palette.border(true), Style::new());
         assert_eq!(palette.current(), Style::new());
         assert_eq!(palette.safe(), Style::new());
+        assert_eq!(palette.diary_entry(), Style::new());
+        assert_eq!(palette.existing_entry(), Style::new());
     }
 
     #[test]
@@ -77,5 +99,7 @@ mod tests {
         assert_eq!(palette.border(true).fg, Some(Color::Cyan));
         assert_eq!(palette.current().fg, Some(Color::Yellow));
         assert_eq!(palette.safe().fg, Some(Color::Green));
+        assert_eq!(palette.diary_entry().fg, Some(Color::Magenta));
+        assert_eq!(palette.existing_entry().fg, Some(Color::Cyan));
     }
 }

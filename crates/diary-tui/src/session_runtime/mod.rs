@@ -21,9 +21,9 @@ use crate::focus::{FocusModel, FocusZone, SidebarKind};
 use crate::help_overlay::{HelpOverlayWidget, overlay_area};
 use crate::ime::{ImeState, ImeTracker, MacInputLanguageNotifications, MacInputLanguageQuery};
 use crate::layout::{OverlayClearWidget, adaptive_areas};
-use crate::main_pane::MainPaneWidget;
+use crate::main_pane::{MainPaneWidget, indent_diary_block};
 use crate::readiness_view::{CheckedReadiness, ReadinessView};
-use crate::remote_view::{RemoteControl, remote_screen_body};
+use crate::remote_view::{RemoteControl, existing_entry_text, remote_screen_body};
 use crate::resources::{ResourceRow, ResourcesSidebarModel, ResourcesSidebarWidget};
 use crate::review_view::{ReviewViewModel, can_confirm, first_unresolved_delimiter};
 use crate::screen_body::*;
@@ -34,7 +34,9 @@ use crate::sources_menu::{
     SourcesAction, action_item, item_action, shortcut_action, visible_items,
 };
 use crate::sources_view::{JobOutcome, SourceJobKind, SourcesViewModel};
-use crate::stage::{ALL_STAGES, Progress, Stage, adjacent_accessible_stage, map_workflow};
+use crate::stage::{
+    ALL_STAGES, Progress, Stage, adjacent_accessible_stage, map_workflow, remote_available,
+};
 use crate::stage_tip::{TipInput, next_step_tip};
 use crate::start_view::StartViewModel;
 use crate::status_line::{StatusLineModel, StatusLineWidget};
@@ -118,7 +120,7 @@ pub fn run_connected_session(
     let mut remotes_listed_for: Option<String> = None;
     let mut remote_loading = false;
     let mut remote_push_pending = false;
-    let mut remote_overwrite_confirmation = false;
+    let mut remote_overwrite_confirmation: Option<(String, String)> = None;
     let mut readiness_checked: Option<CheckedReadiness> = None;
     let mut readiness_pending = false;
     let mut amendment_preview: Option<diary_control_contract::AmendmentPreviewDto> = None;
@@ -967,6 +969,9 @@ pub fn run_connected_session(
                                 remote.reason = preview.reason.clone();
                             }
                             feedback = Some(match preview.status.as_str() {
+                                "exists" if preview.id == "icloud" => {
+                                    "iCloud already holds an entry; choose Overwrite".to_owned()
+                                }
                                 "exists" => format!(
                                     "{} already holds an entry; choose Append or Overwrite",
                                     preview.label
@@ -979,7 +984,18 @@ pub fn run_connected_session(
                             });
                             remote_preview = Some(preview);
                         }
-                        ClientOutcome::Problem(problem) => feedback = Some(problem.safe_label()),
+                        ClientOutcome::Problem(problem) => {
+                            if problem.code == "precondition-failed" {
+                                remote_requested = None;
+                                remotes_listed_for = None;
+                                if let Some(workflow) = &current_workflow {
+                                    let _ = worker.try_send(Intent::GetWorkflow {
+                                        workflow_id: workflow.id.clone(),
+                                    });
+                                }
+                            }
+                            feedback = Some(problem.safe_label());
+                        }
                         ClientOutcome::Transport(error) => {
                             feedback = Some(error.safe_label().to_owned())
                         }
@@ -989,6 +1005,10 @@ pub fn run_connected_session(
                     readiness_pending = false;
                     match *outcome {
                         ClientOutcome::Ok(report) => {
+                            // A repair in Notion may have cleared a blocked
+                            // page. Refresh the menu and sidebar after a check.
+                            remote_requested = None;
+                            remotes_listed_for = None;
                             readiness_checked = current_workflow.as_ref().map(|workflow| {
                                 (
                                     workflow.id.clone(),
@@ -1371,7 +1391,7 @@ pub fn run_connected_session(
             && !remote_push_pending
             && local_publication_job.is_none()
             && let Some(workflow) = &current_workflow
-            && workflow.state == "completed"
+            && remote_available(workflow)
         {
             if remotes_listed_for.as_deref() != Some(workflow.id.as_str()) {
                 if worker
@@ -1490,7 +1510,7 @@ pub fn run_connected_session(
                     detail.source_note_name.as_str()
                 });
             format!("Delete {name} and linked audio? Enter confirms; Esc cancels")
-        } else if remote_overwrite_confirmation {
+        } else if remote_overwrite_confirmation.is_some() {
             "Overwrite what the remote holds? Enter confirms; Esc cancels".to_owned()
         } else if overwrite_confirmation {
             "Overwrite the existing entry? A backup is kept first. Enter confirms; Esc cancels"
@@ -1551,7 +1571,7 @@ pub fn run_connected_session(
                         .and_then(|w| w.local_status.as_deref())
                         .unwrap_or("pending")
                     {
-                        "conflict" => "file changed",
+                        "changed" => "file changed",
                         other => other,
                     }
                     .to_owned(),
@@ -1636,14 +1656,17 @@ pub fn run_connected_session(
                 )
             }
             Stage::Preview => preview_screen_body(&focus, local_preview.as_ref()),
-            Stage::PublishLocal => publish_screen_body(&focus, current_workflow.as_ref()),
+            Stage::PublishLocal => {
+                publish_screen_body(&focus, current_workflow.as_ref(), local_preview.as_ref())
+            }
             Stage::PublishRemote => remote_screen_body(
                 &focus,
-                current_workflow
-                    .as_ref()
-                    .is_some_and(|workflow| workflow.state == "completed"),
+                current_workflow.as_ref().is_some_and(remote_available),
                 selected_remote,
                 shown_remote_preview,
+                current_workflow
+                    .as_ref()
+                    .map(|workflow| workflow.entry_text.as_str()),
                 &ReadinessView::resolve(
                     readiness_pending,
                     readiness_checked.as_ref(),
@@ -1651,12 +1674,29 @@ pub fn run_connected_session(
                     selected_remote.map_or("", |remote| remote.id.as_str()),
                 ),
                 remote_loading,
-                remote_overwrite_confirmation,
+                remote_overwrite_confirmation.is_some(),
             ),
         };
         if current_stage != Stage::Sources {
             sources_help = None;
         }
+        let existing_entry = match current_stage {
+            Stage::PublishLocal => local_preview
+                .as_ref()
+                .and_then(|preview| preview.existing_text.as_deref())
+                .map(indent_diary_block),
+            Stage::PublishRemote => shown_remote_preview
+                .and_then(existing_entry_text)
+                .map(|entry| indent_diary_block(&entry)),
+            _ => None,
+        };
+        let diary_entry = matches!(current_stage, Stage::PublishLocal | Stage::PublishRemote)
+            .then(|| {
+                current_workflow
+                    .as_ref()
+                    .map(|workflow| indent_diary_block(&workflow.entry_text))
+            })
+            .flatten();
         let help_text = sources_help.map(|_| help_lines(status_line.ime));
         let drawn = guard.terminal_mut().draw(|frame| {
             let area = frame.area();
@@ -1727,6 +1767,8 @@ pub fn run_connected_session(
                     MainPaneWidget::new("Main", &main_body)
                         .focused(focus.zone == FocusZone::Main)
                         .scroll(main_scroll)
+                        .diary_entry(diary_entry.as_deref())
+                        .existing_entry(existing_entry.as_deref())
                         .palette(palette),
                     areas.main_pane,
                 );
@@ -1794,7 +1836,7 @@ pub fn run_connected_session(
                 || editor_active,
             confirmation_active: empty_selection_confirmation
                 || overwrite_confirmation
-                || remote_overwrite_confirmation
+                || remote_overwrite_confirmation.is_some()
                 || sources_view.pending_delete_confirmation.is_some()
                 || discard_confirmation.is_some()
                 || quit_confirmation,
@@ -2055,8 +2097,8 @@ pub fn run_connected_session(
                         .is_ok();
                 }
             }
-            InputPoll::Event(InputEvent::Enter) if remote_overwrite_confirmation => {
-                remote_overwrite_confirmation = false;
+            InputPoll::Event(InputEvent::Enter) if remote_overwrite_confirmation.is_some() => {
+                let confirmed = remote_overwrite_confirmation.take();
                 if can_mutate
                     && !remote_loading
                     && let (Some(workflow), Some(remote), Some(preview)) = (
@@ -2065,6 +2107,8 @@ pub fn run_connected_session(
                         shown_remote_preview,
                     )
                     && let Some(digest) = preview.plan_digest.clone()
+                    && confirmed.as_ref() == Some(&(remote.id.clone(), digest.clone()))
+                    && preview.existing_mode.as_deref() == Some("overwrite")
                 {
                     remote_loading = worker
                         .try_send(Intent::PushRemote {
@@ -2077,8 +2121,8 @@ pub fn run_connected_session(
                         .is_ok();
                 }
             }
-            InputPoll::Event(InputEvent::Esc) if remote_overwrite_confirmation => {
-                remote_overwrite_confirmation = false;
+            InputPoll::Event(InputEvent::Esc) if remote_overwrite_confirmation.is_some() => {
+                remote_overwrite_confirmation = None;
                 feedback = Some("Overwrite cancelled".to_owned());
             }
             InputPoll::Event(InputEvent::Esc) if overwrite_confirmation => {
@@ -2671,7 +2715,7 @@ pub fn run_connected_session(
                         && !local_action_pending
                         && let Some(workflow) = &current_workflow
                     {
-                        let choices = amendment_view::conflict_choices(workflow).unwrap_or(&[]);
+                        let choices = amendment_view::amendment_choices(workflow).unwrap_or(&[]);
                         let sent = match focus.main_control_index {
                             0 => Some(Intent::PreviewAmendment {
                                 workflow_id: workflow.id.clone(),
@@ -2685,7 +2729,7 @@ pub fn run_connected_session(
                                     plan_digest: preview.plan_digest.clone(),
                                 }),
                             2 if choices
-                                .contains(&amendment_view::ConflictChoice::AbandonAmendment) =>
+                                .contains(&amendment_view::AmendmentChoice::AbandonAmendment) =>
                             {
                                 Some(Intent::AbandonAmendment {
                                     workflow_id: workflow.id.clone(),
@@ -2750,9 +2794,7 @@ pub fn run_connected_session(
                 }
                 FocusZone::Main if current_stage == Stage::PublishRemote => {
                     let controls = crate::remote_view::controls(shown_remote_preview);
-                    let completed = current_workflow
-                        .as_ref()
-                        .is_some_and(|workflow| workflow.state == "completed");
+                    let completed = current_workflow.as_ref().is_some_and(remote_available);
                     if let (Some(control), Some(remote), Some(workflow), true) = (
                         controls.get(focus.main_control_index).copied(),
                         selected_remote,
@@ -2797,7 +2839,9 @@ pub fn run_connected_session(
                                 if shown_remote_preview.is_some_and(|p| {
                                     p.existing_mode.as_deref() == Some("overwrite")
                                 }) {
-                                    remote_overwrite_confirmation = true;
+                                    remote_overwrite_confirmation = shown_remote_preview
+                                        .and_then(|preview| preview.plan_digest.clone())
+                                        .map(|digest| (remote_id.clone(), digest));
                                     feedback = Some(
                                         "Overwrite replaces what is there; Enter again to confirm"
                                             .to_owned(),

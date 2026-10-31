@@ -42,6 +42,13 @@ pub struct StageModel {
     pub default_current: Stage,
 }
 
+/// The local receipt, rather than a temporary remote plan state, unlocks
+/// Publish Remote. Notion preview stores a plan in the workflow.
+#[must_use]
+pub fn remote_available(workflow: &WorkflowDto) -> bool {
+    workflow.local_status.as_deref() == Some("verified") && workflow.amendment.is_none()
+}
+
 impl StageModel {
     #[must_use]
     pub fn progress_of(&self, stage: Stage) -> Progress {
@@ -125,6 +132,18 @@ pub fn map_workflow(
     };
 
     let reason = invalidation_reason(workflow.invalidation_code.as_deref());
+
+    if remote_available(workflow)
+        && matches!(
+            workflow.state.as_str(),
+            "output-planned" | "approved" | "publishing" | "partial" | "completed"
+        )
+    {
+        return StageModel {
+            progress: [Done, Done, Done, Done, Done, Done, Available],
+            default_current: Stage::PublishRemote,
+        };
+    }
 
     match workflow.state.as_str() {
         "started" | "discovered"
@@ -335,6 +354,26 @@ mod tests {
             assert_eq!(
                 model.progress_of(Stage::PublishRemote) == Progress::Locked,
                 state != "completed",
+                "{state}"
+            );
+        }
+    }
+
+    #[test]
+    fn notion_preview_keeps_remote_stage_open_after_local_verification() {
+        for state in [
+            "output-planned",
+            "approved",
+            "publishing",
+            "partial",
+            "completed",
+        ] {
+            let mut day = workflow(state, None);
+            day.local_status = Some("verified".to_owned());
+            assert!(remote_available(&day));
+            assert_eq!(
+                map_workflow(Some(&day), false).progress_of(Stage::PublishRemote),
+                Progress::Available,
                 "{state}"
             );
         }

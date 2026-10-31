@@ -9,6 +9,7 @@ use crate::assistant_view::{AssistantResource, AssistantViewModel};
 use crate::compose_view::ComposeViewModel;
 use crate::date_display::format_diary_day;
 use crate::focus::{FocusModel, FocusZone};
+use crate::main_pane::indent_diary_block;
 use crate::review_view::first_unresolved_delimiter;
 use crate::sources_menu::{SourcesMenuItem, SourcesMenuState, label as menu_label};
 use crate::sources_view::{SourcesViewModel, source_label};
@@ -187,7 +188,7 @@ pub fn preview_screen_body(focus: &FocusModel, preview: Option<&LocalPreviewDto>
             // Preview never stops at a conflict; a status from an older
             // server is still shown in plain words.
             match preview.local_status.as_str() {
-                "conflict" => "file changed",
+                "changed" => "file changed",
                 other => other,
             },
         ));
@@ -245,9 +246,9 @@ pub fn amendment_preview_screen_body(
         marker(1)
     ));
     let choices = workflow
-        .and_then(amendment_view::conflict_choices)
+        .and_then(amendment_view::amendment_choices)
         .unwrap_or(&[]);
-    for choice in [amendment_view::ConflictChoice::AbandonAmendment] {
+    for choice in [amendment_view::AmendmentChoice::AbandonAmendment] {
         if choices.contains(&choice) {
             text.push_str(&format!("{} {}\n", marker(2), choice.label()));
         }
@@ -262,7 +263,11 @@ pub fn amendment_preview_screen_body(
     text
 }
 
-pub fn publish_screen_body(focus: &FocusModel, workflow: Option<&WorkflowDto>) -> String {
+pub fn publish_screen_body(
+    focus: &FocusModel,
+    workflow: Option<&WorkflowDto>,
+    preview: Option<&LocalPreviewDto>,
+) -> String {
     let marker = |index| {
         if focus.zone == FocusZone::Main && focus.main_control_index == index {
             ">"
@@ -282,7 +287,7 @@ pub fn publish_screen_body(focus: &FocusModel, workflow: Option<&WorkflowDto>) -
     } else {
         "Publish approved local file"
     };
-    let local = if local == "conflict" {
+    let local = if local == "changed" {
         "file changed"
     } else {
         local
@@ -297,8 +302,20 @@ pub fn publish_screen_body(focus: &FocusModel, workflow: Option<&WorkflowDto>) -
     } else {
         ""
     };
+    let entry = workflow
+        .map(|workflow| {
+            format!(
+                "\n\nDiary entry to publish:\n{}",
+                indent_diary_block(&workflow.entry_text)
+            )
+        })
+        .unwrap_or_default();
+    let existing = preview
+        .and_then(|preview| preview.existing_text.as_deref())
+        .map(|text| format!("\n\nExisting local entry:\n{}", indent_diary_block(text)))
+        .unwrap_or_default();
     format!(
-        "{completion}Local publication: {local}\n\n{} {primary}\n{} Cancel pending publication{changed}{next}",
+        "{completion}Local publication: {local}\n\n{} {primary}\n{} Cancel pending publication{changed}{next}{existing}{entry}",
         marker(0),
         marker(1),
     )

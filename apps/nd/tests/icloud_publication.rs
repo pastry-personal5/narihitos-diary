@@ -352,7 +352,7 @@ fn an_evicted_placeholder_blocks_the_remote() {
 }
 
 #[test]
-fn existing_content_is_shown_and_append_or_overwrite_resolves_it() {
+fn existing_content_is_shown_and_only_overwrite_can_resolve_it() {
     let fx = Fixture::new();
     let service = fx.with_mirror();
     publish(&service, &fx.day);
@@ -384,24 +384,14 @@ fn existing_content_is_shown_and_append_or_overwrite_resolves_it() {
         "an entry written elsewhere\n"
     );
 
-    // Append keeps what is there and adds the entry under a dated separator.
-    let append = service
-        .preview_icloud(&fx.day, ExistingEntryMode::Append)
-        .unwrap();
-    assert!(append.payload.starts_with("an entry written elsewhere\n"));
-    assert!(append.payload.contains("Today was quiet."));
+    assert!(matches!(
+        service.preview_icloud(&fx.day, ExistingEntryMode::Append),
+        Err(CommandError::PreconditionFailed)
+    ));
     assert_eq!(
-        service
-            .push_icloud(
-                &fx.day,
-                ExistingEntryMode::Append,
-                &append.plan_digest,
-                || true
-            )
-            .unwrap(),
-        DestinationStatus::Verified
+        fs::read_to_string(&target).unwrap(),
+        "an entry written elsewhere\n"
     );
-    assert_eq!(fs::read_to_string(&target).unwrap(), append.payload);
 }
 
 #[test]

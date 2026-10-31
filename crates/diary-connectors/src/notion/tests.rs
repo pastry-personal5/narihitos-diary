@@ -178,7 +178,7 @@ fn same_day_legacy_and_wrong_weekday_headings_conflict() {
     for heading in ["2026-10-30", "2026-10-30 (THU)"] {
         assert!(matches!(
             classify_same_day(&[text_block(BlockKind::Heading2, heading.into())], &plan),
-            SameDayState::Conflict { .. }
+            SameDayState::Ambiguous { .. }
         ));
     }
 }
@@ -577,7 +577,7 @@ fn replace_refuses_edited_extended_or_missing_sections_without_writing() {
             InspectionOutcome::Conflict
         );
         let preflight = owned.client.preflight_replace(&request).unwrap();
-        assert_eq!(preflight.preflight.status, NotionPreflightStatus::Conflict);
+        assert_eq!(preflight.preflight.status, NotionPreflightStatus::Existing);
         let state = owned.remote.0.lock().unwrap();
         assert_eq!(state.append_anchors.len(), appends, "tamper {tamper}");
         assert!(state.trashed.is_empty(), "tamper {tamper}");
@@ -1349,7 +1349,7 @@ fn unowned_same_day_heading_is_a_conflict_and_nothing_is_written() {
     remote.seed_blocks("month", vec![remote_heading("theirs", "2026-10-30 (FRI)")]);
     let client = NotionClient::scripted(remote.clone(), ROOT);
     let preflight = client.preflight(&day("2026-10-30"), "body").unwrap();
-    assert_eq!(preflight.status, NotionPreflightStatus::Conflict);
+    assert_eq!(preflight.status, NotionPreflightStatus::Existing);
     let request = NotionRequest {
         day: day("2026-10-30"),
         markdown: "body".into(),
@@ -1762,6 +1762,38 @@ fn append_adds_a_separator_dated_line_and_body_after_the_last_block_of_the_secti
 }
 
 #[test]
+fn blocked_same_day_page_has_a_direct_month_url() {
+    let remote = Arc::new(FakeRemote::default());
+    let month_id = "01234567-89ab-cdef-0123-456789abcdef";
+    remote.seed_children(ROOT, vec![page("year", "2026")]);
+    remote.seed_children("year", vec![page(month_id, "2026-10")]);
+    remote.seed_blocks(
+        month_id,
+        vec![
+            RemoteBlock {
+                id: "h1".into(),
+                block: dated("2026-10-29"),
+            },
+            RemoteBlock {
+                id: "h2".into(),
+                block: dated("2026-10-29"),
+            },
+        ],
+    );
+    let client = NotionClient::scripted(remote, ROOT);
+    let preflight = client.preflight(&day("2026-10-29"), "Today").unwrap();
+    assert_eq!(preflight.status, NotionPreflightStatus::Existing);
+    assert_eq!(
+        client.observe_existing(&day("2026-10-29")),
+        Err("notion-same-day-conflict".to_owned())
+    );
+    assert_eq!(
+        client.month_page_url(&day("2026-10-29")),
+        Some("https://www.notion.so/0123456789abcdef0123456789abcdef".to_owned())
+    );
+}
+
+#[test]
 fn the_previewed_result_digest_matches_the_section_after_the_append() {
     let remote = seeded_month(&["2026-10-28"]);
     let client = NotionClient::scripted(remote, ROOT);
@@ -1798,7 +1830,7 @@ fn append_refuses_a_section_edited_since_the_preview_and_writes_nothing() {
     );
     assert_eq!(remote.0.lock().unwrap().append_anchors.len(), before);
     let preflight = client.preflight_extend(&request).unwrap();
-    assert_eq!(preflight.preflight.status, NotionPreflightStatus::Conflict);
+    assert_eq!(preflight.preflight.status, NotionPreflightStatus::Existing);
 }
 
 #[test]
